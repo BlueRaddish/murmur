@@ -116,7 +116,7 @@ class Murmur:
             self.recording = True
             self.recorder.start()
             beep(True)
-            print("● recording", flush=True)
+            print("[rec]", flush=True)
 
     def on_release(self, key) -> None:
         self.held.discard(key)
@@ -148,7 +148,7 @@ class Murmur:
             self.typist.type(text)
 
     def run(self) -> None:
-        print("ready — hold Ctrl+Win and talk; release to type. Ctrl+C to quit.", flush=True)
+        print("ready: hold Ctrl+Win and talk; release to type. Ctrl+C to quit.", flush=True)
         with keyboard.Listener(on_press=self.on_press, on_release=self.on_release) as l:
             l.join()
 
