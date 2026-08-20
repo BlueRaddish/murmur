@@ -29,6 +29,7 @@ from pynput.keyboard import Controller, Key
 
 FROZEN = getattr(sys, "frozen", False)
 HERE = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
+RES = Path(getattr(sys, "_MEIPASS", HERE))  # PyInstaller puts --add-data files here (_internal/)
 APPDIR = Path(os.environ.get("APPDATA", HERE)) / "murmur"
 SAMPLE_RATE = 16000
 DOUBLE_TAP_S = 0.4          # second chord press within this window = persistent mode
@@ -80,7 +81,7 @@ def save_config(path: Path, cfg: dict) -> None:
 
 def find_vocab() -> Path:
     """User copy in %APPDATA%\\murmur wins; the one shipped next to the program is the seed."""
-    user, shipped = APPDIR / "vocab.txt", HERE / "vocab.txt"
+    user, shipped = APPDIR / "vocab.txt", RES / "vocab.txt"
     if not user.exists() and shipped.exists():
         try:
             APPDIR.mkdir(parents=True, exist_ok=True)
