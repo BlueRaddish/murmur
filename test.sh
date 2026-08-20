@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Test contract: the state machine + a real tiny.en transcription of TTS audio.
+set -e
+cd "$(dirname "$0")"
+python tests/test_murmur.py
