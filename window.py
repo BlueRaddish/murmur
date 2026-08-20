@@ -99,6 +99,10 @@ class AppWindow:
             style.theme_use("vista")
         except tk.TclError:
             pass
+        # ttk does not scale row height with DPI; fonts are in points so they do
+        style.configure("Treeview", rowheight=int(24 * s), font=("Segoe UI", 10))
+        style.configure("Treeview.Heading", font=("Segoe UI", 10))
+        style.configure(".", font=("Segoe UI", 10))
         nb = ttk.Notebook(w)
         nb.pack(fill="both", expand=True, padx=8, pady=8)
         self._build_history(nb)
@@ -137,6 +141,7 @@ class AppWindow:
     def _build_settings(self, nb) -> None:
         f = ttk.Frame(nb, padding=12)
         nb.add(f, text="Settings")
+        f.columnconfigure(0, pad=16)
         r = 0
 
         ttk.Label(f, text="Keep history for").grid(row=r, column=0, sticky="w", pady=4)

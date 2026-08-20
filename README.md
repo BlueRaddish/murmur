@@ -30,10 +30,16 @@ First run downloads the model (`small.en`, ~250 MB) - the bar pulses until the m
 | Headset button (opt-in) | toggles recording, same as persistent mode |
 | Tray icon right-click | start/stop, headset option, edit vocab, open log, quit |
 
-(Ctrl+Cmd on a Mac keyboard.) A small rounded bar sits at the bottom of the screen: empty
-when idle, live mic-level bars while recording (red = hold, orange = persistent), pulsing
-dots while transcribing - so you can see it is hearing you. If the bars stay flat while
-you talk, it is listening to the wrong input: `--list-devices`, then set `mic` in config. Beeps: one high = recording,
+(Ctrl+Cmd on a Mac keyboard.) A small glassy disc sits at the bottom of the screen: a
+quiet dot when idle, a red glow with live mic-level bars while recording (orange in
+persistent mode), a spinner while transcribing - so you can see it is hearing you. If the
+bars stay flat while you talk, it is listening to the wrong input: pick the microphone in
+Settings.
+
+**History.** Double-click the tray icon (or "Open murmur") for a window with everything
+transcribed in the last 7 days - copy it back if a paste went missing or you overwrote the
+clipboard. The retention window is adjustable in Settings (0 keeps nothing). Stored in
+`%APPDATA%\murmur\history.jsonl`, local only. Beeps: one high = recording,
 two rising = persistent, one low = stopped.
 
 **Headset button.** Wired headsets' inline button reaches Windows as the Play/Pause media
@@ -43,7 +49,8 @@ into a Ctrl+Win keystroke, so nothing extra reaches the app you're typing into.
 
 ## Options
 
-Saved in `%APPDATA%\murmur\config.json` (created on first run); command-line flags override.
+Settings tab in the app window, or `%APPDATA%\murmur\config.json`; command-line flags override
+for one run.
 
 ```
 --model tiny.en|base.en|small.en|medium.en|large-v3   default small.en
@@ -76,8 +83,9 @@ winget install JRSoftware.InnoSetup      # optional, for the installer
 
 `pynput` listens for the chord globally. While held, `sounddevice` records the mic at
 16 kHz. On release the audio goes to faster-whisper (int8 on CPU), the text is placed on the
-clipboard, Ctrl+V is sent, and your previous clipboard is restored. The bar is a tiny
-tkinter window; the tray icon is pystray. One file, `murmur.py`.
+clipboard, Ctrl+V is sent, and your previous clipboard is restored. `overlay.py` renders the
+disc with PIL into a per-pixel-alpha layered window (crisp at any DPI, click-through);
+`window.py` is the tkinter history/settings window; the tray icon is pystray.
 
 ## Test
 

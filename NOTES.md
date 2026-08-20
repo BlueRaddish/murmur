@@ -10,7 +10,13 @@ Decisions
 - Headset button = VK_MEDIA_PLAY_PAUSE, handled in pynput's win32_event_filter and suppressed
   there so media players don't see it. It calls the same toggle() as the tray menu; it never
   synthesizes Ctrl+Win.
-- tkinter owns the main thread (the bar; colour-keyed transparent corners, always visible); pystray runs in a thread; the model loads in a third so
+- Overlay is a pure Win32 layered window (UpdateLayeredWindow, premultiplied BGRA from PIL via
+  numpy), ticked from the hidden Tk root's after() loop. tkinter's canvas was the pixelation:
+  not DPI-aware and no anti-aliasing. Static layers (glow/shadow/disc) are cached per state;
+  only bars/spinner draw per frame (~45 ms/frame at 200% DPI, idle does not redraw).
+- SetProcessDpiAwareness(2) runs before Tk() so the window is crisp too; ttk row height is set
+  by hand because it does not follow DPI.
+- History: %APPDATA%\murmur\history.jsonl, pruned on load and append; retention_days in config; pystray runs in a thread; the model loads in a third so
   the UI is up immediately and shows "loading model...".
 - Console output is ASCII only: the Windows console is cp1252 and a non-ASCII print inside a
   pynput callback kills the listener.
