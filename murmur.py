@@ -184,7 +184,7 @@ class Murmur:
         self.model = WhisperModel(cfg["model"], device=cfg["device"], compute_type=compute)
         self.cfg = cfg
         self.vocab = vocab
-        self.language = cfg["language"]
+        self.language = cfg["language"] or ("en" if cfg["model"].endswith(".en") else None)
         self.recorder = Recorder(cfg["mic"])
         self.typist = Typist()
         self.on_state = on_state or (lambda s: None)
@@ -194,7 +194,9 @@ class Murmur:
         self.persistent = False
         self.chord_was_down = False
         self.last_chord_release = 0.0
-        self.lock = threading.Lock()
+        self.lock = threading.Lock()      # one transcription at a time
+        self.ctl = threading.Lock()       # start/stop/toggle come from listener, tray and filter threads
+        self.pending = 0                  # transcriptions queued or running
         self.listener = None
 
     def _set(self, state: str) -> None:
@@ -203,27 +205,34 @@ class Murmur:
 
     # --- recording control --------------------------------------------------
     def start(self, persistent: bool) -> None:
-        if self.recording:
-            if persistent and not self.persistent:  # double-tap while holding: upgrade in place
-                self.persistent = True
-                beep("persistent")
-                log("[persistent]")
-                self._set("persistent")
-            return
-        self.recording = True
-        self.persistent = persistent
-        self.recorder.start()
-        beep("persistent" if persistent else "start")
-        log("[persistent]" if persistent else "[rec]")
-        self._set("persistent" if persistent else "recording")
+        with self.ctl:
+            if self.recording:
+                if persistent and not self.persistent:  # double-tap while holding: upgrade in place
+                    self.persistent = True
+                    beep("persistent")
+                    log("[persistent]")
+                    self._set("persistent")
+                return
+            try:
+                self.recorder.start()
+            except Exception as e:  # mic unplugged, device busy: stay idle, keep the listener alive
+                log(f"mic error: {e}")
+                return
+            self.recording = True
+            self.persistent = persistent
+            beep("persistent" if persistent else "start")
+            log("[persistent]" if persistent else "[rec]")
+            self._set("persistent" if persistent else "recording")
 
     def stop(self) -> None:
-        if not self.recording:
-            return
-        self.recording = self.persistent = False
-        audio = self.recorder.stop()
-        beep("stop")
-        self._set("busy")
+        with self.ctl:
+            if not self.recording:
+                return
+            self.recording = self.persistent = False
+            audio = self.recorder.stop()
+            beep("stop")
+            self.pending += 1
+            self._set("busy")
         threading.Thread(target=self.handle, args=(audio,), daemon=True).start()
 
     def toggle(self) -> None:
@@ -295,8 +304,10 @@ class Murmur:
             except Exception as e:
                 log(f"  error: {e}")
             finally:
-                if not self.recording:
-                    self._set("idle")
+                with self.ctl:
+                    self.pending -= 1
+                    if not self.recording and self.pending == 0:
+                        self._set("idle")
 
     def run(self) -> None:
         log("ready: hold Ctrl+Win and talk; double-tap for persistent mode.")
@@ -392,6 +403,8 @@ def run_app(factory, cfg_path: Path) -> None:
 
     def toggle_headset(icon_, item) -> None:
         app = holder["app"]
+        if app is None:
+            return
         app.cfg["headset_button"] = not app.cfg["headset_button"]
         save_config(cfg_path, app.cfg)
         log(f"headset button {'on' if app.cfg['headset_button'] else 'off'}")
@@ -445,6 +458,8 @@ def main(argv=None) -> int:
         return 0
 
     cfg = load_config(a.config)
+    if not a.config.exists():
+        save_config(a.config, cfg)  # persistent settings live here; flags below are per-run
     for k in ("model", "device", "language", "mic"):
         if getattr(a, k) is not None:
             cfg[k] = getattr(a, k)
@@ -452,21 +467,17 @@ def main(argv=None) -> int:
         cfg["headset_button"] = True
     if isinstance(cfg["mic"], str) and cfg["mic"].isdigit():
         cfg["mic"] = int(cfg["mic"])
-    if cfg["model"].endswith(".en") and cfg["language"] is None:
-        cfg["language"] = "en"
-    if not a.config.exists():
-        save_config(a.config, cfg)
     vocab = load_vocab(a.vocab or find_vocab())
     factory = lambda: Murmur(cfg, vocab)
 
     if a.console:
-        app = factory()
-        app.run()
         try:
+            app = factory()
+            app.run()
             while app.listener.is_alive():
                 time.sleep(0.5)
         except KeyboardInterrupt:
-            app.quit()
+            pass
         return 0
     run_app(factory, a.config)
     return 0

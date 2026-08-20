@@ -27,7 +27,7 @@ def fresh():
     m = murmur.Murmur.__new__(murmur.Murmur)
     m.cfg = {"headset_button": False}; m.recorder = FakeRec(); m.on_state = lambda s: None
     m.state = "idle"; m.held = set(); m.recording = m.persistent = m.chord_was_down = False
-    m.last_chord_release = 0.0; m.lock = __import__("threading").Lock()
+    m.last_chord_release = 0.0; m.lock = __import__("threading").Lock(); m.ctl = __import__("threading").Lock(); m.pending = 0
     m.handle = lambda audio: None  # never touch the model here
     return m
 
@@ -68,6 +68,23 @@ assert m.listener.suppressed == 3
 # headset start then chord stops it too
 m = fresh(); m.toggle(); assert m.persistent; chord(m); assert not m.recording
 print("state machine ok")
+
+# mic failure: stays idle, no crash
+m = fresh()
+def boom(): raise RuntimeError("no mic")
+m.recorder.start = boom; chord(m); assert not m.recording; chord(m, False); assert not m.recording
+# two back-to-back dictations: "idle" only after the second one finishes
+states = []
+m = fresh(); m.on_state = states.append
+real_handle = murmur.Murmur.handle
+chord(m); chord(m, False); m.last_chord_release -= 1; chord(m); chord(m, False)
+assert m.pending == 2 and states == ["recording", "busy", "recording", "busy"], states
+import threading as _th
+m.transcribe = lambda a: ""; m.typist = None
+real_handle(m, np.zeros(0)); assert "idle" not in states
+real_handle(m, np.zeros(0)); assert states[-1] == "idle" and m.pending == 0
+# language derives from model at load time, is never written to config
+assert "language" in murmur.DEFAULTS and murmur.DEFAULTS["language"] is None
 
 # config round-trip
 cp = Path(tempfile.mktemp(suffix=".json"))
