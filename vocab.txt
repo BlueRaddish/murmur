@@ -1,0 +1,7 @@
+# One term per line. Fed to Whisper as a prompt so it prefers these spellings.
+# Add whatever it keeps mangling. Comments start with #.
+Claude, Claude Code, Anthropic, OpenAI, GPT, Codex
+Python, PowerShell, Bash, tmux, git, GitHub, repo, rebase, worktree, commit, PR
+Godot, GDScript, Whisper, faster-whisper, PyTorch, CUDA, numpy
+API, CLI, JSON, YAML, TOML, regex, stdlib, async, await, lambda
+Kubernetes, Docker, Linux, WSL, macOS, Windows
