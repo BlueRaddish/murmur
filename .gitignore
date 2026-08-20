@@ -6,3 +6,4 @@ dist/
 *.spec
 murmur.ico
 run.log
+build.log
