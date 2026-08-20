@@ -40,3 +40,9 @@ assert "rebase" in text.lower() and "main" in text.lower(), text
 assert m2.transcribe(np.zeros(100, dtype=np.float32)) == ""  # too short -> ignored
 os.remove(p); os.remove(wav)
 print("all checks passed")
+
+# resample(): length scales, identity when rates match
+x = np.sin(np.arange(48000) / 48000 * 2 * np.pi * 440).astype(np.float32)
+assert len(murmur.resample(x, 48000, 16000)) == 16000
+assert murmur.resample(x, 16000, 16000) is x
+print("resample ok")

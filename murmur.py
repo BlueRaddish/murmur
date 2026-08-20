@@ -47,16 +47,23 @@ def clean(text: str) -> str:
 
 
 class Recorder:
-    def __init__(self):
+    def __init__(self, device=None):
+        self.device = device
         self._q: queue.Queue = queue.Queue()
         self._stream = None
+        self._rate = SAMPLE_RATE
 
     def start(self) -> None:
         self._q = queue.Queue()
-        self._stream = sd.InputStream(
-            samplerate=SAMPLE_RATE, channels=1, dtype="float32",
-            callback=lambda data, *_: self._q.put(data.copy()),
-        )
+        cb = lambda data, *_: self._q.put(data.copy())
+        try:
+            self._stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32",
+                                          device=self.device, callback=cb)
+            self._rate = SAMPLE_RATE
+        except sd.PortAudioError:  # device refuses 16k (WASAPI does): use native rate, resample later
+            self._rate = int(sd.query_devices(self.device, "input")["default_samplerate"])
+            self._stream = sd.InputStream(samplerate=self._rate, channels=1, dtype="float32",
+                                          device=self.device, callback=cb)
         self._stream.start()
 
     def stop(self) -> np.ndarray:
@@ -67,7 +74,16 @@ class Recorder:
             chunks.append(self._q.get())
         if not chunks:
             return np.zeros(0, dtype=np.float32)
-        return np.concatenate(chunks)[:, 0]
+        return resample(np.concatenate(chunks)[:, 0], self._rate, SAMPLE_RATE)
+
+
+def resample(audio: np.ndarray, src: int, dst: int) -> np.ndarray:
+    """Linear interpolation, no anti-alias filter. Fine for speech at 44.1/48k -> 16k;
+    upgrade path is scipy.signal.resample_poly if a device ever needs more."""
+    if src == dst or len(audio) == 0:
+        return audio
+    idx = np.arange(0, len(audio), src / dst)
+    return np.interp(idx, np.arange(len(audio)), audio).astype(np.float32)
 
 
 class Typist:
@@ -93,14 +109,14 @@ class Typist:
 
 
 class Murmur:
-    def __init__(self, model_name: str, device: str, vocab: str, language: str | None):
+    def __init__(self, model_name: str, device: str, vocab: str, language: str | None, mic=None):
         from faster_whisper import WhisperModel
         print(f"loading {model_name} on {device}...", flush=True)
         compute = "int8" if device == "cpu" else "float16"
         self.model = WhisperModel(model_name, device=device, compute_type=compute)
         self.vocab = vocab
         self.language = language
-        self.recorder = Recorder()
+        self.recorder = Recorder(mic)
         self.typist = Typist()
         self.held: set = set()
         self.recording = False
@@ -160,11 +176,18 @@ def main(argv=None) -> int:
     p.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
     p.add_argument("--language", default=None, help="force a language code, e.g. en, ko. default: auto")
     p.add_argument("--vocab", default=HERE / "vocab.txt", type=Path, help="terms file fed to Whisper as a prompt")
+    p.add_argument("--mic", default=None, help="input device index or name substring (see --list-devices)")
+    p.add_argument("--list-devices", action="store_true", help="print audio devices and exit")
     a = p.parse_args(argv)
+    if a.list_devices:
+        print(sd.query_devices())
+        return 0
+    if a.mic is not None and a.mic.isdigit():
+        a.mic = int(a.mic)
     if a.model.endswith(".en") and a.language is None:
         a.language = "en"
     try:
-        Murmur(a.model, a.device, load_vocab(a.vocab), a.language).run()
+        Murmur(a.model, a.device, load_vocab(a.vocab), a.language, a.mic).run()
     except KeyboardInterrupt:
         pass
     return 0
