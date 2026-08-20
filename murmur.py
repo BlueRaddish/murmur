@@ -336,49 +336,79 @@ def make_icon(state: str):
 
 
 class Pill:
-    """Borderless always-on-top strip at the bottom centre of the primary screen.
-    Shown while recording/transcribing, hidden when idle. Runs in the main thread
-    (tkinter requires it); other threads post states through a queue."""
+    """Wispr-style rounded bar at the bottom centre of the primary screen. Always there:
+    empty and dim when idle, animated level bars while recording, pulsing dots while
+    transcribing. Runs in the main thread (tkinter requires it); other threads post
+    states through a queue."""
 
-    W, H = 330, 36
+    W, H, R = 150, 26, 13
+    BARS = 17
+    KEY = "#010101"  # colour-keyed to transparent so the corners are really round
 
     def __init__(self, get_level):
         import tkinter as tk
-        self.tk = tk
+        from collections import deque
         self.get_level = get_level
         self.q: queue.Queue = queue.Queue()
+        self.hist = deque([0.0] * self.BARS, maxlen=self.BARS)
+        self.tick = 0
         self.root = tk.Tk()
-        self.root.withdraw()
         self.root.overrideredirect(True)
-        self.root.attributes("-topmost", True, "-alpha", 0.92)
+        self.root.attributes("-topmost", True, "-alpha", 0.55, "-transparentcolor", self.KEY)
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        self.root.geometry(f"{self.W}x{self.H}+{(sw - self.W) // 2}+{sh - self.H - 80}")
-        self.c = tk.Canvas(self.root, width=self.W, height=self.H, bg="#1e1e1e", highlightthickness=0)
+        self.root.geometry(f"{self.W}x{self.H}+{(sw - self.W) // 2}+{sh - self.H - 56}")
+        self.c = tk.Canvas(self.root, width=self.W, height=self.H, bg=self.KEY, highlightthickness=0)
         self.c.pack()
-        self.dot = self.c.create_oval(12, 11, 26, 25, fill=COLORS["idle"], outline="")
-        self.text = self.c.create_text(34, self.H // 2, anchor="w", fill="#f0f0f0",
-                                       font=("Segoe UI", 10), text="")
-        self.bar_bg = self.c.create_rectangle(self.W - 70, 14, self.W - 12, 22, fill="#3a3a3a", outline="")
-        self.bar = self.c.create_rectangle(self.W - 70, 14, self.W - 70, 22, fill="#6fd36f", outline="")
+        self._rounded(0, 0, self.W, self.H, self.R, "#1c1c1c")
+        self.items = []
         self.state = "idle"
+
+    def _rounded(self, x0, y0, x1, y1, r, fill):
+        c = self.c
+        c.create_arc(x0, y0, x0 + 2 * r, y0 + 2 * r, start=90, extent=90, fill=fill, outline=fill)
+        c.create_arc(x1 - 2 * r, y0, x1, y0 + 2 * r, start=0, extent=90, fill=fill, outline=fill)
+        c.create_arc(x0, y1 - 2 * r, x0 + 2 * r, y1, start=180, extent=90, fill=fill, outline=fill)
+        c.create_arc(x1 - 2 * r, y1 - 2 * r, x1, y1, start=270, extent=90, fill=fill, outline=fill)
+        c.create_rectangle(x0 + r, y0, x1 - r, y1, fill=fill, outline=fill)
+        c.create_rectangle(x0, y0 + r, x1, y1 - r, fill=fill, outline=fill)
 
     def post(self, state: str) -> None:
         self.q.put(state)
 
+    def _clear(self) -> None:
+        for i in self.items:
+            self.c.delete(i)
+        self.items = []
+
+    def _draw(self) -> None:
+        self._clear()
+        mid = self.H / 2
+        if self.state in ("recording", "persistent"):
+            col = COLORS[self.state]
+            gap = (self.W - 2 * self.R) / self.BARS
+            for i, lvl in enumerate(self.hist):
+                h = 2 + (self.H - 10) * min(1.0, lvl / 0.15) ** 0.5   # 0.15 RMS ~ loud speech
+                x = self.R + gap * (i + 0.5)
+                self.items.append(self.c.create_line(x, mid - h / 2, x, mid + h / 2, fill=col, width=3,
+                                                     capstyle="round"))
+        elif self.state in ("busy", "loading"):
+            for i in range(3):
+                on = (self.tick // 4) % 3 == i
+                x = self.W / 2 + (i - 1) * 12
+                r = 3.5 if on else 2.5
+                self.items.append(self.c.create_oval(x - r, mid - r, x + r, mid + r,
+                                                     fill="#f0f0f0" if on else "#707070", outline=""))
+
     def _tick(self) -> None:
         while not self.q.empty():
             self.state = self.q.get()
-            self.c.itemconfig(self.dot, fill=COLORS[self.state])
-            self.c.itemconfig(self.text, text=LABELS[self.state])
-            if self.state == "idle":
-                self.root.withdraw()
-            else:
-                self.root.deiconify()
-                self.root.lift()
+            self.hist.extend([0.0] * self.BARS)
+            self.root.attributes("-alpha", 0.55 if self.state == "idle" else 0.95)
+            self.root.lift()
+        self.tick += 1
         if self.state in ("recording", "persistent"):
-            # log-ish scale: speech RMS of 0.03 is clearly audible, 0.2 is loud
-            lvl = min(1.0, self.get_level() / 0.2) ** 0.5
-            self.c.coords(self.bar, self.W - 70, 14, self.W - 70 + int(58 * lvl), 22)
+            self.hist.append(self.get_level())
+        self._draw()
         self.root.after(50, self._tick)
 
     def run(self) -> None:

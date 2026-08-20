@@ -10,7 +10,7 @@ Decisions
 - Headset button = VK_MEDIA_PLAY_PAUSE, handled in pynput's win32_event_filter and suppressed
   there so media players don't see it. It calls the same toggle() as the tray menu; it never
   synthesizes Ctrl+Win.
-- tkinter owns the main thread (pill); pystray runs in a thread; the model loads in a third so
+- tkinter owns the main thread (the bar; colour-keyed transparent corners, always visible); pystray runs in a thread; the model loads in a third so
   the UI is up immediately and shows "loading model...".
 - Console output is ASCII only: the Windows console is cp1252 and a non-ASCII print inside a
   pynput callback kills the listener.

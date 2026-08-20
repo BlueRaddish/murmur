@@ -19,8 +19,7 @@ pip install -r requirements.txt
 python murmur.py
 ```
 
-First run downloads the model (`small.en`, ~250 MB) - the pill says "loading model..."
-until it is ready.
+First run downloads the model (`small.en`, ~250 MB) - the bar pulses until the model is ready.
 
 ## Use
 
@@ -31,8 +30,10 @@ until it is ready.
 | Headset button (opt-in) | toggles recording, same as persistent mode |
 | Tray icon right-click | start/stop, headset option, edit vocab, open log, quit |
 
-(Ctrl+Cmd on a Mac keyboard.) A pill at the bottom of the screen shows the mode and a live
-mic level while recording, so you can see it is hearing you. Beeps: one high = recording,
+(Ctrl+Cmd on a Mac keyboard.) A small rounded bar sits at the bottom of the screen: empty
+when idle, live mic-level bars while recording (red = hold, orange = persistent), pulsing
+dots while transcribing - so you can see it is hearing you. If the bars stay flat while
+you talk, it is listening to the wrong input: `--list-devices`, then set `mic` in config. Beeps: one high = recording,
 two rising = persistent, one low = stopped.
 
 **Headset button.** Wired headsets' inline button reaches Windows as the Play/Pause media
@@ -75,7 +76,7 @@ winget install JRSoftware.InnoSetup      # optional, for the installer
 
 `pynput` listens for the chord globally. While held, `sounddevice` records the mic at
 16 kHz. On release the audio goes to faster-whisper (int8 on CPU), the text is placed on the
-clipboard, Ctrl+V is sent, and your previous clipboard is restored. The pill is a tiny
+clipboard, Ctrl+V is sent, and your previous clipboard is restored. The bar is a tiny
 tkinter window; the tray icon is pystray. One file, `murmur.py`.
 
 ## Test
