@@ -16,7 +16,6 @@ everything transcribed (default 7 days, adjustable) in case a paste goes missing
 import argparse
 import json
 import os
-import queue
 import sys
 import threading
 import time
@@ -117,19 +116,30 @@ def resample(audio: np.ndarray, src: int, dst: int) -> np.ndarray:
 
 
 class Recorder:
+    """Chunks are stored already at 16 kHz so snapshot() during recording is a concatenate."""
+
     def __init__(self, device=None):
         self.device = device
-        self._q: queue.Queue = queue.Queue()
+        self._chunks: list = []
+        self._lock = threading.Lock()
         self._stream = None
         self._rate = SAMPLE_RATE
         self.level = 0.0  # RMS of the latest chunk, 0..1, for the on-screen meter
 
     def _cb(self, data, *_):
-        self._q.put(data.copy())
+        mono = resample(data[:, 0].copy(), self._rate, SAMPLE_RATE)
+        with self._lock:
+            self._chunks.append(mono)
         self.level = float(np.sqrt((data ** 2).mean()))
 
+    def snapshot(self) -> np.ndarray:
+        with self._lock:
+            chunks = list(self._chunks)
+        return np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.float32)
+
     def start(self) -> None:
-        self._q = queue.Queue()
+        with self._lock:
+            self._chunks = []
         self.level = 0.0
         try:
             self._stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32",
@@ -150,12 +160,7 @@ class Recorder:
         self._stream.stop()
         self._stream.close()
         self.level = 0.0
-        chunks = []
-        while not self._q.empty():
-            chunks.append(self._q.get())
-        if not chunks:
-            return np.zeros(0, dtype=np.float32)
-        return resample(np.concatenate(chunks)[:, 0], self._rate, SAMPLE_RATE)
+        return self.snapshot()
 
 
 class Typist:
@@ -178,6 +183,16 @@ class Typist:
         time.sleep(0.15)  # let the target app read the clipboard before we restore it
         if old is not None:
             pyperclip.copy(old)
+
+
+class Take:
+    """One recording's streaming state: text committed so far and how many samples it covers."""
+
+    def __init__(self):
+        self.active = True
+        self.parts: list = []
+        self.committed = 0
+        self.done = threading.Event()
 
 
 class Murmur:
@@ -206,6 +221,7 @@ class Murmur:
         self.ctl = threading.Lock()       # start/stop/toggle come from listener, tray and filter threads
         self.pending = 0                  # transcriptions queued or running
         self.listener = None
+        self.take = None                  # the Take being recorded (streaming state)
 
     def _set(self, state: str) -> None:
         self.state = state
@@ -228,6 +244,8 @@ class Murmur:
                 return
             self.recording = True
             self.persistent = persistent
+            self.take = Take()
+            threading.Thread(target=self._stream_loop, args=(self.take,), daemon=True).start()
             beep("persistent" if persistent else "start")
             log("[persistent]" if persistent else "[rec]")
             self._set("persistent" if persistent else "recording")
@@ -241,7 +259,9 @@ class Murmur:
             beep("stop")
             self.pending += 1
             self._set("busy")
-        threading.Thread(target=self.handle, args=(audio,), daemon=True).start()
+            take, self.take = self.take, None
+            take.active = False
+        threading.Thread(target=self.handle, args=(audio, take), daemon=True).start()
 
     def toggle(self) -> None:
         """Headset button and tray menu: one press starts persistent, the next stops."""
@@ -289,21 +309,65 @@ class Murmur:
         return True
 
     # --- transcription ------------------------------------------------------
-    def transcribe(self, audio: np.ndarray) -> str:
+    def _segments(self, audio: np.ndarray, prev: str = "") -> list:
+        prompt = ", ".join(p for p in (self.vocab, prev[-200:]) if p) or None
+        segs, _ = self.model.transcribe(
+            audio, language=self.language, beam_size=5, initial_prompt=prompt,
+            vad_filter=True, condition_on_previous_text=False,
+        )
+        return list(segs)
+
+    def transcribe(self, audio: np.ndarray, prev: str = "") -> str:
         if len(audio) < SAMPLE_RATE * 0.3:  # under 300ms: a tap, not speech
             return ""
-        segments, _ = self.model.transcribe(
-            audio, language=self.language, beam_size=5,
-            initial_prompt=self.vocab or None, vad_filter=True,
-            condition_on_previous_text=False,
-        )
-        return clean(" ".join(s.text for s in segments))
+        return clean(" ".join(s.text for s in self._segments(audio, prev)))
 
-    def handle(self, audio: np.ndarray) -> None:
+    STREAM_EVERY = 1.5   # seconds between background passes
+    STREAM_MIN = 2.5     # seconds of uncommitted audio before a pass is worth it
+
+    def _stream_loop(self, take: "Take") -> None:
+        """Runs while a take is recording. Passes overlap with speech, so release leaves
+        only a short tail to transcribe."""
+        last = time.monotonic()
+        while take.active:
+            time.sleep(0.1)
+            if time.monotonic() - last < self.STREAM_EVERY:
+                continue
+            try:
+                if not self._stream_pass(take):
+                    continue
+            except Exception as e:
+                log(f"  stream: {e}")
+                break
+            last = time.monotonic()
+        take.done.set()
+
+    def _stream_pass(self, take: "Take") -> bool:
+        """Transcribe the uncommitted audio; commit every segment except the last (which may
+        still be mid-sentence) so its samples are never looked at again. False = nothing to do."""
+        audio = self.recorder.snapshot()[take.committed:]
+        if len(audio) < SAMPLE_RATE * self.STREAM_MIN:
+            return False
+        with self.lock:
+            if not take.active:
+                return False
+            segs = self._segments(audio, " ".join(take.parts))
+        if len(segs) >= 2:
+            done = segs[:-1]
+            take.parts.append(clean(" ".join(s.text for s in done)))
+            take.committed += int(done[-1].end * SAMPLE_RATE)
+        return True
+
+    def handle(self, audio: np.ndarray, take: "Take" = None) -> None:
+        if take is None:
+            take = Take()
+            take.done.set()
+        take.done.wait()      # an in-flight pass may still be committing
         with self.lock:  # one transcription at a time
             try:
                 t0 = time.time()
-                text = self.transcribe(audio)
+                tail = self.transcribe(audio[take.committed:], " ".join(take.parts))
+                text = clean(" ".join(p for p in take.parts + [tail] if p))
                 if not text:
                     log("  (nothing heard)")
                     return

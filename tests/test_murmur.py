@@ -22,13 +22,15 @@ class FakeRec:
     def __init__(self): self.calls = []; self.level = 0.0
     def start(self): self.calls.append("start")
     def stop(self): self.calls.append("stop"); return np.zeros(0, dtype=np.float32)
+    def snapshot(self): return np.zeros(0, dtype=np.float32)
 
 def fresh():
     m = murmur.Murmur.__new__(murmur.Murmur)
     m.cfg = {"headset_button": False}; m.recorder = FakeRec(); m.on_state = lambda s: None
     m.state = "idle"; m.held = set(); m.recording = m.persistent = m.chord_was_down = False
     m.last_chord_release = 0.0; m.lock = __import__("threading").Lock(); m.ctl = __import__("threading").Lock(); m.pending = 0
-    m.handle = lambda audio: None  # never touch the model here
+    m.handle = lambda audio, take=None: None  # never touch the model here
+    m.take = None
     return m
 
 def press(m, k): m.on_press(k)
@@ -83,6 +85,31 @@ import threading as _th
 m.transcribe = lambda a: ""; m.typist = None
 real_handle(m, np.zeros(0)); assert "idle" not in states
 real_handle(m, np.zeros(0)); assert states[-1] == "idle" and m.pending == 0
+
+# streaming: a pass commits all segments but the last and advances the sample pointer;
+# the final handle() transcribes only the tail and joins committed text in front
+class Seg:
+    def __init__(self, text, end): self.text, self.end = text, end
+class FakeModel:
+    def __init__(self): self.calls = []
+    def transcribe(self, audio, **kw):
+        self.calls.append((len(audio), kw.get("initial_prompt")))
+        n = len(audio) / 16000
+        if n >= 6: return iter([Seg(" first sentence.", 2.0), Seg(" second one.", 4.0), Seg(" third partial", n)]), None
+        return iter([Seg(" the tail.", n)]), None
+m = fresh(); m.model = FakeModel(); m.vocab = "tmux"; m.language = "en"
+m.recorder.snapshot = lambda: np.zeros(16000 * 7, dtype=np.float32)
+take = murmur.Take()
+assert m._stream_pass(take) and take.parts == ["first sentence. second one."] and take.committed == 4 * 16000
+assert m.model.calls[-1] == (7 * 16000, "tmux")
+m.recorder.snapshot = lambda: np.zeros(16000 * 5, dtype=np.float32)   # only 1 s new since commit: wait
+assert m._stream_pass(take) is False
+take.active = False; take.done.set()
+out = []; m.typist = type("T", (), {"type": lambda self, t: out.append(t)})(); m.on_text = lambda t: None
+m.pending = 1; murmur.Murmur.handle(m, np.zeros(16000 * 7, dtype=np.float32), take)
+assert out == ["first sentence. second one. the tail."], out
+assert m.model.calls[-1][0] == 3 * 16000 and "first sentence" in m.model.calls[-1][1]   # tail only, with context
+print("streaming ok")
 # language derives from model at load time, is never written to config
 assert "language" in murmur.DEFAULTS and murmur.DEFAULTS["language"] is None
 
