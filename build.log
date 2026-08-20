@@ -1,0 +1,172 @@
+155 INFO: PyInstaller: 6.22.2, contrib hooks: 2026.6
+156 INFO: Python: 3.13.14
+175 INFO: Platform: Windows-10-10.0.19045-SP0
+175 INFO: Python environment: C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.13_3.13.3824.0_x64__qbz5n2kfra8p0
+176 INFO: wrote C:\Users\there\Downloads\Projects\murmur\murmur.spec
+186 INFO: Removing temporary files and cleaning cache in C:\Users\there\AppData\Local\pyinstaller
+8885 INFO: Module search paths (PYTHONPATH):
+['C:\\Users\\there\\Downloads\\Projects\\murmur',
+ 'C:\\Program '
+ 'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_3.13.3824.0_x64__qbz5n2kfra8p0\\python313.zip',
+ 'C:\\Program '
+ 'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_3.13.3824.0_x64__qbz5n2kfra8p0\\DLLs',
+ 'C:\\Program '
+ 'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_3.13.3824.0_x64__qbz5n2kfra8p0\\Lib',
+ 'C:\\Program '
+ 'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_3.13.3824.0_x64__qbz5n2kfra8p0',
+ 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages',
+ 'C:\\Program '
+ 'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_3.13.3824.0_x64__qbz5n2kfra8p0\\Lib\\site-packages',
+ 'C:\\Users\\there\\Downloads\\Projects\\murmur']
+10116 INFO: Appending 'binaries' from .spec
+10116 INFO: Appending 'datas' from .spec
+10151 INFO: checking Analysis
+10151 INFO: Building Analysis because Analysis-00.toc is non existent
+10151 INFO: Looking for Python shared library...
+10151 INFO: Using Python shared library: C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.13_3.13.3824.0_x64__qbz5n2kfra8p0\python313.dll
+10151 INFO: Running Analysis Analysis-00.toc
+10151 INFO: Target bytecode optimization level: 0
+10151 INFO: Initializing module dependency graph...
+10153 INFO: Initializing module graph hook caches...
+10204 INFO: Analyzing modules for base_library.zip ...
+11286 INFO: Processing standard module hook 'hook-encodings.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+12223 INFO: Processing standard module hook 'hook-math.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+12543 INFO: Processing standard module hook 'hook-heapq.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+13920 INFO: Processing standard module hook 'hook-pickle.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+15560 INFO: Caching module dependency graph...
+15600 INFO: Analyzing C:\Users\there\Downloads\Projects\murmur\murmur.py
+15674 INFO: Processing standard module hook 'hook-numpy.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+16490 INFO: Processing pre-safe-import-module hook 'hook-typing_extensions.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+16506 INFO: SetuptoolsInfo: initializing cached setuptools info...
+18255 INFO: Processing standard module hook 'hook-multiprocessing.util.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+18470 INFO: Processing standard module hook 'hook-xml.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+18805 INFO: Processing standard module hook 'hook-sysconfig.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+18820 INFO: Processing standard module hook 'hook-_ctypes.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+19596 INFO: Processing standard module hook 'hook-difflib.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+20435 INFO: Processing standard module hook 'hook-platform.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+21102 INFO: Processing standard module hook 'hook-webbrowser.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+24133 INFO: Processing standard module hook 'hook-sounddevice.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+24186 INFO: Processing standard module hook 'hook-pynput.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+24630 INFO: Processing pre-safe-import-module hook 'hook-six.moves.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+24727 INFO: Processing standard module hook 'hook-av.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+25428 INFO: Processing standard module hook 'hook-PIL.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+25593 INFO: Processing standard module hook 'hook-PIL.Image.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+26174 INFO: Processing standard module hook 'hook-xml.etree.cElementTree.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+26520 INFO: Processing standard module hook 'hook-PIL.ImageFilter.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+27299 INFO: Processing pre-safe-import-module hook 'hook-tensorflow.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\_pyinstaller_hooks_contrib\\pre_safe_import_module'
+27948 INFO: Processing standard module hook 'hook-certifi.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+28123 INFO: Processing standard module hook 'hook-anyio.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+29832 INFO: Processing standard module hook 'hook-pygments.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+31661 INFO: Processing pre-safe-import-module hook 'hook-importlib_resources.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+31731 INFO: Processing standard module hook 'hook-matplotlib.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+32621 INFO: Processing pre-safe-import-module hook 'hook-packaging.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+32840 INFO: Processing pre-safe-import-module hook 'hook-gi.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+33222 INFO: Processing standard module hook 'hook-matplotlib.backend_bases.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+34558 INFO: Processing standard module hook 'hook-matplotlib.backends.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+34733 INFO: Processing standard module hook 'hook-matplotlib.pyplot.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+35218 INFO: Processing standard module hook 'hook-matplotlib.figure.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+36378 INFO: Processing standard module hook 'hook-dateutil.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+39373 INFO: Processing standard module hook 'hook-sqlite3.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+41756 INFO: Processing standard module hook 'hook-fsspec.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+42681 INFO: Processing pre-safe-import-module hook 'hook-backports.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+42688 INFO: Setuptools: 'backports' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.backports'!
+42695 INFO: Processing standard module hook 'hook-setuptools.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+42719 INFO: Processing pre-safe-import-module hook 'hook-distutils.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+42759 INFO: Processing pre-safe-import-module hook 'hook-jaraco.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+42768 INFO: Setuptools: 'jaraco' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.jaraco'!
+42781 INFO: Processing pre-safe-import-module hook 'hook-more_itertools.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+42788 INFO: Setuptools: 'more_itertools' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.more_itertools'!
+42960 INFO: Processing standard module hook 'hook-_osx_support.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+43372 INFO: Processing standard module hook 'hook-setuptools._vendor.jaraco.text.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+43973 INFO: Processing pre-safe-import-module hook 'hook-tomli.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+43982 INFO: Setuptools: 'tomli' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.tomli'!
+44666 INFO: Processing pre-safe-import-module hook 'hook-wheel.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+44674 INFO: Setuptools: 'wheel' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.wheel'!
+44950 INFO: Processing standard module hook 'hook-onnxruntime.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+45261 INFO: Processing pre-find-module-path hook 'hook-tkinter.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks\\pre_find_module_path'
+45278 INFO: TclTkInfo: initializing cached Tcl/Tk info...
+45770 INFO: Processing standard module hook 'hook-_tkinter.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+45786 INFO: Processing standard module hook 'hook-pystray.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+46223 INFO: Analyzing hidden import 'faster_whisper.assets'
+46223 INFO: Analyzing hidden import 'ctranslate2.converters.eole_ct2'
+46236 INFO: Analyzing hidden import 'av.__main__'
+46247 INFO: Analyzing hidden import 'av.audio.plane'
+46249 INFO: Analyzing hidden import 'av.buffer'
+46253 INFO: Analyzing hidden import 'av.container.pyio'
+46261 INFO: Analyzing hidden import 'av.container.streams'
+46268 INFO: Analyzing hidden import 'av.datasets'
+46273 INFO: Analyzing hidden import 'av.dictionary'
+46277 INFO: Analyzing hidden import 'av.filter'
+46294 INFO: Analyzing hidden import 'av.filter.context'
+46303 INFO: Analyzing hidden import 'av.filter.link'
+46310 INFO: Analyzing hidden import 'av.frame'
+46336 INFO: Analyzing hidden import 'av.index'
+46343 INFO: Analyzing hidden import 'av.opaque'
+46346 INFO: Analyzing hidden import 'av.plane'
+46348 INFO: Analyzing hidden import 'av.stream'
+46360 INFO: Analyzing hidden import 'av.subtitles.subtitle'
+46374 INFO: Analyzing hidden import 'av.utils'
+46377 INFO: Analyzing hidden import 'av.video.plane'
+46394 INFO: Analyzing hidden import 'av.video.reformatter'
+46407 INFO: Analyzing hidden import 'tokenizers.tools'
+46421 INFO: Analyzing hidden import 'huggingface_hub._hot_reload'
+46422 INFO: Analyzing hidden import 'huggingface_hub._hot_reload.client'
+46436 INFO: Analyzing hidden import 'huggingface_hub.cli._city_game'
+46484 INFO: Analyzing hidden import 'huggingface_hub.cli._completion'
+46973 INFO: Analyzing hidden import 'huggingface_hub.cli.deprecated_cli'
+46974 INFO: Analyzing hidden import 'huggingface_hub.dataclasses'
+47002 INFO: Analyzing hidden import 'huggingface_hub.inference._mcp._cli_hacks'
+47005 INFO: Analyzing hidden import 'huggingface_hub.inference._mcp.cli'
+47017 INFO: Analyzing hidden import 'pystray._info'
+47018 INFO: Processing module hooks (post-graph stage)...
+47326 INFO: Processing standard module hook 'hook-pytest.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+47902 INFO: Processing standard module hook 'hook-py.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+50980 INFO: Processing standard module hook 'hook-matplotlib.backends.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+50981 INFO: Matplotlib backend selection method: automatic discovery of used backends
+51391 INFO: Trying determine the default backend as first importable candidate from the list: ['QtAgg', 'Qt5Agg', 'Gtk4Agg', 'Gtk3Agg', 'TkAgg', 'WxAgg']
+54560 INFO: Selected matplotlib backends: ['TkAgg']
+54560 INFO: Extra dists for selected matplotlib backends: []
+55491 INFO: Processing standard module hook 'hook-PIL.SpiderImagePlugin.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+62138 INFO: Processing standard module hook 'hook-_tkinter.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+62165 INFO: Performing binary vs. data reclassification (1646 entries)
+66369 INFO: Looking for ctypes DLLs
+66555 INFO: Analyzing run-time hooks ...
+66562 INFO: Including run-time hook 'pyi_rth_inspect.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks\\rthooks'
+66565 INFO: Including run-time hook 'pyi_rth_pkgutil.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks\\rthooks'
+66567 INFO: Including run-time hook 'pyi_rth_mplconfig.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks\\rthooks'
+66569 INFO: Processing pre-find-module-path hook 'hook-_pyi_rth_utils.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks\\pre_find_module_path'
+66585 INFO: Processing standard module hook 'hook-_pyi_rth_utils.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks'
+66605 INFO: Including run-time hook 'pyi_rth_multiprocessing.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks\\rthooks'
+66607 INFO: Including run-time hook 'pyi_rth_setuptools.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks\\rthooks'
+66609 INFO: Including run-time hook 'pyi_rth__tkinter.py' from 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\PyInstaller\\hooks\\rthooks'
+66668 INFO: Creating base_library.zip...
+66693 INFO: Looking for dynamic libraries
+69677 INFO: Extra DLL search directories (AddDllDirectory): ['C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\numpy.libs', 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\av.libs', 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\ctranslate2', 'C:\\Users\\there\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\ctranslate2/../_rocm_sdk_core/bin']
+69677 INFO: Extra DLL search directories (PATH): []
+72030 INFO: Warnings written to C:\Users\there\Downloads\Projects\murmur\build\murmur\warn-murmur.txt
+72177 INFO: Graph cross-reference written to C:\Users\there\Downloads\Projects\murmur\build\murmur\xref-murmur.html
+72311 INFO: checking PYZ
+72311 INFO: Building PYZ because PYZ-00.toc is non existent
+72311 INFO: Building PYZ (ZlibArchive) C:\Users\there\Downloads\Projects\murmur\build\murmur\PYZ-00.pyz
+73923 INFO: Building PYZ (ZlibArchive) C:\Users\there\Downloads\Projects\murmur\build\murmur\PYZ-00.pyz completed successfully.
+73975 INFO: checking PKG
+73975 INFO: Building PKG because PKG-00.toc is non existent
+73975 INFO: Building PKG (CArchive) murmur.pkg
+74058 INFO: Building PKG (CArchive) murmur.pkg completed successfully.
+74059 INFO: Bootloader C:\Users\there\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\PyInstaller\bootloader\Windows-64bit-intel\runw.exe
+74059 INFO: checking EXE
+74059 INFO: Building EXE because EXE-00.toc is non existent
+74059 INFO: Building EXE from EXE-00.toc
+74059 INFO: Copying bootloader EXE to C:\Users\there\Downloads\Projects\murmur\build\murmur\murmur.exe
+74717 INFO: Copying icon to EXE
+75265 INFO: Copying 0 resources to EXE
+75266 INFO: Embedding manifest in EXE
+75782 INFO: Appending PKG archive to EXE
+76043 INFO: Fixing EXE headers
+78534 INFO: Building EXE from EXE-00.toc completed successfully.
+78550 INFO: checking COLLECT
+78550 INFO: Building COLLECT because COLLECT-00.toc is non existent
+78550 INFO: Building COLLECT COLLECT-00.toc
+81887 INFO: Building COLLECT COLLECT-00.toc completed successfully.
+81936 INFO: Build complete! The results are available in: C:\Users\there\Downloads\Projects\murmur\dist
+built dist\murmur-setup.exe
