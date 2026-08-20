@@ -139,7 +139,12 @@ class Recorder:
             self._rate = int(sd.query_devices(self.device, "input")["default_samplerate"])
             self._stream = sd.InputStream(samplerate=self._rate, channels=1, dtype="float32",
                                           device=self.device, callback=self._cb)
-        self._stream.start()
+        try:
+            self._stream.start()
+        except Exception:
+            self._stream.close()   # otherwise the half-open stream holds the mic until restart
+            self._stream = None
+            raise
 
     def stop(self) -> np.ndarray:
         self._stream.stop()
@@ -303,8 +308,11 @@ class Murmur:
                     log("  (nothing heard)")
                     return
                 log(f"  {text}  [{time.time() - t0:.1f}s]")
-                self.on_text(text)
                 self.typist.type(text)
+                try:
+                    self.on_text(text)        # bookkeeping: never allowed to cost the paste
+                except Exception as e:
+                    log(f"  history: {e}")
             except Exception as e:
                 log(f"  error: {e}")
             finally:
@@ -363,13 +371,13 @@ def run_app(factory, cfg: dict, cfg_path: Path) -> None:
         overlay.post(state)
 
     def on_text(text: str) -> None:
-        if cfg["retention_days"] > 0:
-            history.append(text)
-            root.after(0, win.refresh)
+        if cfg["retention_days"] > 0:   # marshal to the Tk thread: History is not locked
+            root.after(0, lambda: (history.append(text), win.refresh()))
 
     def quit_all(icon_=None, item=None) -> None:
         if holder["app"]:
             holder["app"].quit()
+        icon.visible = False   # stop() is a no-op until the tray thread is ready; hide regardless
         icon.stop()
         root.after(0, root.destroy)
 

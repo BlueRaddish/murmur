@@ -20,6 +20,7 @@ class History:
         self.path = path
         self.days = days
         self.items: list = []
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         self.load()
 
     def load(self) -> None:
@@ -171,6 +172,9 @@ class AppWindow:
             if cur == i or (isinstance(cur, str) and cur and cur.lower() in n.lower()):
                 sel = f"{i}: {n}"
                 break
+        if cur is not None and sel == names[0]:   # configured but not in the list: keep it, don't silently reset
+            sel = f"{cur}: (as configured)"
+            names.insert(1, sel)
         self.v_mic = tk.StringVar(value=sel)
         ttk.Combobox(f, textvariable=self.v_mic, values=names, width=46, state="readonly").grid(
             row=r, column=1, sticky="w")
@@ -260,7 +264,10 @@ class AppWindow:
         self.cfg["model"] = self.v_model.get().strip() or self.cfg["model"]
         self.cfg["language"] = self.v_lang.get().strip() or None
         mic = self.v_mic.get()
-        self.cfg["mic"] = None if mic.startswith("(") else int(mic.split(":")[0])
+        if mic.startswith("("):
+            self.cfg["mic"] = None
+        elif not mic.endswith("(as configured)"):
+            self.cfg["mic"] = int(mic.split(":")[0])
         self.on_save(self.cfg)  # cfg is the live dict the app reads: headset/retention apply now
         self.note.config(text="Saved. Model, microphone and language apply after a restart.", foreground="#666")
         self.refresh()

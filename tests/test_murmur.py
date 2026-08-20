@@ -132,3 +132,16 @@ h = History(hp, 0); h.append("x"); assert h.items == []                  # 0 day
 os.remove(hp)
 assert murmur.DEFAULTS["retention_days"] == 7
 print("history ok")
+
+# a stream that opens but fails to start is closed, not left holding the mic
+class FakeStream:
+    closed = False
+    def start(self): raise RuntimeError("device yanked")
+    def close(self): FakeStream.closed = True
+rec = murmur.Recorder(); _orig = murmur.sd.InputStream; murmur.sd.InputStream = lambda **k: FakeStream()
+try:
+    try: rec.start(); assert False
+    except RuntimeError: pass
+    assert FakeStream.closed and rec._stream is None
+finally: murmur.sd.InputStream = _orig
+print("stream cleanup ok")
