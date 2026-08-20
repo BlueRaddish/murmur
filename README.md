@@ -2,7 +2,7 @@
 
 Hold **Ctrl+Win**, talk, let go. What you said gets typed into whatever window has focus.
 
-Local [faster-whisper](https://github.com/SYSTEMRAN/faster-whisper) does the transcription.
+Local [faster-whisper](https://github.com/SYSTRAN/faster-whisper) does the transcription.
 Nothing leaves your machine, nothing is subscription-gated, and **no language model
 "cleans up" your words** — `rebase`, `tmux`, `GDScript` come out as you said them. A
 `vocab.txt` of your own terms is handed to Whisper as a prompt so it prefers those spellings.
