@@ -312,7 +312,7 @@ class Murmur:
 # --- UI: tray icon + on-screen pill ---------------------------------------------
 COLORS = {"idle": "#787878", "recording": "#dc3232", "persistent": "#f09620", "busy": "#3c82dc",
           "loading": "#3c82dc"}
-LABELS = {"idle": "ready (Ctrl+Win)", "recording": "recording", "persistent": "persistent - Ctrl+Win to stop",
+LABELS = {"idle": "ready (Ctrl+Win)", "recording": "recording", "persistent": "persistent, Ctrl+Win stops",
           "busy": "transcribing...", "loading": "loading model..."}
 
 
@@ -328,7 +328,7 @@ class Pill:
     Shown while recording/transcribing, hidden when idle. Runs in the main thread
     (tkinter requires it); other threads post states through a queue."""
 
-    W, H = 260, 36
+    W, H = 330, 36
 
     def __init__(self, get_level):
         import tkinter as tk
