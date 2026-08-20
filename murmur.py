@@ -9,8 +9,9 @@ Modes
   headset     (opt-in) the wired-headset button toggles recording. It is its own trigger,
               never translated into Ctrl+Win, so no stray modifier keystrokes reach apps.
 
-While recording, a small pill at the bottom of the screen shows the mode and a live
-mic level, so you can see it is actually hearing you.
+A glassy disc at the bottom of the screen shows the mode and live mic level, so you can
+see it is actually hearing you. The tray's "Open murmur" window keeps a history of
+everything transcribed (default 7 days, adjustable) in case a paste goes missing.
 """
 import argparse
 import json
@@ -39,7 +40,8 @@ VK_MEDIA_PLAY_PAUSE = 0xB3  # what a wired headset's inline button sends on Wind
 CTRL_KEYS = {Key.ctrl, Key.ctrl_l, Key.ctrl_r}
 CMD_KEYS = {Key.cmd, Key.cmd_l, Key.cmd_r}
 
-DEFAULTS = {"model": "small.en", "device": "cpu", "language": None, "mic": None, "headset_button": False}
+DEFAULTS = {"model": "small.en", "device": "cpu", "language": None, "mic": None, "headset_button": False,
+            "retention_days": 7}
 
 
 def log(msg: str) -> None:
@@ -177,7 +179,7 @@ class Murmur:
     """States: idle, recording (hold), persistent, busy (transcribing).
     Every transition goes through start()/stop() so UI, beeps and log stay in step."""
 
-    def __init__(self, cfg: dict, vocab: str, on_state=None):
+    def __init__(self, cfg: dict, vocab: str, on_state=None, on_text=None):
         from faster_whisper import WhisperModel
         log(f"loading {cfg['model']} on {cfg['device']}...")
         compute = "int8" if cfg["device"] == "cpu" else "float16"
@@ -188,6 +190,7 @@ class Murmur:
         self.recorder = Recorder(cfg["mic"])
         self.typist = Typist()
         self.on_state = on_state or (lambda s: None)
+        self.on_text = on_text or (lambda t: None)   # history hook
         self.state = "idle"
         self.held: set = set()
         self.recording = False
@@ -300,6 +303,7 @@ class Murmur:
                     log("  (nothing heard)")
                     return
                 log(f"  {text}  [{time.time() - t0:.1f}s]")
+                self.on_text(text)
                 self.typist.type(text)
             except Exception as e:
                 log(f"  error: {e}")
@@ -321,7 +325,7 @@ class Murmur:
             self.listener.stop()
 
 
-# --- UI: tray icon + on-screen pill ---------------------------------------------
+# --- UI: tray icon, overlay, app window -------------------------------------------
 COLORS = {"idle": "#787878", "recording": "#dc3232", "persistent": "#f09620", "busy": "#3c82dc",
           "loading": "#3c82dc"}
 LABELS = {"idle": "ready (Ctrl+Win)", "recording": "recording", "persistent": "persistent, Ctrl+Win stops",
@@ -335,120 +339,46 @@ def make_icon(state: str):
     return img
 
 
-class Pill:
-    """Wispr-style rounded bar at the bottom centre of the primary screen. Always there:
-    empty and dim when idle, animated level bars while recording, pulsing dots while
-    transcribing. Runs in the main thread (tkinter requires it); other threads post
-    states through a queue."""
-
-    W, H, R = 150, 26, 13
-    BARS = 17
-    KEY = "#010101"  # colour-keyed to transparent so the corners are really round
-
-    def __init__(self, get_level):
-        import tkinter as tk
-        from collections import deque
-        self.get_level = get_level
-        self.q: queue.Queue = queue.Queue()
-        self.hist = deque([0.0] * self.BARS, maxlen=self.BARS)
-        self.tick = 0
-        self.root = tk.Tk()
-        self.root.overrideredirect(True)
-        self.root.attributes("-topmost", True, "-alpha", 0.55, "-transparentcolor", self.KEY)
-        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        self.root.geometry(f"{self.W}x{self.H}+{(sw - self.W) // 2}+{sh - self.H - 56}")
-        self.c = tk.Canvas(self.root, width=self.W, height=self.H, bg=self.KEY, highlightthickness=0)
-        self.c.pack()
-        self._rounded(0, 0, self.W, self.H, self.R, "#1c1c1c")
-        self.items = []
-        self.state = "idle"
-
-    def _rounded(self, x0, y0, x1, y1, r, fill):
-        c = self.c
-        c.create_arc(x0, y0, x0 + 2 * r, y0 + 2 * r, start=90, extent=90, fill=fill, outline=fill)
-        c.create_arc(x1 - 2 * r, y0, x1, y0 + 2 * r, start=0, extent=90, fill=fill, outline=fill)
-        c.create_arc(x0, y1 - 2 * r, x0 + 2 * r, y1, start=180, extent=90, fill=fill, outline=fill)
-        c.create_arc(x1 - 2 * r, y1 - 2 * r, x1, y1, start=270, extent=90, fill=fill, outline=fill)
-        c.create_rectangle(x0 + r, y0, x1 - r, y1, fill=fill, outline=fill)
-        c.create_rectangle(x0, y0 + r, x1, y1 - r, fill=fill, outline=fill)
-
-    def post(self, state: str) -> None:
-        self.q.put(state)
-
-    def _clear(self) -> None:
-        for i in self.items:
-            self.c.delete(i)
-        self.items = []
-
-    def _draw(self) -> None:
-        self._clear()
-        mid = self.H / 2
-        if self.state in ("recording", "persistent"):
-            col = COLORS[self.state]
-            gap = (self.W - 2 * self.R) / self.BARS
-            for i, lvl in enumerate(self.hist):
-                h = 2 + (self.H - 10) * min(1.0, lvl / 0.15) ** 0.5   # 0.15 RMS ~ loud speech
-                x = self.R + gap * (i + 0.5)
-                self.items.append(self.c.create_line(x, mid - h / 2, x, mid + h / 2, fill=col, width=3,
-                                                     capstyle="round"))
-        elif self.state in ("busy", "loading"):
-            for i in range(3):
-                on = (self.tick // 4) % 3 == i
-                x = self.W / 2 + (i - 1) * 12
-                r = 3.5 if on else 2.5
-                self.items.append(self.c.create_oval(x - r, mid - r, x + r, mid + r,
-                                                     fill="#f0f0f0" if on else "#707070", outline=""))
-
-    def _tick(self) -> None:
-        while not self.q.empty():
-            self.state = self.q.get()
-            self.hist.extend([0.0] * self.BARS)
-            self.root.attributes("-alpha", 0.55 if self.state == "idle" else 0.95)
-            self.root.lift()
-        self.tick += 1
-        if self.state in ("recording", "persistent"):
-            self.hist.append(self.get_level())
-        self._draw()
-        self.root.after(50, self._tick)
-
-    def run(self) -> None:
-        self.root.after(50, self._tick)
-        self.root.mainloop()
-
-    def close(self) -> None:
-        self.root.after(0, self.root.destroy)
-
-
-def run_app(factory, cfg_path: Path) -> None:
-    """Main thread: pill + tk loop. Background thread: tray icon. Model loads after both show."""
+def run_app(factory, cfg: dict, cfg_path: Path) -> None:
+    """Main thread: Tk root (hidden) drives the overlay timer and owns the app window.
+    Background threads: tray icon, model load. The model loads after the UI is up."""
+    import tkinter as tk
     import pystray
+    from overlay import Overlay, set_dpi_aware
+    from window import AppWindow, History
+
+    scale = set_dpi_aware()           # before Tk() so tkinter gets real pixels too
+    root = tk.Tk()
+    root.withdraw()
+    root.tk.call("tk", "scaling", scale * 96 / 72)
     holder = {"app": None}
-    pill = Pill(lambda: holder["app"].recorder.level if holder["app"] else 0.0)
+    history = History(APPDIR / "history.jsonl", cfg["retention_days"])
+    overlay = Overlay(lambda: holder["app"].recorder.level if holder["app"] else 0.0, scale)
+    win = AppWindow(root, history, cfg, lambda c: save_config(cfg_path, c), scale)
     icon = pystray.Icon("murmur", make_icon("loading"), "murmur: " + LABELS["loading"])
 
     def on_state(state: str) -> None:
         icon.icon = make_icon(state)
         icon.title = "murmur: " + LABELS[state]
-        pill.post(state)
+        overlay.post(state)
 
-    def toggle_headset(icon_, item) -> None:
-        app = holder["app"]
-        if app is None:
-            return
-        app.cfg["headset_button"] = not app.cfg["headset_button"]
-        save_config(cfg_path, app.cfg)
-        log(f"headset button {'on' if app.cfg['headset_button'] else 'off'}")
+    def on_text(text: str) -> None:
+        if cfg["retention_days"] > 0:
+            history.append(text)
+            root.after(0, win.refresh)
 
-    def quit_all(icon_, item) -> None:
+    def quit_all(icon_=None, item=None) -> None:
         if holder["app"]:
             holder["app"].quit()
         icon.stop()
-        pill.close()
+        root.after(0, root.destroy)
+
+    def open_window(icon_=None, item=None) -> None:
+        root.after(0, win.show)
 
     icon.menu = pystray.Menu(
+        pystray.MenuItem("Open murmur", open_window, default=True),
         pystray.MenuItem("Start/stop recording", lambda i, it: holder["app"] and holder["app"].toggle()),
-        pystray.MenuItem("Headset button toggles recording", toggle_headset,
-                         checked=lambda it: bool(holder["app"] and holder["app"].cfg["headset_button"])),
         pystray.MenuItem("Edit vocab.txt", lambda i, it: os.startfile(find_vocab())),
         pystray.MenuItem("Open config/log folder", lambda i, it: os.startfile(APPDIR)),
         pystray.Menu.SEPARATOR,
@@ -456,19 +386,28 @@ def run_app(factory, cfg_path: Path) -> None:
     )
 
     def load() -> None:
-        pill.post("loading")
+        overlay.post("loading")
         try:
             holder["app"] = factory()
         except Exception as e:
             log(f"failed to start: {e}")
-            quit_all(None, None)
+            quit_all()
             return
         holder["app"].on_state = on_state
+        holder["app"].on_text = on_text
         holder["app"].run()
+
+    def tick() -> None:
+        overlay.tick()
+        root.after(40, tick)
 
     threading.Thread(target=icon.run, daemon=True).start()
     threading.Thread(target=load, daemon=True).start()
-    pill.run()
+    root.after(40, tick)
+    try:
+        root.mainloop()
+    finally:
+        overlay.close()
 
 
 def main(argv=None) -> int:
@@ -480,7 +419,7 @@ def main(argv=None) -> int:
     p.add_argument("--headset-button", action="store_true", help="wired-headset button toggles recording")
     p.add_argument("--vocab", type=Path, help="terms file fed to Whisper as a prompt")
     p.add_argument("--config", type=Path, default=APPDIR / "config.json")
-    p.add_argument("--console", action="store_true", help="no tray/pill; log to the console")
+    p.add_argument("--console", action="store_true", help="no tray/overlay/window; log to the console")
     p.add_argument("--list-devices", action="store_true", help="print audio devices and exit")
     a = p.parse_args(argv)
     if a.list_devices:
@@ -509,7 +448,7 @@ def main(argv=None) -> int:
         except KeyboardInterrupt:
             pass
         return 0
-    run_app(factory, a.config)
+    run_app(factory, cfg, a.config)
     return 0
 
 

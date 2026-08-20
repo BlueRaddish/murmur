@@ -116,3 +116,19 @@ x = np.sin(np.arange(48000) / 48000 * 2 * np.pi * 440).astype(np.float32)
 assert len(murmur.resample(x, 48000, 16000)) == 16000
 assert murmur.resample(x, 16000, 16000) is x
 print("resample ok")
+
+# History: retention prunes, append persists, delete/clear rewrite the file
+from window import History
+hp = Path(tempfile.mktemp(suffix=".jsonl"))
+h = History(hp, days=7)
+h.append("first"); h.append("second")
+assert [i["text"] for i in History(hp, 7).items] == ["first", "second"]
+h.items[0]["t"] -= 8 * 86400; h.save()
+assert [i["text"] for i in History(hp, 7).items] == ["second"]        # old entry gone on load
+h = History(hp, 7); h.append("third"); h.delete(0)
+assert [i["text"] for i in History(hp, 7).items] == ["third"]
+h.clear(); assert History(hp, 7).items == [] and hp.read_text() == ""
+h = History(hp, 0); h.append("x"); assert h.items == []                  # 0 days keeps nothing
+os.remove(hp)
+assert murmur.DEFAULTS["retention_days"] == 7
+print("history ok")
