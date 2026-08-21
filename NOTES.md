@@ -23,6 +23,12 @@ Decisions
 - PyInstaller 6 puts --add-data files in _internal/; resources resolve via sys._MEIPASS.
 - build.ps1 must not use $ErrorActionPreference=Stop: PS 5.1 turns native stderr into errors.
 
+- Streaming (v0.4): Take per recording; _stream_pass commits all-but-last segment and advances a
+  sample pointer; a pass that outlives the recording commits everything it saw. Measured on this
+  laptop under heavy load: small.en ~0.4x realtime, base.en ~1.5-2x; 12 threads collapses (227 s)
+  so cpu_threads stays default. Streaming only helps when the model is faster than realtime.
+- Overlay (v0.4): 96x14 glass stick; bars and pulse are drawn per frame over a cached base.
+
 Environment facts (this laptop, 2026-08-20)
 - Apple Audio driver: the *Internal Digital Microphone* device returns junk (slow 0-0.25
   ramps). The *Headset Microphone* (`--mic 2`) carries real audio. WASAPI endpoints refuse
