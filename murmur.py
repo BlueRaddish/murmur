@@ -245,7 +245,10 @@ class Murmur:
             self.recording = True
             self.persistent = persistent
             self.take = Take()
-            threading.Thread(target=self._stream_loop, args=(self.take,), daemon=True).start()
+            try:
+                threading.Thread(target=self._stream_loop, args=(self.take,), daemon=True).start()
+            except RuntimeError:
+                self.take.done.set()   # no streaming for this take; handle() must not wait forever
             beep("persistent" if persistent else "start")
             log("[persistent]" if persistent else "[rec]")
             self._set("persistent" if persistent else "recording")
@@ -334,34 +337,37 @@ class Murmur:
             if time.monotonic() - last < self.STREAM_EVERY:
                 continue
             try:
-                if not self._stream_pass(take):
+                t0 = time.monotonic()
+                covered = self._stream_pass(take)
+                if not covered:
                     continue
+                if time.monotonic() - t0 > covered / SAMPLE_RATE:
+                    # slower than realtime: further passes would only delay the final tail.
+                    # Per-take ceiling; upgrade path is a measured speed factor kept in config.
+                    log("  stream: model slower than realtime, streaming off for this take")
+                    break
             except Exception as e:
                 log(f"  stream: {e}")
                 break
             last = time.monotonic()
         take.done.set()
 
-    def _stream_pass(self, take: "Take") -> bool:
+    def _stream_pass(self, take: "Take") -> int:
         """Transcribe the uncommitted audio; commit every segment except the last (which may
-        still be mid-sentence) so its samples are never looked at again. False = nothing to do."""
+        still be mid-sentence) and advance to where that last segment *starts* - a VAD gap,
+        never the inside of a word (segment.end is too coarse to cut on). Returns the number
+        of samples the pass covered, 0 if there was nothing to do."""
         audio = self.recorder.snapshot()[take.committed:]
         if len(audio) < SAMPLE_RATE * self.STREAM_MIN:
-            return False
+            return 0
         with self.lock:
             if not take.active:
-                return False
+                return 0
             segs = self._segments(audio, " ".join(take.parts))
-        if not take.active:
-            # recording ended during this pass: everything it saw is final, so commit it all
-            # and only the audio that arrived after the snapshot is left for the tail
-            take.parts.append(clean(" ".join(s.text for s in segs)))
-            take.committed += len(audio)
-        elif len(segs) >= 2:
-            done = segs[:-1]
-            take.parts.append(clean(" ".join(s.text for s in done)))
-            take.committed += int(done[-1].end * SAMPLE_RATE)
-        return True
+        if len(segs) >= 2:
+            take.parts.append(clean(" ".join(s.text for s in segs[:-1])))
+            take.committed += min(int(segs[-1].start * SAMPLE_RATE), len(audio))
+        return len(audio)
 
     def handle(self, audio: np.ndarray, take: "Take" = None) -> None:
         if take is None:

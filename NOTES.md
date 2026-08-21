@@ -23,8 +23,10 @@ Decisions
 - PyInstaller 6 puts --add-data files in _internal/; resources resolve via sys._MEIPASS.
 - build.ps1 must not use $ErrorActionPreference=Stop: PS 5.1 turns native stderr into errors.
 
-- Streaming (v0.4): Take per recording; _stream_pass commits all-but-last segment and advances a
-  sample pointer; a pass that outlives the recording commits everything it saw. Measured on this
+- Streaming (v0.4): Take per recording; _stream_pass commits all-but-last segment and advances the
+  pointer to the *start* of the last segment (a VAD gap; segment.end lands inside the last word,
+  and cutting at the snapshot point split words 3 times out of 4 in review). A take turns
+  streaming off once a pass measures slower than realtime. Measured on this
   laptop under heavy load: small.en ~0.4x realtime, base.en ~1.5-2x; 12 threads collapses (227 s)
   so cpu_threads stays default. Streaming only helps when the model is faster than realtime.
 - Overlay (v0.4): 96x14 glass stick; bars and pulse are drawn per frame over a cached base.

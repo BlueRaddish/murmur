@@ -89,35 +89,41 @@ real_handle(m, np.zeros(0)); assert states[-1] == "idle" and m.pending == 0
 # streaming: a pass commits all segments but the last and advances the sample pointer;
 # the final handle() transcribes only the tail and joins committed text in front
 class Seg:
-    def __init__(self, text, end): self.text, self.end = text, end
+    def __init__(self, text, end, start=None): self.text, self.end, self.start = text, end, (end - 1.5 if start is None else start)
 class FakeModel:
     def __init__(self): self.calls = []
     def transcribe(self, audio, **kw):
         self.calls.append((len(audio), kw.get("initial_prompt")))
         n = len(audio) / 16000
-        if n >= 6: return iter([Seg(" first sentence.", 2.0), Seg(" second one.", 4.0), Seg(" third partial", n)]), None
+        if n >= 6: return iter([Seg(" first sentence.", 2.0), Seg(" second one.", 4.0), Seg(" third partial", n, start=4.4)]), None
         return iter([Seg(" the tail.", n)]), None
 m = fresh(); m.model = FakeModel(); m.vocab = "tmux"; m.language = "en"
 m.recorder.snapshot = lambda: np.zeros(16000 * 7, dtype=np.float32)
 take = murmur.Take()
-assert m._stream_pass(take) and take.parts == ["first sentence. second one."] and take.committed == 4 * 16000
+assert m._stream_pass(take) == 7 * 16000 and take.parts == ["first sentence. second one."]
+assert take.committed == int(4.4 * 16000)   # start of the last (uncommitted) segment, not the end of the committed one
 assert m.model.calls[-1] == (7 * 16000, "tmux")
 m.recorder.snapshot = lambda: np.zeros(16000 * 5, dtype=np.float32)   # only 1 s new since commit: wait
-assert m._stream_pass(take) is False
-# a pass that finishes after the recording stopped commits everything it saw
+assert m._stream_pass(take) == 0
+# a pass that finishes after the recording stopped uses the same boundary rule (never mid-word)
 take2 = murmur.Take()
 _t = m.model.transcribe
 def stop_midway(audio, **kw): take2.active = False; return _t(audio, **kw)
 m.model.transcribe = stop_midway
 m.recorder.snapshot = lambda: np.zeros(16000 * 7, dtype=np.float32)
-assert m._stream_pass(take2) and take2.committed == 7 * 16000 and take2.parts == ["first sentence. second one. third partial"]
+assert m._stream_pass(take2) == 7 * 16000 and take2.committed == int(4.4 * 16000) and take2.parts == ["first sentence. second one."]
+m.model.transcribe = _t
+# a segment end past the buffer cannot push committed past the audio
+take3 = murmur.Take(); m.model.transcribe = lambda audio, **kw: (iter([Seg(" a", 1.0), Seg(" b", 99.0, start=99.0)]), None)
+m.recorder.snapshot = lambda: np.zeros(16000 * 3, dtype=np.float32)
+m._stream_pass(take3); assert take3.committed == 3 * 16000
 m.model.transcribe = _t
 m.recorder.snapshot = lambda: np.zeros(16000 * 5, dtype=np.float32)
 take.active = False; take.done.set()
 out = []; m.typist = type("T", (), {"type": lambda self, t: out.append(t)})(); m.on_text = lambda t: None
 m.pending = 1; murmur.Murmur.handle(m, np.zeros(16000 * 7, dtype=np.float32), take)
 assert out == ["first sentence. second one. the tail."], out
-assert m.model.calls[-1][0] == 3 * 16000 and "first sentence" in m.model.calls[-1][1]   # tail only, with context
+assert m.model.calls[-1][0] == 7 * 16000 - int(4.4 * 16000) and "first sentence" in m.model.calls[-1][1]   # tail only, with context
 print("streaming ok")
 # language derives from model at load time, is never written to config
 assert "language" in murmur.DEFAULTS and murmur.DEFAULTS["language"] is None
