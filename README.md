@@ -45,8 +45,7 @@ process. How fast that is depends on the model and how busy the CPU is - `base.e
 **History.** Double-click the tray icon (or "Open murmur") for a window with everything
 transcribed in the last 7 days - copy it back if a paste went missing or you overwrote the
 clipboard. The retention window is adjustable in Settings (0 keeps nothing). Stored in
-`%APPDATA%\murmur\history.jsonl`, local only. Beeps: one high = recording,
-two rising = persistent, one low = stopped.
+`%APPDATA%\murmur\history.jsonl`, local only.
 
 **Headset button.** Wired headsets' inline button reaches Windows as the Play/Pause media
 key. With the option on (tray menu or `--headset-button`) murmur treats that key as its own

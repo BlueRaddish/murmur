@@ -55,16 +55,6 @@ def log(msg: str) -> None:
             pass
 
 
-def beep(kind: str) -> None:
-    """start: one high. stop: one low. persistent: two rising. Feedback only."""
-    try:
-        import winsound
-        for f in {"start": (880,), "stop": (440,), "persistent": (880, 1175)}[kind]:
-            winsound.Beep(f, 60)
-    except Exception:
-        pass
-
-
 def load_config(path: Path) -> dict:
     cfg = dict(DEFAULTS)
     if path.exists():
@@ -197,7 +187,7 @@ class Take:
 
 class Murmur:
     """States: idle, recording (hold), persistent, busy (transcribing).
-    Every transition goes through start()/stop() so UI, beeps and log stay in step."""
+    Every transition goes through start()/stop() so UI and log stay in step."""
 
     def __init__(self, cfg: dict, vocab: str, on_state=None, on_text=None):
         from faster_whisper import WhisperModel
@@ -233,7 +223,6 @@ class Murmur:
             if self.recording:
                 if persistent and not self.persistent:  # double-tap while holding: upgrade in place
                     self.persistent = True
-                    beep("persistent")
                     log("[persistent]")
                     self._set("persistent")
                 return
@@ -249,7 +238,6 @@ class Murmur:
                 threading.Thread(target=self._stream_loop, args=(self.take,), daemon=True).start()
             except RuntimeError:
                 self.take.done.set()   # no streaming for this take; handle() must not wait forever
-            beep("persistent" if persistent else "start")
             log("[persistent]" if persistent else "[rec]")
             self._set("persistent" if persistent else "recording")
 
@@ -259,7 +247,6 @@ class Murmur:
                 return
             self.recording = self.persistent = False
             audio = self.recorder.stop()
-            beep("stop")
             self.pending += 1
             self._set("busy")
             take, self.take = self.take, None
