@@ -88,14 +88,14 @@ def set_dpi_aware() -> float:
 
 
 class Overlay:
-    """A small glassy stick (about 7:1) at the bottom centre. Near-invisible at rest; tinted
-    red with shiny level bars while recording (amber in persistent mode); an orange-to-yellow
-    pulse sweeping along it while transcribing. Call tick() from the UI thread's timer
-    (~25 fps); post(state) from any thread."""
+    """A small glass stick at the bottom centre. Near-invisible at rest. While recording the
+    stick itself becomes the waveform: its silhouette swells with your voice, red-tinted
+    (amber in persistent mode). An orange-to-yellow pulse runs along it while transcribing.
+    Call tick() from the UI thread's timer (~25 fps); post(state) from any thread."""
 
-    W, H = 96, 14    # stick size in logical px
-    PAD = 14         # room for glow + shadow
-    BARS = 11
+    W, H = 48, 7     # stick size in logical px
+    PAD = 22         # headroom for the waveform, glow and shadow
+    POINTS = 32      # level samples kept; mirrored around the centre
     SS = 2           # supersampling
 
     def __init__(self, get_level, scale: float = 1.0):
@@ -105,7 +105,7 @@ class Overlay:
         self.h = int((self.H + 2 * self.PAD) * scale)
         self.q: queue.Queue = queue.Queue()
         self.state = "idle"
-        self.hist = deque([0.0] * self.BARS, maxlen=self.BARS)
+        self.hist = deque([0.0] * self.POINTS, maxlen=self.POINTS)
         self.frame = 0
         self.anim = 0.0  # 0 = idle look, 1 = active look; eased per frame
         self._cache: dict = {}
@@ -159,69 +159,87 @@ class Overlay:
         x1, y1 = x0 + self.W * S, y0 + self.H * S
         return n_w, n_h, x0, y0, x1, y1, (y1 - y0) / 2
 
+    def _stick_mask(self) -> Image.Image:
+        n_w, n_h, x0, y0, x1, y1, r = self._geom()
+        m = Image.new("L", (n_w, n_h), 0)
+        ImageDraw.Draw(m).rounded_rectangle((x0, y0, x1, y1), radius=r, fill=255)
+        return m
+
+    def _wave_mask(self, amp: float) -> Image.Image:
+        """The stick swollen by the waveform: the level history is mirrored around the centre
+        and smoothed, and becomes the half-height of the shape at each x."""
+        n_w, n_h, x0, y0, x1, y1, r = self._geom()
+        S = self.SS * self.scale
+        cy = (y0 + y1) / 2
+        lv = np.array(self.hist, dtype=np.float32)               # oldest .. newest
+        lv = np.clip((lv - 0.004) / 0.09, 0, 1) ** 1.1            # noise floor; 0.09 RMS ~ loud speech
+        half = np.concatenate([lv[::-1], lv])                     # newest in the middle
+        k = np.array([1, 2, 1], np.float32) / 4
+        half = np.convolve(np.pad(half, 1, mode="edge"), k, mode="valid")
+        half *= np.hanning(len(half)) ** 0.7                      # swell from the middle, ends stay stick-height
+        xs = np.linspace(x0 + r, x1 - r, len(half))
+        hmax = self.H * S * 3.0 * amp                             # how far it can swell
+        a = r + hmax * half
+        top = [(float(x), float(cy - h)) for x, h in zip(xs, a)]
+        bot = [(float(x), float(cy + h)) for x, h in zip(xs, a)][::-1]
+        m = Image.new("L", (n_w, n_h), 0)
+        d = ImageDraw.Draw(m)
+        d.polygon(top + bot, fill=255)
+        d.ellipse((x0, y0, x0 + 2 * r, y1), fill=255)             # round caps
+        d.ellipse((x1 - 2 * r, y0, x1, y1), fill=255)
+        return m.filter(ImageFilter.GaussianBlur(0.35 * S))       # soften the polygon facets
+
+    def _glass(self, mask: Image.Image, col, active: float, tint_idle: bool) -> Image.Image:
+        """Shadow + glow + glass body for an arbitrary shape mask."""
+        n_w, n_h = mask.size
+        S = self.SS * self.scale
+        img = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
+        # shadow below, glow around when active
+        # (blur the single-channel mask, then colour it: 4x cheaper than blurring RGBA)
+        shm = Image.new("L", (n_w, n_h), 0)
+        shm.paste(mask, (0, int(2 * S)))
+        shm = shm.filter(ImageFilter.GaussianBlur(3 * S)).point(lambda v: v * (0.28 + 0.2 * active))
+        sh = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 255))
+        sh.putalpha(shm)
+        img.alpha_composite(sh)
+        if active > 0.05:
+            glm = mask.filter(ImageFilter.GaussianBlur(5 * S)).point(lambda v: min(255, v * 1.6) * 0.5 * active)
+            gl = Image.new("RGBA", (n_w, n_h), col + (255,))
+            gl.putalpha(glm)
+            img.alpha_composite(gl)
+        # body
+        tint = (220, 220, 230) if tint_idle else tuple(int(c * active + 200 * (1 - active)) for c in col)
+        body = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
+        body.paste(tint + (int(30 + 95 * active),), (0, 0), mask)
+        # specular: a blurred bright band across the upper part of the shape
+        hl = Image.new("L", (n_w, n_h), 0)
+        arr = np.asarray(mask, dtype=np.float32) / 255
+        ys = np.arange(n_h, dtype=np.float32)[:, None]
+        top = np.argmax(arr > 0.5, axis=0).astype(np.float32)[None, :]           # first lit row per column
+        height = (arr > 0.5).sum(axis=0).astype(np.float32)[None, :] + 1e-3
+        band = np.clip(1 - (ys - top) / (0.45 * height), 0, 1) * arr
+        hl = Image.fromarray((band * 120).astype(np.uint8), "L").filter(ImageFilter.GaussianBlur(1.0 * S))
+        spec = Image.new("RGBA", (n_w, n_h), (255, 255, 255, 0))
+        spec.putalpha(hl)
+        body.alpha_composite(spec)
+        # rim: the mask's edge, brighter on top
+        edge = np.asarray(mask.filter(ImageFilter.FIND_EDGES), dtype=np.float32)
+        rim = Image.new("RGBA", (n_w, n_h), (255, 255, 255, 0))
+        rim.putalpha(Image.fromarray(np.clip(edge * (0.5 + 0.3 * active), 0, 150).astype(np.uint8), "L"))
+        body.alpha_composite(rim)
+        img.alpha_composite(body)
+        return img
+
     def _base(self, state: str, active: float) -> Image.Image:
-        """Shadow + glass stick, tinted by state. Blurs are slow: cached per (state, step)."""
+        """Static stick look, cached per (state, step). Recording draws per frame instead."""
         key = (state, round(active, 1))
         if key in self._cache:
             return self._cache[key]
-        n_w, n_h, x0, y0, x1, y1, r = self._geom()
-        S = self.SS * self.scale
-        img = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
-        col = COLORS[state]
-
-        # soft shadow underneath, and a colour glow when active
-        sh = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
-        ImageDraw.Draw(sh).rounded_rectangle((x0, y0 + 2 * S, x1, y1 + 2 * S), radius=r,
-                                             fill=(0, 0, 0, int(60 + 50 * active)))
-        img.alpha_composite(sh.filter(ImageFilter.GaussianBlur(4 * S)))
-        if active > 0.05:
-            gl = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
-            ImageDraw.Draw(gl).rounded_rectangle((x0 - 2 * S, y0 - 2 * S, x1 + 2 * S, y1 + 2 * S),
-                                                 radius=r + 2 * S, fill=col + (int(90 * active),))
-            img.alpha_composite(gl.filter(ImageFilter.GaussianBlur(7 * S)))
-
-        # glass body: mostly see-through at rest, tinted when active
-        glass = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
-        g = ImageDraw.Draw(glass)
-        if state == "idle":
-            tint = (220, 220, 230)
-        else:
-            tint = tuple(int(c * active + 200 * (1 - active)) for c in col)
-        g.rounded_rectangle((x0, y0, x1, y1), radius=r, fill=tint + (int(28 + 85 * active),))
-        # specular band along the top, fading out
-        hl = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
-        ImageDraw.Draw(hl).rounded_rectangle((x0 + 2 * S, y0 + 1 * S, x1 - 2 * S, y0 + (y1 - y0) * 0.45),
-                                             radius=r * 0.8, fill=(255, 255, 255, 110))
-        hl = hl.filter(ImageFilter.GaussianBlur(1.2 * S))
-        mask = Image.new("L", (n_w, n_h), 0)
-        ImageDraw.Draw(mask).rounded_rectangle((x0, y0, x1, y1), radius=r, fill=255)
-        hl.putalpha(Image.composite(hl.split()[3], Image.new("L", (n_w, n_h), 0), mask))
-        glass.alpha_composite(hl)
-        g.rounded_rectangle((x0, y0, x1, y1), radius=r, outline=(255, 255, 255, int(70 + 60 * active)),
-                            width=max(1, int(1.0 * S)))
-        img.alpha_composite(glass)
+        img = self._glass(self._stick_mask(), COLORS[state], active, state == "idle")
         if len(self._cache) > 40:
             self._cache.clear()
         self._cache[key] = img
         return img
-
-    def _bars(self, d, col) -> None:
-        """Shiny vertical bars rising from the stick's centre line."""
-        n_w, n_h, x0, y0, x1, y1, r = self._geom()
-        S = self.SS * self.scale
-        cy = (y0 + y1) / 2
-        inner_w = (x1 - x0) - 2 * r
-        gap = inner_w / (self.BARS - 1)
-        bw = 1.3 * S                       # half-width
-        hmax = (y1 - y0) * 0.8
-        for i, lvl in enumerate(self.hist):
-            h = hmax * (0.18 + 0.82 * min(1.0, lvl / 0.10) ** 0.55)
-            x = x0 + r + gap * i
-            d.rounded_rectangle((x - bw, cy - h / 2, x + bw, cy + h / 2), radius=bw, fill=(255, 255, 255, 235))
-            d.rounded_rectangle((x - bw, cy - h / 2, x + bw, cy + h / 2), radius=bw, fill=col + (150,))
-            if h > 3 * bw:  # bright core along the left edge reads as a reflection
-                d.rounded_rectangle((x - bw * 0.7, cy - h / 2 + bw, x - bw * 0.1, cy + h / 2 - bw),
-                                    radius=bw * 0.3, fill=(255, 255, 255, 120))
 
     def _pulse(self, img, alpha_scale: float = 1.0) -> None:
         """Orange-to-yellow gradient sweeping along the stick, breathing in brightness."""
@@ -238,19 +256,19 @@ class Overlay:
         rgba = np.concatenate([row, a], axis=1).astype(np.uint8)
         grad = Image.fromarray(np.broadcast_to(rgba[None, :, :], (n_h, n_w, 4)).copy(), "RGBA")
         mask = Image.new("L", (n_w, n_h), 0)
-        ImageDraw.Draw(mask).rounded_rectangle((x0 + 1.5 * S, y0 + 1.5 * S, x1 - 1.5 * S, y1 - 1.5 * S),
+        ImageDraw.Draw(mask).rounded_rectangle((x0 + 1.2 * S, y0 + 1.2 * S, x1 - 1.2 * S, y1 - 1.2 * S),
                                               radius=r, fill=255)
         grad.putalpha(Image.composite(grad.split()[3], Image.new("L", (n_w, n_h), 0), mask))
         img.alpha_composite(grad)
 
     def _render(self) -> Image.Image:
         active = self.anim
-        img = self._base(self.state, active).copy()
-        col = COLORS[self.state]
         if self.state in ("recording", "persistent"):
-            self._bars(ImageDraw.Draw(img), col)
-        elif self.state in ("busy", "loading"):
-            self._pulse(img, 1.0 if self.state == "busy" else 0.6)
+            img = self._glass(self._wave_mask(active), COLORS[self.state], active, False)
+        else:
+            img = self._base(self.state, active).copy()
+            if self.state in ("busy", "loading"):
+                self._pulse(img, 1.0 if self.state == "busy" else 0.6)
         return img.reduce(self.SS)  # box filter: the 2x supersample already did the anti-aliasing
 
     # --- API ----------------------------------------------------------------
@@ -260,12 +278,14 @@ class Overlay:
     def tick(self) -> None:
         while not self.q.empty():
             self.state = self.q.get()
-            self.hist.extend([0.0] * self.BARS)
+            self.hist.extend([0.0] * self.POINTS)
         target = 0.0 if self.state == "idle" else 1.0
         self.anim += (target - self.anim) * 0.25
         self.frame += 1
         if self.state in ("recording", "persistent"):
             self.hist.append(self.get_level())
+        elif self.anim < 0.99:
+            self.hist.append(0.0)
         if self.state == "idle" and self.anim < 0.01 and self.frame % 10:
             return  # idle look is static: no need to redraw every frame
         self._blit(self._render())

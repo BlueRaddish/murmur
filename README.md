@@ -30,11 +30,11 @@ First run downloads the model (`small.en`, ~250 MB) - the bar pulses until the m
 | Headset button (opt-in) | toggles recording, same as persistent mode |
 | Tray icon right-click | start/stop, headset option, edit vocab, open log, quit |
 
-(Ctrl+Cmd on a Mac keyboard.) A small glass stick sits at the bottom of the screen:
-near-invisible at rest, red with shiny level bars while recording (amber in persistent
-mode), an orange-to-yellow pulse while transcribing - so you can see it is hearing you. If
-the bars stay flat while you talk, it is listening to the wrong input: pick the microphone
-in Settings.
+(Ctrl+Cmd on a Mac keyboard.) A tiny glass stick sits at the bottom of the screen:
+near-invisible at rest. While you talk it turns red and swells into your waveform - the
+stick's own outline rises and falls with your voice (amber in persistent mode). An
+orange-to-yellow pulse runs along it while transcribing. If it stays a flat red line while
+you talk, it is listening to the wrong input: pick the microphone in Settings.
 
 **Latency.** Transcription starts while you are still talking: finished sentences are
 committed in the background, so on release only the last couple of seconds are left to

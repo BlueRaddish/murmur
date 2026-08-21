@@ -29,7 +29,9 @@ Decisions
   streaming off once a pass measures slower than realtime. Measured on this
   laptop under heavy load: small.en ~0.4x realtime, base.en ~1.5-2x; 12 threads collapses (227 s)
   so cpu_threads stays default. Streaming only helps when the model is faster than realtime.
-- Overlay (v0.4): 96x14 glass stick; bars and pulse are drawn per frame over a cached base.
+- Overlay (v0.4): 48x7 glass stick. Recording renders per frame from a shape mask: the mirrored,
+  smoothed, Hann-tapered level history is the half-height of the silhouette (_wave_mask); the
+  glass (shadow/glow/body/specular/rim) is built from any mask (_glass). ~21 ms/frame at 200%.
 
 Environment facts (this laptop, 2026-08-20)
 - Apple Audio driver: the *Internal Digital Microphone* device returns junk (slow 0-0.25
