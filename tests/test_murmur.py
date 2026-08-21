@@ -192,7 +192,7 @@ print("stream cleanup ok")
 import overlay
 o = overlay.Overlay.__new__(overlay.Overlay)
 o.scale, o.w, o.h = 2.0, int((overlay.Overlay.W + 28) * 2), int((overlay.Overlay.H + 28) * 2)
-o.frame, o.anim, o._cache = 3, 1.0, {}
+o.frame, o.anim, o._cache, o.peak = 3, 1.0, {}, 0.02
 from collections import deque
 for lvl in (0.0, 0.001, 0.5):
     o.hist = deque([lvl] * overlay.Overlay.POINTS, maxlen=overlay.Overlay.POINTS)

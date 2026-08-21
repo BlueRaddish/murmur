@@ -88,14 +88,15 @@ def set_dpi_aware() -> float:
 
 
 class Overlay:
-    """A small glass stick at the bottom centre. Near-invisible at rest. While recording the
-    stick itself becomes the waveform: its silhouette swells with your voice, red-tinted
-    (amber in persistent mode). An orange-to-yellow pulse runs along it while transcribing.
+    """A small glass stick at the bottom centre. Near-invisible at rest. While recording it
+    turns red (amber in persistent mode) and a waveform of thin glowing bars rises out of it
+    - the bars are centred on the stick and extend well above and below it, newest at the
+    right, scrolling left. An orange-to-yellow pulse runs along it while transcribing.
     Call tick() from the UI thread's timer (~25 fps); post(state) from any thread."""
 
     W, H = 48, 7     # stick size in logical px
     PAD = 22         # headroom for the waveform, glow and shadow
-    POINTS = 32      # level samples kept; mirrored around the centre
+    POINTS = 23      # bars across the stick; one level sample each
     SS = 2           # supersampling
 
     def __init__(self, get_level, scale: float = 1.0):
@@ -108,6 +109,7 @@ class Overlay:
         self.hist = deque([0.0] * self.POINTS, maxlen=self.POINTS)
         self.frame = 0
         self.anim = 0.0  # 0 = idle look, 1 = active look; eased per frame
+        self.peak = 0.02  # running loudness reference, so the display fills for any mic gain
         self._cache: dict = {}
         self._make_window()
 
@@ -165,29 +167,38 @@ class Overlay:
         ImageDraw.Draw(m).rounded_rectangle((x0, y0, x1, y1), radius=r, fill=255)
         return m
 
-    def _wave_mask(self, amp: float) -> Image.Image:
-        """The stick swollen by the waveform: the level history is mirrored around the centre
-        and smoothed, and becomes the half-height of the shape at each x."""
+    def _bars(self, img: Image.Image, col, amp: float) -> None:
+        """Thin rounded bars centred on the stick, rising out of it with the voice. Heights
+        are normalised to a slowly decaying running peak so they fill for any mic gain."""
         n_w, n_h, x0, y0, x1, y1, r = self._geom()
         S = self.SS * self.scale
         cy = (y0 + y1) / 2
-        lv = np.array(self.hist, dtype=np.float32)               # oldest .. newest
-        lv = np.clip((lv - 0.004) / 0.09, 0, 1) ** 1.1            # noise floor; 0.09 RMS ~ loud speech
-        half = np.concatenate([lv[::-1], lv])                     # newest in the middle
-        k = np.array([1, 2, 1], np.float32) / 4
-        half = np.convolve(np.pad(half, 1, mode="edge"), k, mode="valid")
-        half *= np.hanning(len(half)) ** 0.7                      # swell from the middle, ends stay stick-height
-        xs = np.linspace(x0 + r, x1 - r, len(half))
-        hmax = self.H * S * 3.0 * amp                             # how far it can swell
-        a = r + hmax * half
-        top = [(float(x), float(cy - h)) for x, h in zip(xs, a)]
-        bot = [(float(x), float(cy + h)) for x, h in zip(xs, a)][::-1]
-        m = Image.new("L", (n_w, n_h), 0)
-        d = ImageDraw.Draw(m)
-        d.polygon(top + bot, fill=255)
-        d.ellipse((x0, y0, x0 + 2 * r, y1), fill=255)             # round caps
-        d.ellipse((x1 - 2 * r, y0, x1, y1), fill=255)
-        return m.filter(ImageFilter.GaussianBlur(0.35 * S))       # soften the polygon facets
+        lv = np.array(self.hist, dtype=np.float32)                    # oldest .. newest
+        norm = np.clip((lv - 0.002) / max(self.peak, 0.004), 0, 1) ** 0.8
+        norm = np.convolve(np.pad(norm, 1, mode="edge"), [0.25, 0.5, 0.25], mode="valid")
+        hmin = (y1 - y0) * 0.35
+        hmax = self.H * S * 4.2 * amp                                  # tallest bar, above+below
+        xs = np.linspace(x0 + r * 0.9, x1 - r * 0.9, len(norm))
+        bw = 0.7 * S                                                   # half-width
+        layer = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
+        d = ImageDraw.Draw(layer)
+        for x, v in zip(xs, norm):
+            h = hmin + hmax * float(v)
+            d.rounded_rectangle((x - bw, cy - h / 2, x + bw, cy + h / 2), radius=bw, fill=col + (240,))
+        # glow behind the bars, then the bars, then a thin bright core so they read as glass
+        glow = layer.split()[3].filter(ImageFilter.GaussianBlur(2.2 * S)).point(lambda v: min(255, v * 1.5) * 0.55)
+        g = Image.new("RGBA", (n_w, n_h), col + (255,))
+        g.putalpha(glow)
+        img.alpha_composite(g)
+        img.alpha_composite(layer)
+        core = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
+        dc = ImageDraw.Draw(core)
+        for x, v in zip(xs, norm):
+            h = hmin + hmax * float(v)
+            if h > 4 * bw:
+                dc.rounded_rectangle((x - bw * 0.35, cy - h / 2 + bw, x + bw * 0.35, cy + h / 2 - bw),
+                                     radius=bw * 0.35, fill=(255, 255, 255, 150))
+        img.alpha_composite(core)
 
     def _glass(self, mask: Image.Image, col, active: float, tint_idle: bool) -> Image.Image:
         """Shadow + glow + glass body for an arbitrary shape mask."""
@@ -264,7 +275,8 @@ class Overlay:
     def _render(self) -> Image.Image:
         active = self.anim
         if self.state in ("recording", "persistent"):
-            img = self._glass(self._wave_mask(active), COLORS[self.state], active, False)
+            img = self._base(self.state, active).copy()
+            self._bars(img, COLORS[self.state], active)
         else:
             img = self._base(self.state, active).copy()
             if self.state in ("busy", "loading"):
@@ -283,7 +295,10 @@ class Overlay:
         self.anim += (target - self.anim) * 0.25
         self.frame += 1
         if self.state in ("recording", "persistent"):
-            self.hist.append(self.get_level())
+            lvl = self.get_level()
+            self.hist.append(lvl)
+            # auto-gain: jump up to a new peak, decay slowly (~4 s to halve) when it goes quiet
+            self.peak = max(lvl, self.peak * 0.993, 0.004)
         elif self.anim < 0.99:
             self.hist.append(0.0)
         if self.state == "idle" and self.anim < 0.01 and self.frame % 10:
