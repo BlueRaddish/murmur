@@ -114,13 +114,19 @@ class Recorder:
         self._lock = threading.Lock()
         self._stream = None
         self._rate = SAMPLE_RATE
-        self.level = 0.0  # RMS of the latest chunk, 0..1, for the on-screen meter
+        self.level = 0.0  # RMS of the latest chunk, 0..1
+        self.recent = np.zeros(2048, dtype=np.float32)  # last 128 ms at 16 kHz, for the visualizer
 
     def _cb(self, data, *_):
         mono = resample(data[:, 0].copy(), self._rate, SAMPLE_RATE)
         with self._lock:
             self._chunks.append(mono)
         self.level = float(np.sqrt((data ** 2).mean()))
+        n = min(len(mono), len(self.recent))
+        self.recent = np.concatenate([self.recent[n:], mono[-n:]])
+
+    def samples(self) -> np.ndarray:
+        return self.recent
 
     def snapshot(self) -> np.ndarray:
         with self._lock:
@@ -150,6 +156,7 @@ class Recorder:
         self._stream.stop()
         self._stream.close()
         self.level = 0.0
+        self.recent = np.zeros_like(self.recent)
         return self.snapshot()
 
 
@@ -423,7 +430,7 @@ def run_app(factory, cfg: dict, cfg_path: Path) -> None:
     root.tk.call("tk", "scaling", scale * 96 / 72)
     holder = {"app": None}
     history = History(APPDIR / "history.jsonl", cfg["retention_days"])
-    overlay = Overlay(lambda: holder["app"].recorder.level if holder["app"] else 0.0, scale)
+    overlay = Overlay(lambda: holder["app"].recorder.samples() if holder["app"] else None, scale)
     win = AppWindow(root, history, cfg, lambda c: save_config(cfg_path, c), scale)
     icon = pystray.Icon("murmur", make_icon("loading"), "murmur: " + LABELS["loading"])
 

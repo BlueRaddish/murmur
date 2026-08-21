@@ -10,7 +10,6 @@ without anti-aliasing, which is what looked pixelated.
 import ctypes
 import ctypes.wintypes as wt
 import queue
-from collections import deque
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
@@ -88,30 +87,30 @@ def set_dpi_aware() -> float:
 
 
 class Overlay:
-    """A small glass stick at the bottom centre. Near-invisible at rest. While recording it
-    turns red (amber in persistent mode) and a bundle of thin neon curves flows out of it,
-    mirrored about the centre line: the voice level sets the envelope (newest at the right,
-    scrolling left), several sine strands ride inside it, and everything pinches back to
-    the stick at both ends. An orange-to-yellow pulse runs along it while transcribing.
-    Call tick() from the UI thread's timer (~25 fps); post(state) from any thread."""
+    """A small glass stick at the bottom centre. Near-invisible at rest. While recording the
+    stick *is* the visualizer: a live frequency spectrum (FFT -> log bands -> neighbour
+    spreading -> gravity fall-off, the cava/easyeffects recipe) becomes one solid glowing
+    silhouette, mirrored about the centre line, lows in the middle and highs pinching back
+    into the stick's tips. Red; amber in persistent mode. An orange-to-yellow pulse runs
+    along it while transcribing. Call tick() from the UI thread's timer (~25 fps);
+    post(state) from any thread."""
 
     W, H = 48, 7     # stick size in logical px
     PAD = 22         # headroom for the waveform, glow and shadow
-    POINTS = 40      # level samples across the stick (the envelope)
-    STRANDS = 6      # curves per side
+    BANDS = 20       # spectrum bands per half (mirrored -> 40 across)
     SS = 2           # supersampling
 
-    def __init__(self, get_level, scale: float = 1.0):
-        self.get_level = get_level
+    def __init__(self, get_samples, scale: float = 1.0):
+        self.get_samples = get_samples   # () -> last ~2048 samples at 16 kHz, or None
+        self.bands = np.zeros(self.BANDS, dtype=np.float32)
         self.scale = scale
         self.w = int((self.W + 2 * self.PAD) * scale)
         self.h = int((self.H + 2 * self.PAD) * scale)
         self.q: queue.Queue = queue.Queue()
         self.state = "idle"
-        self.hist = deque([0.0] * self.POINTS, maxlen=self.POINTS)
         self.frame = 0
         self.anim = 0.0  # 0 = idle look, 1 = active look; eased per frame
-        self.peak = 0.02  # running loudness reference, so the display fills for any mic gain
+        self.peak = 1.0   # running spectrum reference, so the display fills for any mic gain
         self._cache: dict = {}
         self._make_window()
 
@@ -169,50 +168,86 @@ class Overlay:
         ImageDraw.Draw(m).rounded_rectangle((x0, y0, x1, y1), radius=r, fill=255)
         return m
 
-    def _waves(self, img: Image.Image, col, amp: float) -> None:
-        """A bundle of thin glowing curves inside a voice-driven envelope, mirrored top/bottom."""
+    # --- spectrum ----------------------------------------------------------------
+    def _analyse(self, x) -> None:
+        """Update self.bands from raw samples: FFT, log-spaced bands, auto-gain, neighbour
+        spreading (each band lifts its neighbours by 1/1.6^distance so the outline is one
+        flowing shape, not fence posts), then fast attack / slow fall."""
+        if x is None or len(x) < 512:
+            target = np.zeros(self.BANDS, dtype=np.float32)
+        else:
+            x = np.asarray(x, dtype=np.float32)
+            x = x - x.mean()
+            spec = np.abs(np.fft.rfft(x * np.hanning(len(x))))
+            df = 16000 / len(x)
+            edges = np.geomspace(90, 5500, self.BANDS + 1) / df
+            target = np.zeros(self.BANDS, dtype=np.float32)
+            for i in range(self.BANDS):
+                lo, hi = int(edges[i]), max(int(edges[i]) + 1, int(edges[i + 1]))
+                target[i] = spec[lo:hi].mean()
+            target = np.log1p(target * 4.0) * (1 + 0.6 * np.linspace(0, 1, self.BANDS))  # lift the highs a little
+            self.peak = max(float(target.max()), self.peak * 0.994, 0.5)
+            target = np.clip(target / self.peak, 0, 1) ** 1.3
+            spread = target.copy()
+            for d in range(1, 5):
+                f = 1.6 ** d
+                spread[d:] = np.maximum(spread[d:], target[:-d] / f)
+                spread[:-d] = np.maximum(spread[:-d], target[d:] / f)
+            target = spread
+        rising = target > self.bands
+        self.bands = np.where(rising, self.bands * 0.35 + target * 0.65, self.bands * 0.86)
+
+    def _spectrum_mask(self, amp: float) -> Image.Image:
+        """One silhouette: the mirrored, smoothed band heights become the half-height of the
+        stick at each x; lows in the middle, highs fading into the tips."""
         n_w, n_h, x0, y0, x1, y1, r = self._geom()
         S = self.SS * self.scale
         cy = (y0 + y1) / 2
-        # envelope: level history (oldest left .. newest right), auto-gained, smoothed, pinched at the ends
-        lv = np.array(self.hist, dtype=np.float32)
-        env = np.clip((lv - 0.002) / max(self.peak, 0.004), 0, 1) ** 0.7
-        N = 160
-        xs = np.linspace(x0 + r * 0.6, x1 - r * 0.6, N)
-        env = np.interp(np.linspace(0, len(env) - 1, N), np.arange(len(env)), env)
-        k = np.exp(-0.5 * (np.arange(-10, 11) / 4.0) ** 2); k /= k.sum()
-        env = np.convolve(np.pad(env, 10, mode="edge"), k, mode="valid")
-        env *= np.sin(np.linspace(0, np.pi, N)) ** 0.6           # contained: flat at both ends
-        hmax = min(self.H * S * 4.0, (self.PAD - 3) * S) * amp   # never past the window edge
-        t = self.frame / 25.0
-        u = np.linspace(0, 1, N)
-        layer = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
-        d = ImageDraw.Draw(layer)
-        light = tuple(min(255, int(c * 0.45 + 255 * 0.55)) for c in col)
-        for i in range(self.STRANDS):
-            f = i % 3
-            # each strand: a slow travelling ripple (different speed/frequency) inside the envelope
-            ripple = 0.6 + 0.4 * np.sin(2 * np.pi * (u * (0.8 + 0.45 * f) - t * (0.3 + 0.12 * i)) + i * 1.1)
-            y = hmax * env * ripple * (0.55 + 0.45 * (i + 1) / self.STRANDS)
-            mix = i / max(1, self.STRANDS - 1)
-            c = tuple(int(col[j] * (1 - mix) + light[j] * mix) for j in range(3))
-            width = max(1, int((1.3 - 0.12 * i) * S))
-            for sign in (1, -1):
-                pts = [(float(x), float(cy + sign * yy)) for x, yy in zip(xs, y)]
-                d.line(pts, fill=c + (170,), width=width, joint="curve")
-        glow = layer.split()[3].filter(ImageFilter.GaussianBlur(2.5 * S)).point(lambda v: min(255, v * 2.0) * 0.5)
+        half = np.concatenate([self.bands[::-1], self.bands])
+        N = 200
+        prof = np.interp(np.linspace(0, len(half) - 1, N), np.arange(len(half)), half)
+        k = np.exp(-0.5 * (np.arange(-8, 9) / 3.0) ** 2); k /= k.sum()
+        prof = np.convolve(np.pad(prof, 8, mode="edge"), k, mode="valid")
+        prof *= np.sin(np.linspace(0, np.pi, N)) ** 0.35   # still meets the tips
+        hmax = min(self.H * S * 4.0, (self.PAD - 3) * S) * amp
+        xs = np.linspace(x0 + r, x1 - r, N)
+        a = r + hmax * prof
+        top = [(float(x), float(cy - h)) for x, h in zip(xs, a)]
+        bot = [(float(x), float(cy + h)) for x, h in zip(xs, a)][::-1]
+        m = Image.new("L", (n_w, n_h), 0)
+        d = ImageDraw.Draw(m)
+        d.polygon(top + bot, fill=255)
+        d.ellipse((x0, y0, x0 + 2 * r, y1), fill=255)
+        d.ellipse((x1 - 2 * r, y0, x1, y1), fill=255)
+        return m.filter(ImageFilter.GaussianBlur(0.4 * S))
+
+    def _fill(self, img: Image.Image, mask: Image.Image, col, active: float) -> None:
+        """Glowing one-piece fill: bright, lighter colour along the centre line fading to the
+        state colour at the edge, a soft outer glow, and a thin bright rim."""
+        n_w, n_h = mask.size
+        S = self.SS * self.scale
+        _, _, x0, y0, x1, y1, r = self._geom()
+        cy = (y0 + y1) / 2
+        m = np.asarray(mask, dtype=np.float32) / 255
+        # distance from the centre line, normalised per column by the shape's half-height there
+        lit = m > 0.5
+        half_h = np.maximum(lit.sum(axis=0) / 2.0, 1.0)[None, :]
+        dist = np.abs(np.arange(n_h, dtype=np.float32)[:, None] - cy) / half_h
+        dist = np.clip(dist, 0, 1)
+        light = np.array([min(255, c * 0.35 + 255 * 0.65) for c in col], np.float32)
+        base = np.array(col, np.float32)
+        rgb = light[None, None, :] * (1 - dist[..., None]) ** 1.6 + base[None, None, :] * (1 - (1 - dist[..., None]) ** 1.6)
+        alpha = (235 * (1 - 0.35 * dist ** 2) * m)[..., None]
+        body = Image.fromarray(np.concatenate([rgb, alpha], axis=2).astype(np.uint8), "RGBA")
+        glow = mask.filter(ImageFilter.GaussianBlur(4 * S)).point(lambda v: min(255, v * 1.8) * 0.55 * active)
         g = Image.new("RGBA", (n_w, n_h), col + (255,))
         g.putalpha(glow)
         img.alpha_composite(g)
-        img.alpha_composite(layer)
-        # bright centre strand reads as the neon core
-        core = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
-        dc = ImageDraw.Draw(core)
-        y = hmax * env * (0.6 + 0.4 * np.sin(2 * np.pi * (u * 1.3 - t * 0.4))) * 0.95
-        for sign in (1, -1):
-            dc.line([(float(x), float(cy + sign * yy)) for x, yy in zip(xs, y)], fill=(255, 255, 255, 140),
-                    width=max(1, int(0.6 * S)), joint="curve")
-        img.alpha_composite(core)
+        img.alpha_composite(body)
+        edge = np.asarray(mask.filter(ImageFilter.FIND_EDGES), dtype=np.float32)
+        rim = Image.new("RGBA", (n_w, n_h), (255, 255, 255, 0))
+        rim.putalpha(Image.fromarray(np.clip(edge * 0.7, 0, 160).astype(np.uint8), "L"))
+        img.alpha_composite(rim)
 
     def _glass(self, mask: Image.Image, col, active: float, tint_idle: bool) -> Image.Image:
         """Shadow + glow + glass body for an arbitrary shape mask."""
@@ -289,8 +324,8 @@ class Overlay:
     def _render(self) -> Image.Image:
         active = self.anim
         if self.state in ("recording", "persistent"):
-            img = self._base(self.state, active).copy()
-            self._waves(img, COLORS[self.state], active)
+            img = Image.new("RGBA", (self.w * self.SS, self.h * self.SS), (0, 0, 0, 0))
+            self._fill(img, self._spectrum_mask(active), COLORS[self.state], active)
         else:
             img = self._base(self.state, active).copy()
             if self.state in ("busy", "loading"):
@@ -304,17 +339,13 @@ class Overlay:
     def tick(self) -> None:
         while not self.q.empty():
             self.state = self.q.get()
-            self.hist.extend([0.0] * self.POINTS)
         target = 0.0 if self.state == "idle" else 1.0
         self.anim += (target - self.anim) * 0.25
         self.frame += 1
         if self.state in ("recording", "persistent"):
-            lvl = self.get_level()
-            self.hist.append(lvl)
-            # auto-gain: jump up to a new peak, decay slowly (~4 s to halve) when it goes quiet
-            self.peak = max(lvl, self.peak * 0.993, 0.004)
-        elif self.anim < 0.99:
-            self.hist.append(0.0)
+            self._analyse(self.get_samples())
+        elif self.bands.any():
+            self._analyse(None)   # let the shape settle back into the stick
         if self.state == "idle" and self.anim < 0.01 and self.frame % 10:
             return  # idle look is static: no need to redraw every frame
         self._blit(self._render())

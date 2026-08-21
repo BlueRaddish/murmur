@@ -31,9 +31,9 @@ First run downloads the model (`small.en`, ~250 MB) - the bar pulses until the m
 | Tray icon right-click | start/stop, headset option, edit vocab, open log, quit |
 
 (Ctrl+Cmd on a Mac keyboard.) A tiny glass stick sits at the bottom of the screen:
-near-invisible at rest. While you talk it turns red and a bundle of neon curves flows out
-of it, swelling with your voice and pinching back to the stick at the ends (amber in
-persistent mode); the display auto-scales to your mic, so it always fills. An orange-to-yellow pulse runs along it while
+near-invisible at rest. While you talk it turns red and becomes a live spectrum of your
+voice - one glowing shape that swells and ripples across its whole length and pinches
+back into the stick at the tips (amber in persistent mode); it auto-scales to your mic. An orange-to-yellow pulse runs along it while
 transcribing. If it stays a flat red line while you talk, it is listening to the wrong
 input: pick the microphone in Settings.
 

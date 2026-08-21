@@ -30,12 +30,14 @@ Decisions
   laptop under heavy load: small.en ~0.4x realtime, base.en ~1.5-2x; 12 threads collapses (227 s)
   so cpu_threads stays default. Streaming only helps when the model is faster than realtime.
 - Overlay (v0.4): 48x7 glass stick (_glass builds shadow/glow/body/specular/rim from a mask, cached
-  per state). Recording (_waves): the auto-gained level history is a smoothed envelope across the
-  stick, pinched to zero at both ends; 6 sine strands per side ride inside it at different speeds
-  plus a white core strand; glow = blurred alpha of the strands. Reference the user gave: neon
-  flowing sound-wave stock footage (vecteezy 71108414). Rejected on the way: bars inside the
-  stick (too static), a swelling silhouette ("one big block"), separated bars. Idle never glows,
-  so there is no white flash when fading back after a recording. ~14 ms/frame.
+  per state). Recording is a spectrum visualizer in the cava/easyeffects mould: Recorder keeps the
+  last 2048 samples; _analyse does FFT -> 20 log bands (90 Hz-5.5 kHz) -> log magnitude ->
+  auto-gain to a decaying peak -> neighbour spreading (1/1.6^d, "monstercat") -> fast attack /
+  slow fall. _spectrum_mask mirrors the bands (lows centre, highs at the tips), smooths, and the
+  result is the stick's own silhouette; _fill paints it as one piece with a bright core line,
+  glow and rim. Rejected on the way: bars inside the stick, swelling level blob, separated bars,
+  sine strands (read as "blob + separate waves"). Idle never glows (no white flash on fade).
+  ~18 ms/frame.
 
 Environment facts (this laptop, 2026-08-20)
 - Apple Audio driver: the *Internal Digital Microphone* device returns junk (slow 0-0.25

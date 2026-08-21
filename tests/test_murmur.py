@@ -188,14 +188,19 @@ try:
 finally: murmur.sd.InputStream = _orig
 print("stream cleanup ok")
 
-# overlay renders every state at zero and full level without raising (no window needed)
+# overlay renders every state with silence, speech-like audio and garbage, without raising
 import overlay
 o = overlay.Overlay.__new__(overlay.Overlay)
-o.scale, o.w, o.h = 2.0, int((overlay.Overlay.W + 28) * 2), int((overlay.Overlay.H + 28) * 2)
-o.frame, o.anim, o._cache, o.peak = 3, 1.0, {}, 0.02
-from collections import deque
-for lvl in (0.0, 0.001, 0.5):
-    o.hist = deque([lvl] * overlay.Overlay.POINTS, maxlen=overlay.Overlay.POINTS)
+o.scale, o.w, o.h = 2.0, int((overlay.Overlay.W + 44) * 2), int((overlay.Overlay.H + 44) * 2)
+o.frame, o.anim, o._cache, o.peak = 3, 1.0, {}, 1.0
+o.bands = np.zeros(overlay.Overlay.BANDS, dtype=np.float32)
+tone = (0.1 * np.sin(np.arange(2048) / 16000 * 2 * np.pi * 180) + 0.05 * np.sin(np.arange(2048) / 16000 * 2 * np.pi * 1400)).astype(np.float32)
+for x in (None, np.zeros(2048, dtype=np.float32), tone, np.full(2048, np.nan, dtype=np.float32)):
+    o._analyse(x)
     for st in ("idle", "recording", "persistent", "busy", "loading"):
         o.state = st; img = o._render(); assert img.size == (o.w, o.h)
+o.bands[:] = 0; o._analyse(tone); assert o.bands.max() > 0.3 and o.bands.min() < o.bands.max()   # tone lifts its bands
+# Recorder keeps a rolling window of recent samples
+rec = murmur.Recorder(); rec._cb(np.full((300, 1), 0.5, dtype=np.float32)); s_ = rec.samples()
+assert len(s_) == 2048 and s_[-1] == 0.5 and s_[0] == 0.0
 print("overlay render ok")
