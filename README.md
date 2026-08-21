@@ -34,7 +34,8 @@ First run downloads the model (`small.en`, ~250 MB) - the bar pulses until the m
 near-invisible at rest. While you talk it turns red and becomes a live spectrum of your
 voice - one glowing shape that swells and ripples across its whole length and pinches
 back into the stick at the tips, then relaxes slowly when you stop; it auto-scales to your
-mic. Colours are yours: Settings has an accent colour (recording) and a transcribing colour. An orange-to-yellow pulse runs along it while
+mic. Colours and opacity are yours: Settings has an accent colour (recording), a transcribing
+colour and an opacity slider; they apply on Save, no restart. An orange-to-yellow pulse runs along it while
 transcribing. If it stays a flat red line while you talk, it is listening to the wrong
 input: pick the microphone in Settings.
 

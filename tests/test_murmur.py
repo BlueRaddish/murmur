@@ -194,6 +194,9 @@ o = overlay.Overlay.__new__(overlay.Overlay)
 o.scale, o.w, o.h = 2.0, int((overlay.Overlay.W + 44) * 2), int((overlay.Overlay.H + 44) * 2)
 o.frame, o.anim, o._cache, o.peak = 3, 1.0, {}, 1.0
 o.bands = np.zeros(overlay.Overlay.BANDS, dtype=np.float32); o.colors = dict(overlay.COLORS); o.fall = 0.9
+o.opacity, o.busymix, o.rng = 0.9, 0.0, np.random.default_rng(1); o.noise_phase = o.rng.uniform(0, 6.28, size=(2, 4))
+o.set_colors({"opacity": "1.7"}); assert o.opacity == 1.0
+o.set_colors({"opacity": "x"}); assert o.opacity == 0.9
 assert overlay.hex_rgb("#1a2B3c", None) == (26, 43, 60) and overlay.hex_rgb("abc", None) == (170, 187, 204)
 assert overlay.hex_rgb("nope", (1, 2, 3)) == (1, 2, 3) and overlay.hex_rgb(None, (1, 2, 3)) == (1, 2, 3)
 o.set_colors({"color": "#00ff00", "color_busy": "zzz"}); assert o.colors["persistent"] == (0, 255, 0) and o.colors["busy"] == overlay.COLORS["busy"]
@@ -201,7 +204,8 @@ tone = (0.1 * np.sin(np.arange(2048) / 16000 * 2 * np.pi * 180) + 0.05 * np.sin(
 for x in (None, np.zeros(2048, dtype=np.float32), tone, np.full(2048, np.nan, dtype=np.float32)):
     o._analyse(x)
     for st in ("idle", "recording", "persistent", "busy", "loading"):
-        o.state = st; img = o._render(); assert img.size == (o.w, o.h)
+        for o.busymix in (0.0, 0.5):
+            o.state = st; img = o._render(); assert img.size == (o.w, o.h)
 o.bands[:] = 0; o._analyse(tone); assert o.bands.max() > 0.3 and o.bands.min() < o.bands.max()   # tone lifts its bands
 # Recorder keeps a rolling window of recent samples
 rec = murmur.Recorder(); rec._cb(np.full((300, 1), 0.5, dtype=np.float32)); s_ = rec.samples()

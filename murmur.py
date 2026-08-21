@@ -40,7 +40,7 @@ CTRL_KEYS = {Key.ctrl, Key.ctrl_l, Key.ctrl_r}
 CMD_KEYS = {Key.cmd, Key.cmd_l, Key.cmd_r}
 
 DEFAULTS = {"model": "small.en", "device": "cpu", "language": None, "mic": None, "headset_button": False,
-            "retention_days": 7, "color": "#e63c3c", "color_busy": "#ffaa32"}
+            "retention_days": 7, "color": "#e63c3c", "color_busy": "#ffaa32", "opacity": 0.9}
 
 
 def log(msg: str) -> None:

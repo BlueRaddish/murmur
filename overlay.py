@@ -117,7 +117,11 @@ class Overlay:
         self.get_samples = get_samples   # () -> last ~2048 samples at 16 kHz, or None
         self.bands = np.zeros(self.BANDS, dtype=np.float32)
         self.colors = dict(COLORS)
+        self.opacity = 0.9               # 0..1, from config
         self.fall = 0.9                  # per-frame decay of the bands; slower once recording stops
+        self.busymix = 0.0               # 0 = accent colour, 1 = transcribing colour; eased
+        self.rng = np.random.default_rng(7)
+        self.noise_phase = self.rng.uniform(0, 2 * np.pi, size=(2, 4))   # random field per side
         self.scale = scale
         self.w = int((self.W + 2 * self.PAD) * scale)
         self.h = int((self.H + 2 * self.PAD) * scale)
@@ -136,6 +140,10 @@ class Overlay:
         rec = hex_rgb(cfg.get("color", ""), COLORS["recording"])
         busy = hex_rgb(cfg.get("color_busy", ""), COLORS["busy"])
         self.colors.update(recording=rec, persistent=rec, busy=busy, loading=busy)
+        try:
+            self.opacity = min(1.0, max(0.2, float(cfg.get("opacity", 0.9))))
+        except (TypeError, ValueError):
+            self.opacity = 0.9
         self._cache.clear()
 
     # --- window -------------------------------------------------------------
@@ -236,10 +244,21 @@ class Overlay:
             pr = np.convolve(np.pad(pr, 8, mode="edge"), k, mode="valid")
             return pr * taper
 
-        # asymmetric: lows left, highs right along the top; the bottom is the same spectrum
-        # nudged two bands along and a little smaller, so the two halves echo, not mirror
-        top_p = profile(self.bands)
-        bot_p = profile(np.roll(self.bands, 2)) * 0.78
+        # organic asymmetry: the mirrored spectrum (lows centre) is modulated by a smooth random
+        # field - a few sines with random phases, drifting slowly - different for top and bottom,
+        # so the shape is never the same twice and never favours one side
+        t = self.frame / 25.0
+        u = np.linspace(0, 1, N)
+
+        def field(side):
+            ph = self.noise_phase[side]
+            f = (np.sin(2 * np.pi * (u * 1.3 + 0.11 * t) + ph[0]) + 0.7 * np.sin(2 * np.pi * (u * 2.7 - 0.07 * t) + ph[1])
+                 + 0.5 * np.sin(2 * np.pi * (u * 4.1 + 0.05 * t) + ph[2]) + 0.4 * np.sin(2 * np.pi * (u * 0.6 - 0.13 * t) + ph[3]))
+            return 0.72 + 0.28 * f / 2.6
+
+        mirrored = np.concatenate([self.bands[::-1], self.bands])
+        top_p = profile(mirrored) * field(0)
+        bot_p = profile(mirrored) * field(1) * 0.9
         hmax = min(self.H * S * 4.0, (self.PAD - 3) * S) * amp
         xs = np.linspace(x0 + r, x1 - r, N)
         top = [(float(x), float(cy - (r + hmax * h))) for x, h in zip(xs, top_p)]
@@ -250,6 +269,19 @@ class Overlay:
         d.ellipse((x0, y0, x0 + 2 * r, y1), fill=255)
         d.ellipse((x1 - 2 * r, y0, x1, y1), fill=255)
         return m.filter(ImageFilter.GaussianBlur(0.4 * S))
+
+    @staticmethod
+    def _lerp(a, b, m):
+        return tuple(int(a[i] + (b[i] - a[i]) * m) for i in range(3))
+
+    def _live_color(self, state: str):
+        """Accent colour, breathing slowly while recording, crossfading to the transcribing
+        colour as busymix rises."""
+        acc = self.colors["recording"]
+        light = tuple(min(255, int(c * 0.6 + 255 * 0.4)) for c in acc)
+        breath = 0.5 + 0.5 * np.sin(2 * np.pi * self.frame / 25.0 * 0.45)
+        acc = self._lerp(acc, light, 0.18 * breath)
+        return self._lerp(acc, self.colors["busy"], self.busymix)
 
     def _fill(self, img: Image.Image, mask: Image.Image, col, active: float) -> None:
         """Glowing one-piece fill: bright, lighter colour along the centre line fading to the
@@ -269,9 +301,9 @@ class Overlay:
         light = np.array([min(255, c * 0.35 + 255 * 0.65) for c in col], np.float32)
         base = np.array(col, np.float32)
         rgb = light[None, None, :] * (1 - dist[..., None]) ** 1.6 + base[None, None, :] * (1 - (1 - dist[..., None]) ** 1.6)
-        alpha = (235 * (1 - 0.35 * dist ** 2) * m)[..., None]
+        alpha = (255 * self.opacity * (1 - 0.3 * dist ** 2) * m)[..., None]
         body = Image.fromarray(np.concatenate([rgb, alpha], axis=2).astype(np.uint8), "RGBA")
-        glow = mask.filter(ImageFilter.GaussianBlur(4 * S)).point(lambda v: min(255, v * 1.8) * 0.55 * active)
+        glow = mask.filter(ImageFilter.GaussianBlur(4 * S)).point(lambda v: min(255, v * 1.8) * 0.6 * active * self.opacity)
         g = Image.new("RGBA", (n_w, n_h), col + (255,))
         g.putalpha(glow)
         img.alpha_composite(g)
@@ -299,10 +331,17 @@ class Overlay:
             gl = Image.new("RGBA", (n_w, n_h), col + (255,))
             gl.putalpha(glm)
             img.alpha_composite(gl)
-        # body
-        tint = (220, 220, 230) if tint_idle else tuple(int(c * active + 200 * (1 - active)) for c in col)
+        # body: at rest a frosted, whitish glass with a fine grain; active, the state colour
         body = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
-        body.paste(tint + (30 if tint_idle else int(30 + 95 * active),), (0, 0), mask)
+        if tint_idle:
+            grain = self.rng.normal(0, 1, (n_h, n_w))
+            grain = Image.fromarray(np.clip(128 + grain * 22, 0, 255).astype(np.uint8), "L").filter(ImageFilter.GaussianBlur(0.5))
+            frost = Image.new("RGBA", (n_w, n_h), (240, 240, 245, 0))
+            frost.putalpha(Image.fromarray((np.asarray(grain, dtype=np.float32) * 0.9).astype(np.uint8), "L"))
+            body.paste(frost, (0, 0), mask)
+        else:
+            tint = tuple(int(c * active + 200 * (1 - active)) for c in col)
+            body.paste(tint + (int(30 + 95 * active),), (0, 0), mask)
         # specular: a blurred bright band across the upper part of the shape
         hl = Image.new("L", (n_w, n_h), 0)
         arr = np.asarray(mask, dtype=np.float32) / 255
@@ -310,14 +349,14 @@ class Overlay:
         top = np.argmax(arr > 0.5, axis=0).astype(np.float32)[None, :]           # first lit row per column
         height = (arr > 0.5).sum(axis=0).astype(np.float32)[None, :] + 1e-3
         band = np.clip(1 - (ys - top) / (0.45 * height), 0, 1) * arr
-        hl = Image.fromarray((band * 120).astype(np.uint8), "L").filter(ImageFilter.GaussianBlur(1.0 * S))
+        hl = Image.fromarray((band * (70 if tint_idle else 120)).astype(np.uint8), "L").filter(ImageFilter.GaussianBlur(1.0 * S))
         spec = Image.new("RGBA", (n_w, n_h), (255, 255, 255, 0))
         spec.putalpha(hl)
         body.alpha_composite(spec)
         # rim: the mask's edge, brighter on top
         edge = np.asarray(mask.filter(ImageFilter.FIND_EDGES), dtype=np.float32)
         rim = Image.new("RGBA", (n_w, n_h), (255, 255, 255, 0))
-        rim.putalpha(Image.fromarray(np.clip(edge * (0.5 if tint_idle else 0.5 + 0.3 * active), 0, 150).astype(np.uint8), "L"))
+        rim.putalpha(Image.fromarray(np.clip(edge * (0.35 if tint_idle else 0.5 + 0.3 * active), 0, 150).astype(np.uint8), "L"))
         body.alpha_composite(rim)
         img.alpha_composite(body)
         return img
@@ -345,7 +384,7 @@ class Overlay:
         yellow = np.array([min(255, c * 0.55 + 255 * 0.45) for c in base], np.float32)
         row = orange[None, :] * (1 - wave[:, None]) + yellow[None, :] * wave[:, None]
         breathe = 0.65 + 0.35 * np.sin(2 * np.pi * t * 0.9)
-        a = np.full((n_w, 1), int(170 * breathe * alpha_scale), np.float32)
+        a = np.full((n_w, 1), int(190 * breathe * alpha_scale * self.opacity), np.float32)
         rgba = np.concatenate([row, a], axis=1).astype(np.uint8)
         grad = Image.fromarray(np.broadcast_to(rgba[None, :, :], (n_h, n_w, 4)).copy(), "RGBA")
         mask = Image.new("L", (n_w, n_h), 0)
@@ -356,10 +395,14 @@ class Overlay:
 
     def _render(self) -> Image.Image:
         active = self.anim
-        if self.state in ("recording", "persistent") or (self.state == "idle" and self.bands.max() > 0.01):
-            col = self.colors["recording"] if self.state == "idle" else self.colors[self.state]
+        shaped = self.bands.max() > 0.01
+        if self.state in ("recording", "persistent") or shaped:
+            # the spectrum shape persists after release and relaxes; its colour crossfades into the
+            # transcribing colour while busy, and the pulse fades in on top of it
             img = Image.new("RGBA", (self.w * self.SS, self.h * self.SS), (0, 0, 0, 0))
-            self._fill(img, self._spectrum_mask(max(active, 0.15)), col, max(active, 0.15))
+            self._fill(img, self._spectrum_mask(max(active, 0.15)), self._live_color(self.state), max(active, 0.15))
+            if self.busymix > 0.02:
+                self._pulse(img, self.busymix * (1.0 if self.state == "busy" else 0.6))
             if self.state == "idle":                           # cross-fade towards the resting stick
                 img = Image.blend(self._base("idle", 0.0), img, min(1.0, active * 1.5 + 0.1))
         else:
@@ -379,13 +422,15 @@ class Overlay:
         self.ease = 0.25 if target > self.anim else 0.06       # quick to light up, slow to let go
         self.anim += (target - self.anim) * self.ease
         self.frame += 1
+        bm_target = 1.0 if self.state in ("busy", "loading") else 0.0
+        self.busymix += (bm_target - self.busymix) * (0.08 if bm_target > self.busymix else 0.12)
         if self.state in ("recording", "persistent"):
             self.fall = 0.9
             self._analyse(self.get_samples())
         elif self.bands.max() > 0.01:
             self.fall = 0.955                                  # the shape relaxes over ~2 s
             self._analyse(None)
-        if self.state == "idle" and self.anim < 0.01 and self.bands.max() <= 0.01 and self.frame % 10:
+        if self.state == "idle" and self.anim < 0.01 and self.bands.max() <= 0.01 and self.busymix < 0.02 and self.frame % 10:
             return  # idle look is static: no need to redraw every frame
         self._blit(self._render())
         user32.SetWindowPos(self.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)

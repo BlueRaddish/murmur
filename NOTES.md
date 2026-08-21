@@ -37,8 +37,11 @@ Decisions
   result is the stick's own silhouette; _fill paints it as one piece with a bright core line,
   glow and rim. Rejected on the way: bars inside the stick, swelling level blob, separated bars,
   sine strands (read as "blob + separate waves"). Idle never glows (no white flash on fade).
-  ~18 ms/frame. Asymmetric on purpose (lows left / highs right; bottom half = spectrum rolled 2
-  bands and x0.78). Release: anim eases at 0.06 and bands fall at 0.955 once idle, and the spectrum
+  ~29 ms/frame. Asymmetry = mirrored spectrum x a smooth random field (4 sines, random phases,
+  slow drift) per side; the lows-left version read as "too focused to the left". Record -> busy is
+  one morph: the shape keeps relaxing while _live_color crossfades accent -> busy (busymix eased)
+  and the pulse fades in on top; accent breathes slowly while recording. Resting glass is frosted:
+  whitish body with seeded grain, weaker rim. `opacity` (0.2-1) from config scales body/glow/pulse. Release: anim eases at 0.06 and bands fall at 0.955 once idle, and the spectrum
   shape keeps drawing (cross-faded to the resting stick) until flat. Colours come from config
   (`color`, `color_busy`) via Overlay.set_colors; persistent mode shares the recording colour - the
   old amber read as "orange while recording" to the user.

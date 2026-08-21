@@ -212,6 +212,17 @@ class AppWindow:
         self._swatch(self.sw_busy, self.v_color_busy)
         r += 1
 
+        ttk.Label(f, text="Opacity").grid(row=r, column=0, sticky="w", pady=4)
+        self.v_opacity = tk.DoubleVar(value=float(self.cfg.get("opacity", 0.9)))
+        box = ttk.Frame(f)
+        box.grid(row=r, column=1, sticky="w")
+        ttk.Scale(box, from_=0.2, to=1.0, variable=self.v_opacity, length=int(160 * self.scale)).pack(side="left")
+        self.l_opacity = ttk.Label(box, text="")
+        self.l_opacity.pack(side="left", padx=(8, 0))
+        self.v_opacity.trace_add("write", lambda *_: self.l_opacity.config(text=f"{self.v_opacity.get():.2f}"))
+        self.l_opacity.config(text=f"{self.v_opacity.get():.2f}")
+        r += 1
+
         ttk.Separator(f).grid(row=r, column=0, columnspan=2, sticky="ew", pady=10)
         r += 1
         ttk.Button(f, text="Save", command=self.save).grid(row=r, column=0, sticky="w")
@@ -296,6 +307,7 @@ class AppWindow:
         self.cfg["headset_button"] = bool(self.v_headset.get())
         self.cfg["model"] = self.v_model.get().strip() or self.cfg["model"]
         self.cfg["language"] = self.v_lang.get().strip() or None
+        self.cfg["opacity"] = round(float(self.v_opacity.get()), 2)
         for var, key in ((self.v_color, "color"), (self.v_color_busy, "color_busy")):
             v = var.get().strip()
             if len(v.lstrip("#")) in (3, 6) and all(c in "0123456789abcdefABCDEF" for c in v.lstrip("#")):
