@@ -352,7 +352,12 @@ class Murmur:
             if not take.active:
                 return False
             segs = self._segments(audio, " ".join(take.parts))
-        if len(segs) >= 2:
+        if not take.active:
+            # recording ended during this pass: everything it saw is final, so commit it all
+            # and only the audio that arrived after the snapshot is left for the tail
+            take.parts.append(clean(" ".join(s.text for s in segs)))
+            take.committed += len(audio)
+        elif len(segs) >= 2:
             done = segs[:-1]
             take.parts.append(clean(" ".join(s.text for s in done)))
             take.committed += int(done[-1].end * SAMPLE_RATE)

@@ -104,6 +104,15 @@ assert m._stream_pass(take) and take.parts == ["first sentence. second one."] an
 assert m.model.calls[-1] == (7 * 16000, "tmux")
 m.recorder.snapshot = lambda: np.zeros(16000 * 5, dtype=np.float32)   # only 1 s new since commit: wait
 assert m._stream_pass(take) is False
+# a pass that finishes after the recording stopped commits everything it saw
+take2 = murmur.Take()
+_t = m.model.transcribe
+def stop_midway(audio, **kw): take2.active = False; return _t(audio, **kw)
+m.model.transcribe = stop_midway
+m.recorder.snapshot = lambda: np.zeros(16000 * 7, dtype=np.float32)
+assert m._stream_pass(take2) and take2.committed == 7 * 16000 and take2.parts == ["first sentence. second one. third partial"]
+m.model.transcribe = _t
+m.recorder.snapshot = lambda: np.zeros(16000 * 5, dtype=np.float32)
 take.active = False; take.done.set()
 out = []; m.typist = type("T", (), {"type": lambda self, t: out.append(t)})(); m.on_text = lambda t: None
 m.pending = 1; murmur.Murmur.handle(m, np.zeros(16000 * 7, dtype=np.float32), take)
