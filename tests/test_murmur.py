@@ -193,7 +193,10 @@ import overlay
 o = overlay.Overlay.__new__(overlay.Overlay)
 o.scale, o.w, o.h = 2.0, int((overlay.Overlay.W + 44) * 2), int((overlay.Overlay.H + 44) * 2)
 o.frame, o.anim, o._cache, o.peak = 3, 1.0, {}, 1.0
-o.bands = np.zeros(overlay.Overlay.BANDS, dtype=np.float32)
+o.bands = np.zeros(overlay.Overlay.BANDS, dtype=np.float32); o.colors = dict(overlay.COLORS); o.fall = 0.9
+assert overlay.hex_rgb("#1a2B3c", None) == (26, 43, 60) and overlay.hex_rgb("abc", None) == (170, 187, 204)
+assert overlay.hex_rgb("nope", (1, 2, 3)) == (1, 2, 3) and overlay.hex_rgb(None, (1, 2, 3)) == (1, 2, 3)
+o.set_colors({"color": "#00ff00", "color_busy": "zzz"}); assert o.colors["persistent"] == (0, 255, 0) and o.colors["busy"] == overlay.COLORS["busy"]
 tone = (0.1 * np.sin(np.arange(2048) / 16000 * 2 * np.pi * 180) + 0.05 * np.sin(np.arange(2048) / 16000 * 2 * np.pi * 1400)).astype(np.float32)
 for x in (None, np.zeros(2048, dtype=np.float32), tone, np.full(2048, np.nan, dtype=np.float32)):
     o._analyse(x)

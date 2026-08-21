@@ -188,6 +188,30 @@ class AppWindow:
         ttk.Label(box, text="blank = auto (en for *.en models)").pack(side="left", padx=(6, 0))
         r += 1
 
+        ttk.Label(f, text="Accent colour").grid(row=r, column=0, sticky="w", pady=4)
+        self.v_color = tk.StringVar(value=self.cfg.get("color", "#e63c3c"))
+        box = ttk.Frame(f)
+        box.grid(row=r, column=1, sticky="w")
+        ttk.Entry(box, textvariable=self.v_color, width=9).pack(side="left")
+        self.sw_color = tk.Label(box, width=3, relief="solid", bd=1)
+        self.sw_color.pack(side="left", padx=(6, 0))
+        ttk.Label(box, text="hex, e.g. #e63c3c - recording and persistent; applies on Save").pack(side="left", padx=(8, 0))
+        self.v_color.trace_add("write", lambda *_: self._swatch(self.sw_color, self.v_color))
+        self._swatch(self.sw_color, self.v_color)
+        r += 1
+
+        ttk.Label(f, text="Transcribing colour").grid(row=r, column=0, sticky="w", pady=4)
+        self.v_color_busy = tk.StringVar(value=self.cfg.get("color_busy", "#ffaa32"))
+        box = ttk.Frame(f)
+        box.grid(row=r, column=1, sticky="w")
+        ttk.Entry(box, textvariable=self.v_color_busy, width=9).pack(side="left")
+        self.sw_busy = tk.Label(box, width=3, relief="solid", bd=1)
+        self.sw_busy.pack(side="left", padx=(6, 0))
+        ttk.Label(box, text="the pulse while text is being typed").pack(side="left", padx=(8, 0))
+        self.v_color_busy.trace_add("write", lambda *_: self._swatch(self.sw_busy, self.v_color_busy))
+        self._swatch(self.sw_busy, self.v_color_busy)
+        r += 1
+
         ttk.Separator(f).grid(row=r, column=0, columnspan=2, sticky="ew", pady=10)
         r += 1
         ttk.Button(f, text="Save", command=self.save).grid(row=r, column=0, sticky="w")
@@ -195,6 +219,15 @@ class AppWindow:
                               foreground="#666")
         self.note.grid(row=r, column=1, sticky="w")
         f.columnconfigure(1, weight=1)
+
+    @staticmethod
+    def _swatch(label, var) -> None:
+        v = var.get().strip()
+        ok = len(v.lstrip("#")) in (3, 6) and all(c in "0123456789abcdefABCDEF" for c in v.lstrip("#"))
+        try:
+            label.config(bg=("#" + v.lstrip("#")) if ok else "#ffffff")
+        except tk.TclError:
+            label.config(bg="#ffffff")
 
     @staticmethod
     def _list_mics():
@@ -263,6 +296,10 @@ class AppWindow:
         self.cfg["headset_button"] = bool(self.v_headset.get())
         self.cfg["model"] = self.v_model.get().strip() or self.cfg["model"]
         self.cfg["language"] = self.v_lang.get().strip() or None
+        for var, key in ((self.v_color, "color"), (self.v_color_busy, "color_busy")):
+            v = var.get().strip()
+            if len(v.lstrip("#")) in (3, 6) and all(c in "0123456789abcdefABCDEF" for c in v.lstrip("#")):
+                self.cfg[key] = "#" + v.lstrip("#").lower()
         mic = self.v_mic.get()
         if mic.startswith("("):
             self.cfg["mic"] = None

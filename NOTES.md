@@ -37,7 +37,11 @@ Decisions
   result is the stick's own silhouette; _fill paints it as one piece with a bright core line,
   glow and rim. Rejected on the way: bars inside the stick, swelling level blob, separated bars,
   sine strands (read as "blob + separate waves"). Idle never glows (no white flash on fade).
-  ~18 ms/frame.
+  ~18 ms/frame. Asymmetric on purpose (lows left / highs right; bottom half = spectrum rolled 2
+  bands and x0.78). Release: anim eases at 0.06 and bands fall at 0.955 once idle, and the spectrum
+  shape keeps drawing (cross-faded to the resting stick) until flat. Colours come from config
+  (`color`, `color_busy`) via Overlay.set_colors; persistent mode shares the recording colour - the
+  old amber read as "orange while recording" to the user.
 
 Environment facts (this laptop, 2026-08-20)
 - Apple Audio driver: the *Internal Digital Microphone* device returns junk (slow 0-0.25

@@ -40,7 +40,7 @@ CTRL_KEYS = {Key.ctrl, Key.ctrl_l, Key.ctrl_r}
 CMD_KEYS = {Key.cmd, Key.cmd_l, Key.cmd_r}
 
 DEFAULTS = {"model": "small.en", "device": "cpu", "language": None, "mic": None, "headset_button": False,
-            "retention_days": 7}
+            "retention_days": 7, "color": "#e63c3c", "color_busy": "#ffaa32"}
 
 
 def log(msg: str) -> None:
@@ -431,7 +431,13 @@ def run_app(factory, cfg: dict, cfg_path: Path) -> None:
     holder = {"app": None}
     history = History(APPDIR / "history.jsonl", cfg["retention_days"])
     overlay = Overlay(lambda: holder["app"].recorder.samples() if holder["app"] else None, scale)
-    win = AppWindow(root, history, cfg, lambda c: save_config(cfg_path, c), scale)
+    overlay.set_colors(cfg)
+
+    def on_save(c: dict) -> None:
+        save_config(cfg_path, c)
+        overlay.set_colors(c)
+
+    win = AppWindow(root, history, cfg, on_save, scale)
     icon = pystray.Icon("murmur", make_icon("loading"), "murmur: " + LABELS["loading"])
 
     def on_state(state: str) -> None:

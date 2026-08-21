@@ -30,8 +30,21 @@ AC_SRC_ALPHA = 1
 HWND_TOPMOST = -1
 SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE = 0x2, 0x1, 0x10
 
-COLORS = {"idle": (220, 220, 230), "recording": (235, 60, 60), "persistent": (245, 150, 40),
+COLORS = {"idle": (220, 220, 230), "recording": (230, 60, 60), "persistent": (230, 60, 60),
           "busy": (255, 170, 50), "loading": (255, 170, 50)}
+
+
+def hex_rgb(h: str, fallback):
+    """'#rrggbb' -> (r, g, b); anything else -> fallback."""
+    try:
+        h = h.strip().lstrip("#")
+        if len(h) == 3:
+            h = "".join(c * 2 for c in h)
+        if len(h) != 6:
+            return fallback
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+    except (ValueError, AttributeError):
+        return fallback
 
 WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM)
 
@@ -103,6 +116,8 @@ class Overlay:
     def __init__(self, get_samples, scale: float = 1.0):
         self.get_samples = get_samples   # () -> last ~2048 samples at 16 kHz, or None
         self.bands = np.zeros(self.BANDS, dtype=np.float32)
+        self.colors = dict(COLORS)
+        self.fall = 0.9                  # per-frame decay of the bands; slower once recording stops
         self.scale = scale
         self.w = int((self.W + 2 * self.PAD) * scale)
         self.h = int((self.H + 2 * self.PAD) * scale)
@@ -110,9 +125,18 @@ class Overlay:
         self.state = "idle"
         self.frame = 0
         self.anim = 0.0  # 0 = idle look, 1 = active look; eased per frame
+        self.ease = 0.25
         self.peak = 1.0   # running spectrum reference, so the display fills for any mic gain
         self._cache: dict = {}
         self._make_window()
+
+    def set_colors(self, cfg: dict) -> None:
+        """Accent colours from config: 'color' for recording/persistent, 'color_busy' for the
+        transcribing pulse. Takes effect on the next frame."""
+        rec = hex_rgb(cfg.get("color", ""), COLORS["recording"])
+        busy = hex_rgb(cfg.get("color_busy", ""), COLORS["busy"])
+        self.colors.update(recording=rec, persistent=rec, busy=busy, loading=busy)
+        self._cache.clear()
 
     # --- window -------------------------------------------------------------
     def _make_window(self) -> None:
@@ -195,7 +219,7 @@ class Overlay:
                 spread[:-d] = np.maximum(spread[:-d], target[d:] / f)
             target = spread
         rising = target > self.bands
-        self.bands = np.where(rising, self.bands * 0.35 + target * 0.65, self.bands * 0.86)
+        self.bands = np.where(rising, self.bands * 0.35 + target * 0.65, self.bands * self.fall)
 
     def _spectrum_mask(self, amp: float) -> Image.Image:
         """One silhouette: the mirrored, smoothed band heights become the half-height of the
@@ -203,17 +227,23 @@ class Overlay:
         n_w, n_h, x0, y0, x1, y1, r = self._geom()
         S = self.SS * self.scale
         cy = (y0 + y1) / 2
-        half = np.concatenate([self.bands[::-1], self.bands])
         N = 200
-        prof = np.interp(np.linspace(0, len(half) - 1, N), np.arange(len(half)), half)
         k = np.exp(-0.5 * (np.arange(-8, 9) / 3.0) ** 2); k /= k.sum()
-        prof = np.convolve(np.pad(prof, 8, mode="edge"), k, mode="valid")
-        prof *= np.sin(np.linspace(0, np.pi, N)) ** 0.35   # still meets the tips
+        taper = np.sin(np.linspace(0, np.pi, N)) ** 0.35     # still meets the tips
+
+        def profile(b):
+            pr = np.interp(np.linspace(0, len(b) - 1, N), np.arange(len(b)), b)
+            pr = np.convolve(np.pad(pr, 8, mode="edge"), k, mode="valid")
+            return pr * taper
+
+        # asymmetric: lows left, highs right along the top; the bottom is the same spectrum
+        # nudged two bands along and a little smaller, so the two halves echo, not mirror
+        top_p = profile(self.bands)
+        bot_p = profile(np.roll(self.bands, 2)) * 0.78
         hmax = min(self.H * S * 4.0, (self.PAD - 3) * S) * amp
         xs = np.linspace(x0 + r, x1 - r, N)
-        a = r + hmax * prof
-        top = [(float(x), float(cy - h)) for x, h in zip(xs, a)]
-        bot = [(float(x), float(cy + h)) for x, h in zip(xs, a)][::-1]
+        top = [(float(x), float(cy - (r + hmax * h))) for x, h in zip(xs, top_p)]
+        bot = [(float(x), float(cy + (r + hmax * h))) for x, h in zip(xs, bot_p)][::-1]
         m = Image.new("L", (n_w, n_h), 0)
         d = ImageDraw.Draw(m)
         d.polygon(top + bot, fill=255)
@@ -231,8 +261,10 @@ class Overlay:
         m = np.asarray(mask, dtype=np.float32) / 255
         # distance from the centre line, normalised per column by the shape's half-height there
         lit = m > 0.5
-        half_h = np.maximum(lit.sum(axis=0) / 2.0, 1.0)[None, :]
-        dist = np.abs(np.arange(n_h, dtype=np.float32)[:, None] - cy) / half_h
+        ys = np.arange(n_h, dtype=np.float32)[:, None]
+        above = np.maximum((lit & (ys < cy)).sum(axis=0), 1.0)[None, :]
+        below = np.maximum((lit & (ys >= cy)).sum(axis=0), 1.0)[None, :]
+        dist = np.where(ys < cy, (cy - ys) / above, (ys - cy) / below)
         dist = np.clip(dist, 0, 1)
         light = np.array([min(255, c * 0.35 + 255 * 0.65) for c in col], np.float32)
         base = np.array(col, np.float32)
@@ -295,7 +327,7 @@ class Overlay:
         key = (state, round(active, 1))
         if key in self._cache:
             return self._cache[key]
-        img = self._glass(self._stick_mask(), COLORS[state], active, state == "idle")
+        img = self._glass(self._stick_mask(), self.colors[state], active, state == "idle")
         if len(self._cache) > 40:
             self._cache.clear()
         self._cache[key] = img
@@ -308,8 +340,9 @@ class Overlay:
         t = self.frame / 25.0
         xs = np.linspace(0, 1, n_w, dtype=np.float32)
         wave = 0.5 + 0.5 * np.sin(2 * np.pi * (xs * 1.5 - t * 0.8))
-        orange = np.array([255, 140, 30], np.float32)
-        yellow = np.array([255, 225, 90], np.float32)
+        base = self.colors["busy"]
+        orange = np.array(base, np.float32)
+        yellow = np.array([min(255, c * 0.55 + 255 * 0.45) for c in base], np.float32)
         row = orange[None, :] * (1 - wave[:, None]) + yellow[None, :] * wave[:, None]
         breathe = 0.65 + 0.35 * np.sin(2 * np.pi * t * 0.9)
         a = np.full((n_w, 1), int(170 * breathe * alpha_scale), np.float32)
@@ -323,9 +356,12 @@ class Overlay:
 
     def _render(self) -> Image.Image:
         active = self.anim
-        if self.state in ("recording", "persistent"):
+        if self.state in ("recording", "persistent") or (self.state == "idle" and self.bands.max() > 0.01):
+            col = self.colors["recording"] if self.state == "idle" else self.colors[self.state]
             img = Image.new("RGBA", (self.w * self.SS, self.h * self.SS), (0, 0, 0, 0))
-            self._fill(img, self._spectrum_mask(active), COLORS[self.state], active)
+            self._fill(img, self._spectrum_mask(max(active, 0.15)), col, max(active, 0.15))
+            if self.state == "idle":                           # cross-fade towards the resting stick
+                img = Image.blend(self._base("idle", 0.0), img, min(1.0, active * 1.5 + 0.1))
         else:
             img = self._base(self.state, active).copy()
             if self.state in ("busy", "loading"):
@@ -340,13 +376,16 @@ class Overlay:
         while not self.q.empty():
             self.state = self.q.get()
         target = 0.0 if self.state == "idle" else 1.0
-        self.anim += (target - self.anim) * 0.25
+        self.ease = 0.25 if target > self.anim else 0.06       # quick to light up, slow to let go
+        self.anim += (target - self.anim) * self.ease
         self.frame += 1
         if self.state in ("recording", "persistent"):
+            self.fall = 0.9
             self._analyse(self.get_samples())
-        elif self.bands.any():
-            self._analyse(None)   # let the shape settle back into the stick
-        if self.state == "idle" and self.anim < 0.01 and self.frame % 10:
+        elif self.bands.max() > 0.01:
+            self.fall = 0.955                                  # the shape relaxes over ~2 s
+            self._analyse(None)
+        if self.state == "idle" and self.anim < 0.01 and self.bands.max() <= 0.01 and self.frame % 10:
             return  # idle look is static: no need to redraw every frame
         self._blit(self._render())
         user32.SetWindowPos(self.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
