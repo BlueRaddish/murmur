@@ -181,3 +181,15 @@ try:
     assert FakeStream.closed and rec._stream is None
 finally: murmur.sd.InputStream = _orig
 print("stream cleanup ok")
+
+# overlay renders every state at zero and full level without raising (no window needed)
+import overlay
+o = overlay.Overlay.__new__(overlay.Overlay)
+o.scale, o.w, o.h = 2.0, int((overlay.Overlay.W + 28) * 2), int((overlay.Overlay.H + 28) * 2)
+o.frame, o.anim, o._cache = 3, 1.0, {}
+from collections import deque
+for lvl in (0.0, 0.001, 0.5):
+    o.hist = deque([lvl] * overlay.Overlay.BARS, maxlen=overlay.Overlay.BARS)
+    for st in ("idle", "recording", "persistent", "busy", "loading"):
+        o.state = st; img = o._render(); assert img.size == (o.w, o.h)
+print("overlay render ok")

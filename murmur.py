@@ -475,7 +475,10 @@ def run_app(factory, cfg: dict, cfg_path: Path) -> None:
         holder["app"].run()
 
     def tick() -> None:
-        overlay.tick()
+        try:
+            overlay.tick()
+        except Exception as e:   # a draw bug must not stop the timer (the overlay would freeze)
+            log(f"overlay: {e}")
         root.after(40, tick)
 
     threading.Thread(target=icon.run, daemon=True).start()

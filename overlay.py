@@ -219,9 +219,9 @@ class Overlay:
             x = x0 + r + gap * i
             d.rounded_rectangle((x - bw, cy - h / 2, x + bw, cy + h / 2), radius=bw, fill=(255, 255, 255, 235))
             d.rounded_rectangle((x - bw, cy - h / 2, x + bw, cy + h / 2), radius=bw, fill=col + (150,))
-            # bright core along the left edge reads as a reflection
-            d.rounded_rectangle((x - bw * 0.7, cy - h / 2 + bw, x - bw * 0.1, cy + h / 2 - bw),
-                                radius=bw * 0.3, fill=(255, 255, 255, 120))
+            if h > 3 * bw:  # bright core along the left edge reads as a reflection
+                d.rounded_rectangle((x - bw * 0.7, cy - h / 2 + bw, x - bw * 0.1, cy + h / 2 - bw),
+                                    radius=bw * 0.3, fill=(255, 255, 255, 120))
 
     def _pulse(self, img, alpha_scale: float = 1.0) -> None:
         """Orange-to-yellow gradient sweeping along the stick, breathing in brightness."""
