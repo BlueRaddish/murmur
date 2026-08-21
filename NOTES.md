@@ -7,9 +7,11 @@ Decisions
 - Chord = any Ctrl + any Win/Cmd (pynput `Key.cmd` is the Win key on Windows). Edge-triggered:
   the chord fires once when both become held, and "released" once when either goes up.
 - Double-tap window 0.4 s, measured from the previous chord *release* to the next press.
-- Headset button = VK_MEDIA_PLAY_PAUSE, handled in pynput's win32_event_filter and suppressed
-  there so media players don't see it. It calls the same toggle() as the tray menu; it never
-  synthesizes Ctrl+Win.
+- Trigger key (v0.5, replaces the fixed headset button): cfg trigger_vk, bound by capture - the
+  window sets Murmur.capture, win32_event_filter reports the next key-down's vkCode once and
+  swallows it. Verified through the real hook with injected Play/Pause (0xB3) and F13 (0x7C).
+  Bound key toggles on key-down and is suppressed both ways; never synthesizes Ctrl+Win. Old
+  headset_button configs migrate to trigger_vk=0xB3.
 - Overlay is a pure Win32 layered window (UpdateLayeredWindow, premultiplied BGRA from PIL via
   numpy), ticked from the hidden Tk root's after() loop. tkinter's canvas was the pixelation:
   not DPI-aware and no anti-aliasing. Static layers (glow/shadow/disc) are cached per state;
@@ -37,7 +39,11 @@ Decisions
   result is the stick's own silhouette; _fill paints it as one piece with a bright core line,
   glow and rim. Rejected on the way: bars inside the stick, swelling level blob, separated bars,
   sine strands (read as "blob + separate waves"). Idle never glows (no white flash on fade).
-  ~27 ms/frame. Shape = 14 fixed-pitch rounded bars (72% duty) rising from the container, union
+  ~20 ms/frame. Shape = 14 fixed-pitch bars fused (104% duty, light corner rounding) so only the
+  outer outline exists; the 72%-duty version read as "space between the bars". `haze` adds a
+  wide (11-12 px logical) low-alpha glow in every state; `opacity` now scales frost, base, glow,
+  rim, specular and pulse alike. Colour presets in Settings (white + 8 hues); white works as an
+  accent. Earlier: 14 bars rising from the container, union
   with the stick, blurred 0.5px then glowed; the continuous silhouette read as "bars too small".
   Asymmetry = per side, three wandering lobe centres (the spectrum read by distance
   from each axis, soft-OR'd) x a smooth random field (4 sines, random phases, slow drift); a single

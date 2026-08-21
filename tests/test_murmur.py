@@ -26,7 +26,7 @@ class FakeRec:
 
 def fresh():
     m = murmur.Murmur.__new__(murmur.Murmur)
-    m.cfg = {"headset_button": False}; m.recorder = FakeRec(); m.on_state = lambda s: None
+    m.cfg = {"trigger_vk": None}; m.recorder = FakeRec(); m.on_state = lambda s: None; m.capture = None
     m.state = "idle"; m.held = set(); m.recording = m.persistent = m.chord_was_down = False
     m.last_chord_release = 0.0; m.lock = __import__("threading").Lock(); m.ctl = __import__("threading").Lock(); m.pending = 0
     m.handle = lambda audio, take=None: None  # never touch the model here
@@ -55,14 +55,19 @@ assert m.recorder.calls == ["start", "stop", "start", "stop"]
 # slow second tap is just another hold
 m = fresh(); chord(m); chord(m, False); m.last_chord_release = _t.monotonic() - 1.0
 chord(m); assert m.recording and not m.persistent; chord(m, False); assert not m.recording
-# headset button: ignored when off, toggles persistent when on, always suppressed when on
+# trigger key: ignored when unbound, toggles persistent when bound, always suppressed when bound
 class D: vkCode = murmur.VK_MEDIA_PLAY_PAUSE
 class L:
     def __init__(self): self.suppressed = 0
     def suppress_event(self): self.suppressed += 1
 m = fresh(); m.listener = L()
 m.win32_event_filter(0x100, D()); assert not m.recording and m.listener.suppressed == 0
-m.cfg["headset_button"] = True
+# capture: the next key-down is reported once and swallowed, and does not toggle
+got = []; m.capture = got.append
+m.win32_event_filter(0x100, D()); m.win32_event_filter(0x101, D())
+assert got == [murmur.VK_MEDIA_PLAY_PAUSE] and m.capture is None and not m.recording and m.listener.suppressed == 1
+m.listener.suppressed = 0
+m.cfg["trigger_vk"] = murmur.VK_MEDIA_PLAY_PAUSE
 m.win32_event_filter(0x100, D()); assert m.recording and m.persistent
 m.win32_event_filter(0x101, D()); assert m.recording            # key-up does nothing but is swallowed
 m.win32_event_filter(0x100, D()); assert not m.recording
@@ -131,8 +136,12 @@ assert "language" in murmur.DEFAULTS and murmur.DEFAULTS["language"] is None
 # config round-trip
 cp = Path(tempfile.mktemp(suffix=".json"))
 assert murmur.load_config(cp) == murmur.DEFAULTS
-c = dict(murmur.DEFAULTS, mic=2, headset_button=True); murmur.save_config(cp, c)
-assert murmur.load_config(cp) == c; os.remove(cp)
+c = dict(murmur.DEFAULTS, mic=2, trigger_vk=0x7C); murmur.save_config(cp, c)
+assert murmur.load_config(cp) == c
+cp.write_text('{"headset_button": true}', encoding="utf-8")   # pre-0.5 config migrates
+assert murmur.load_config(cp)["trigger_vk"] == murmur.VK_MEDIA_PLAY_PAUSE; os.remove(cp)
+from window import vk_name
+assert vk_name(0xB3) == "Play/Pause" and vk_name(None) == "none" and vk_name(0x41).upper() == "A"
 
 # real transcription: Windows TTS says a sentence, Whisper must get the tech word back
 wav = Path(tempfile.mktemp(suffix=".wav"))
@@ -215,7 +224,7 @@ o = overlay.Overlay.__new__(overlay.Overlay)
 o.scale, o.w, o.h = 2.0, int((overlay.Overlay.W + 44) * 2), int((overlay.Overlay.H + 44) * 2)
 o.frame, o.anim, o._cache, o.peak = 3, 1.0, {}, 1.0
 o.bands = np.zeros(overlay.Overlay.BANDS, dtype=np.float32); o.colors = dict(overlay.COLORS); o.fall = 0.9
-o.opacity, o.busymix, o.rng = 0.9, 0.0, np.random.default_rng(1); o.noise_phase = o.rng.uniform(0, 6.28, size=(2, 4))
+o.opacity, o.busymix, o.rng, o.haze = 0.9, 0.0, np.random.default_rng(1), True; o.noise_phase = o.rng.uniform(0, 6.28, size=(2, 4))
 o.axes = [[o.rng.uniform(0.2, 0.8, 3), o.rng.uniform(0, 6.28, 3), o.rng.uniform(0.02, 0.06, 3)] for _ in range(2)]
 o.set_colors({"opacity": "1.7"}); assert o.opacity == 1.0
 o.set_colors({"opacity": "x"}); assert o.opacity == 0.9

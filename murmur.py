@@ -6,8 +6,9 @@ which is fed to Whisper as a prompt so it prefers those spellings.
 Modes
   hold        hold Ctrl+Win, speak, release -> typed.
   persistent  double-tap Ctrl+Win -> keeps recording until Ctrl+Win is pressed again.
-  headset     (opt-in) the wired-headset button toggles recording. It is its own trigger,
-              never translated into Ctrl+Win, so no stray modifier keystrokes reach apps.
+  trigger key (opt-in) any single key - a wired headset's button, a media key, F13 - bound
+              in Settings by pressing it, toggles recording. It is its own trigger, never
+              translated into Ctrl+Win, so no stray modifier keystrokes reach apps.
 
 A glassy disc at the bottom of the screen shows the mode and live mic level, so you can
 see it is actually hearing you. The tray's "Open murmur" window keeps a history of
@@ -39,8 +40,8 @@ VK_MEDIA_PLAY_PAUSE = 0xB3  # what a wired headset's inline button sends on Wind
 CTRL_KEYS = {Key.ctrl, Key.ctrl_l, Key.ctrl_r}
 CMD_KEYS = {Key.cmd, Key.cmd_l, Key.cmd_r}
 
-DEFAULTS = {"model": "small.en", "device": "cpu", "language": None, "mic": None, "headset_button": False,
-            "retention_days": 7, "color": "#e63c3c", "color_busy": "#ffaa32", "opacity": 0.9}
+DEFAULTS = {"model": "small.en", "device": "cpu", "language": None, "mic": None, "trigger_vk": None,
+            "retention_days": 7, "color": "#e63c3c", "color_busy": "#ffaa32", "opacity": 0.9, "haze": False}
 
 
 def log(msg: str) -> None:
@@ -59,7 +60,10 @@ def load_config(path: Path) -> dict:
     cfg = dict(DEFAULTS)
     if path.exists():
         try:
-            cfg.update(json.loads(path.read_text(encoding="utf-8")))
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if raw.get("headset_button") and raw.get("trigger_vk") is None:   # pre-0.5 option
+                raw["trigger_vk"] = VK_MEDIA_PLAY_PAUSE
+            cfg.update({k: v for k, v in raw.items() if k in DEFAULTS})
         except (OSError, ValueError) as e:
             log(f"config ignored: {e}")
     return cfg
@@ -253,6 +257,7 @@ class Murmur:
         self.pending = 0                  # transcriptions queued or running
         self.listener = None
         self.take = None                  # the Take being recorded (streaming state)
+        self.capture = None               # callback(vk): the next key pressed is reported here, once
 
     def _set(self, state: str) -> None:
         self.state = state
@@ -331,10 +336,22 @@ class Murmur:
         self.chord_was_down = down
 
     def win32_event_filter(self, msg, data) -> bool:
-        """Headset button: act on key-down, swallow both down and up so the media
-        player never sees it. Only when the option is on; otherwise untouched."""
-        if self.cfg["headset_button"] and data.vkCode == VK_MEDIA_PLAY_PAUSE:
-            if msg in (0x100, 0x104):  # WM_KEYDOWN, WM_SYSKEYDOWN
+        """Runs for every key, before pynput's own handling. Two jobs: report the next key to a
+        waiting capture callback (binding the trigger key), and act on the bound trigger key -
+        key-down toggles, both down and up are swallowed so nothing else (a media player, the
+        focused app) sees it. Everything else passes through untouched."""
+        vk = data.vkCode
+        down = msg in (0x100, 0x104)  # WM_KEYDOWN, WM_SYSKEYDOWN
+        if self.capture is not None:
+            if down:
+                cb, self.capture = self.capture, None
+                log(f"  captured key vk=0x{vk:02X}")
+                cb(vk)
+            self.listener.suppress_event()
+            return True
+        trig = self.cfg.get("trigger_vk")
+        if trig is not None and vk == trig:
+            if down:
                 self.toggle()
             self.listener.suppress_event()
         return True
@@ -472,7 +489,7 @@ def run_app(factory, cfg: dict, cfg_path: Path) -> None:
         save_config(cfg_path, c)
         overlay.set_colors(c)
 
-    win = AppWindow(root, history, cfg, on_save, scale)
+    win = AppWindow(root, history, cfg, on_save, scale, get_app=lambda: holder["app"])
     icon = pystray.Icon("murmur", make_icon("loading"), "murmur: " + LABELS["loading"])
 
     def on_state(state: str) -> None:
@@ -537,7 +554,7 @@ def main(argv=None) -> int:
     p.add_argument("--device", choices=["cpu", "cuda"])
     p.add_argument("--language", help="force a language code, e.g. en, ko. default: en for *.en models")
     p.add_argument("--mic", help="input device index or name substring (see --list-devices)")
-    p.add_argument("--headset-button", action="store_true", help="wired-headset button toggles recording")
+    p.add_argument("--trigger-vk", type=lambda v: int(v, 0), help="virtual-key code that toggles recording (e.g. 0xB3 = Play/Pause)")
     p.add_argument("--vocab", type=Path, help="terms file fed to Whisper as a prompt")
     p.add_argument("--config", type=Path, default=APPDIR / "config.json")
     p.add_argument("--console", action="store_true", help="no tray/overlay/window; log to the console")
@@ -553,8 +570,8 @@ def main(argv=None) -> int:
     for k in ("model", "device", "language", "mic"):
         if getattr(a, k) is not None:
             cfg[k] = getattr(a, k)
-    if a.headset_button:
-        cfg["headset_button"] = True
+    if a.trigger_vk is not None:
+        cfg["trigger_vk"] = a.trigger_vk
     if isinstance(cfg["mic"], str) and cfg["mic"].isdigit():
         cfg["mic"] = int(cfg["mic"])
     vocab = load_vocab(a.vocab or find_vocab())

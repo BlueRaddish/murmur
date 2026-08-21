@@ -27,15 +27,16 @@ First run downloads the model (`small.en`, ~250 MB) - the bar pulses until the m
 |---|---|
 | Hold Ctrl+Win, speak, release | text is typed where the cursor is |
 | Double-tap Ctrl+Win | **persistent mode**: keeps recording until you press Ctrl+Win again |
-| Headset button (opt-in) | toggles recording, same as persistent mode |
+| Extra trigger key (opt-in) | toggles recording, same as persistent mode |
 | Tray icon right-click | start/stop, headset option, edit vocab, open log, quit |
 
 (Ctrl+Cmd on a Mac keyboard.) A tiny glass stick sits at the bottom of the screen:
 near-invisible at rest. While you talk it turns red and becomes a live spectrum of your
 voice - one glowing shape that swells and ripples across its whole length and pinches
 back into the stick at the tips, then relaxes slowly when you stop; it auto-scales to your
-mic. Colours and opacity are yours: Settings has an accent colour (recording), a transcribing
-colour and an opacity slider; they apply on Save, no restart. An orange-to-yellow pulse runs along it while
+mic. Colours, opacity and haze are yours: Settings has an accent colour (recording) and a
+transcribing colour with preset swatches, an opacity slider and a haze toggle; Save applies
+them live. An orange-to-yellow pulse runs along it while
 transcribing. If it stays a flat red line while you talk, it is listening to the wrong
 input: pick the microphone in Settings.
 
@@ -49,10 +50,11 @@ transcribed in the last 7 days - copy it back if a paste went missing or you ove
 clipboard. The retention window is adjustable in Settings (0 keeps nothing). Stored in
 `%APPDATA%\murmur\history.jsonl`, local only.
 
-**Headset button.** Wired headsets' inline button reaches Windows as the Play/Pause media
-key. With the option on (tray menu or `--headset-button`) murmur treats that key as its own
-start/stop trigger and swallows it so your music player doesn't react. It is never turned
-into a Ctrl+Win keystroke, so nothing extra reaches the app you're typing into.
+**Extra trigger key.** Settings > "Press a key..." binds any single key to toggle
+recording: a wired headset's inline button, a media key, F13 on a macro pad. murmur swallows
+that key so nothing else reacts to it, and it is never turned into a Ctrl+Win keystroke, so
+nothing extra reaches the app you're typing into. Different headsets send different codes;
+the capture records whatever yours sends (the log shows the code).
 
 ## Options
 
@@ -64,7 +66,7 @@ for one run.
 --device cpu|cuda                                     cuda needs an NVIDIA GPU + CUDA libs
 --language en|ko|...                                  default: en for *.en models, else auto
 --mic 2  or  --mic "Headset"                          pick an input; see --list-devices
---headset-button                                      wired-headset button toggles recording
+--trigger-vk 0xB3                                     key code that toggles recording (0xB3 = Play/Pause)
 --console                                             no tray/pill, log to the terminal
 ```
 

@@ -10,6 +10,25 @@ from pathlib import Path
 from tkinter import ttk
 
 MODELS = ["tiny.en", "base.en", "small.en", "medium.en", "tiny", "base", "small", "medium", "large-v3"]
+PRESETS = ["#ffffff", "#e63c3c", "#ff7a1a", "#ffc82a", "#4ade80", "#22d3ee", "#3c8cff", "#a855f7", "#ff4fa3"]
+MEDIA_KEYS = {0xB3: "Play/Pause", 0xB2: "Media Stop", 0xB0: "Next Track", 0xB1: "Previous Track", 0xAD: "Mute",
+              0xAE: "Volume Down", 0xAF: "Volume Up", 0xB5: "Media Select", 0xB4: "Mail", 0xA6: "Browser Back"}
+
+
+def vk_name(vk) -> str:
+    if vk is None:
+        return "none"
+    if vk in MEDIA_KEYS:
+        return MEDIA_KEYS[vk]
+    try:
+        import ctypes
+        sc = ctypes.windll.user32.MapVirtualKeyW(vk, 0)
+        buf = ctypes.create_unicode_buffer(64)
+        if sc and ctypes.windll.user32.GetKeyNameTextW(sc << 16, buf, 64):
+            return buf.value
+    except Exception:
+        pass
+    return f"key 0x{vk:02X}"
 
 
 class History:
@@ -66,8 +85,9 @@ class AppWindow:
     """root: the (withdrawn) Tk root. cfg: the live config dict shared with the app.
     on_save(cfg): persist settings."""
 
-    def __init__(self, root: tk.Tk, history: History, cfg: dict, on_save, scale: float = 1.0):
+    def __init__(self, root: tk.Tk, history: History, cfg: dict, on_save, scale: float = 1.0, get_app=lambda: None):
         self.root = root
+        self.get_app = get_app
         self.history = history
         self.cfg = cfg
         self.on_save = on_save
@@ -153,9 +173,15 @@ class AppWindow:
         ttk.Label(box, text="days   (0 = don't keep history)").pack(side="left", padx=(6, 0))
         r += 1
 
-        self.v_headset = tk.BooleanVar(value=bool(self.cfg["headset_button"]))
-        ttk.Checkbutton(f, text="Wired-headset button (Play/Pause) starts and stops recording",
-                        variable=self.v_headset).grid(row=r, column=0, columnspan=2, sticky="w", pady=4)
+        ttk.Label(f, text="Extra trigger key").grid(row=r, column=0, sticky="w", pady=4)
+        box = ttk.Frame(f)
+        box.grid(row=r, column=1, sticky="w")
+        self.l_trig = ttk.Label(box, text=vk_name(self.cfg.get("trigger_vk")), width=18)
+        self.l_trig.pack(side="left")
+        self.b_trig = ttk.Button(box, text="Press a key...", command=self.capture_key)
+        self.b_trig.pack(side="left", padx=(6, 0))
+        ttk.Button(box, text="Clear", command=self.clear_key).pack(side="left", padx=(6, 0))
+        ttk.Label(box, text="toggles recording - a headset button, a media key, F13...").pack(side="left", padx=(8, 0))
         r += 1
 
         ttk.Label(f, text="Model").grid(row=r, column=0, sticky="w", pady=4)
@@ -199,6 +225,8 @@ class AppWindow:
         self.v_color.trace_add("write", lambda *_: self._swatch(self.sw_color, self.v_color))
         self._swatch(self.sw_color, self.v_color)
         r += 1
+        self._presets(f, r, self.v_color)
+        r += 1
 
         ttk.Label(f, text="Transcribing colour").grid(row=r, column=0, sticky="w", pady=4)
         self.v_color_busy = tk.StringVar(value=self.cfg.get("color_busy", "#ffaa32"))
@@ -210,6 +238,13 @@ class AppWindow:
         ttk.Label(box, text="the pulse while text is being typed").pack(side="left", padx=(8, 0))
         self.v_color_busy.trace_add("write", lambda *_: self._swatch(self.sw_busy, self.v_color_busy))
         self._swatch(self.sw_busy, self.v_color_busy)
+        r += 1
+        self._presets(f, r, self.v_color_busy)
+        r += 1
+
+        self.v_haze = tk.BooleanVar(value=bool(self.cfg.get("haze", False)))
+        ttk.Checkbutton(f, text="Haze: a wide soft glow around the indicator", variable=self.v_haze).grid(
+            row=r, column=0, columnspan=2, sticky="w", pady=4)
         r += 1
 
         ttk.Label(f, text="Opacity").grid(row=r, column=0, sticky="w", pady=4)
@@ -230,6 +265,35 @@ class AppWindow:
                               foreground="#666")
         self.note.grid(row=r, column=1, sticky="w")
         f.columnconfigure(1, weight=1)
+
+    def _presets(self, parent, row, var) -> None:
+        box = ttk.Frame(parent)
+        box.grid(row=row, column=1, sticky="w", pady=(0, 6))
+        for hx in PRESETS:
+            b = tk.Label(box, bg=hx, width=3, relief="raised", bd=1, cursor="hand2")
+            b.pack(side="left", padx=2)
+            b.bind("<Button-1>", lambda e, h=hx: var.set(h))
+
+    def capture_key(self) -> None:
+        app = self.get_app()
+        if app is None:
+            self.l_trig.config(text="still loading...")
+            return
+        self.l_trig.config(text="press a key now")
+        app.capture = lambda vk: self.root.after(0, lambda: self._captured(vk))
+
+    def _captured(self, vk: int) -> None:
+        self.cfg["trigger_vk"] = int(vk)
+        self.l_trig.config(text=vk_name(vk))
+        self.on_save(self.cfg)
+
+    def clear_key(self) -> None:
+        app = self.get_app()
+        if app is not None:
+            app.capture = None
+        self.cfg["trigger_vk"] = None
+        self.l_trig.config(text="none")
+        self.on_save(self.cfg)
 
     @staticmethod
     def _swatch(label, var) -> None:
@@ -304,7 +368,7 @@ class AppWindow:
             return
         self.cfg["retention_days"] = days
         self.history.days = days
-        self.cfg["headset_button"] = bool(self.v_headset.get())
+        self.cfg["haze"] = bool(self.v_haze.get())
         self.cfg["model"] = self.v_model.get().strip() or self.cfg["model"]
         self.cfg["language"] = self.v_lang.get().strip() or None
         self.cfg["opacity"] = round(float(self.v_opacity.get()), 2)

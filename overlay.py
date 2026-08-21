@@ -119,6 +119,7 @@ class Overlay:
         self.bands = np.zeros(self.BANDS, dtype=np.float32)
         self.colors = dict(COLORS)
         self.opacity = 0.9               # 0..1, from config
+        self.haze = False
         self.fall = 0.9                  # per-frame decay of the bands; slower once recording stops
         self.busymix = 0.0               # 0 = accent colour, 1 = transcribing colour; eased
         self.rng = np.random.default_rng(7)
@@ -149,6 +150,7 @@ class Overlay:
             self.opacity = min(1.0, max(0.2, float(cfg.get("opacity", 0.9))))
         except (TypeError, ValueError):
             self.opacity = 0.9
+        self.haze = bool(cfg.get("haze", False))
         self._cache.clear()
 
     # --- window -------------------------------------------------------------
@@ -291,14 +293,14 @@ class Overlay:
         d.rounded_rectangle((x0, y0, x1, y1), radius=r, fill=255)
         inner_w = (x1 - x0) - 2 * r * 0.9
         pitch = inner_w / self.NBARS
-        bw = pitch * 0.36                                        # half-width: 72% of the pitch
+        bw = pitch * 0.52                                        # half-width just over the pitch: bars fuse, no gaps
         idx = np.linspace(0, N - 1, self.NBARS * 2 + 1)[1::2]    # profile sample at each bar centre
         for i in range(self.NBARS):
             xc = x0 + r * 0.9 + pitch * (i + 0.5)
             ht = r + hmax * float(np.interp(idx[i], np.arange(N), top_p))
             hb = r + hmax * float(np.interp(idx[i], np.arange(N), bot_p))
-            d.rounded_rectangle((xc - bw, cy - ht, xc + bw, cy + hb), radius=bw, fill=255)
-        return m.filter(ImageFilter.GaussianBlur(0.5 * S))
+            d.rounded_rectangle((xc - bw, cy - ht, xc + bw, cy + hb), radius=bw * 0.6, fill=255)
+        return m.filter(ImageFilter.GaussianBlur(0.6 * S))
 
     @staticmethod
     def _lerp(a, b, m):
@@ -337,10 +339,15 @@ class Overlay:
         g = Image.new("RGBA", (n_w, n_h), col + (255,))
         g.putalpha(glow)
         img.alpha_composite(g)
+        if self.haze:
+            hz = mask.filter(ImageFilter.GaussianBlur(12 * S)).point(lambda v: min(255, v * 2.4) * 0.45 * active * self.opacity)
+            h = Image.new("RGBA", (n_w, n_h), col + (255,))
+            h.putalpha(hz)
+            img.alpha_composite(h)
         img.alpha_composite(body)
         edge = np.asarray(mask.filter(ImageFilter.FIND_EDGES), dtype=np.float32)
         rim = Image.new("RGBA", (n_w, n_h), (255, 255, 255, 0))
-        rim.putalpha(Image.fromarray(np.clip(edge * 0.7 * active, 0, 160).astype(np.uint8), "L"))
+        rim.putalpha(Image.fromarray(np.clip(edge * 0.7 * active * self.opacity, 0, 160).astype(np.uint8), "L"))
         img.alpha_composite(rim)
 
     def _glass(self, mask: Image.Image, col, active: float, tint_idle: bool) -> Image.Image:
@@ -367,11 +374,16 @@ class Overlay:
             grain = self.rng.normal(0, 1, (n_h, n_w))
             grain = Image.fromarray(np.clip(128 + grain * 22, 0, 255).astype(np.uint8), "L").filter(ImageFilter.GaussianBlur(0.5))
             frost = Image.new("RGBA", (n_w, n_h), (240, 240, 245, 0))
-            frost.putalpha(Image.fromarray((np.asarray(grain, dtype=np.float32) * 0.9).astype(np.uint8), "L"))
+            frost.putalpha(Image.fromarray((np.asarray(grain, dtype=np.float32) * 0.9 * self.opacity).astype(np.uint8), "L"))
             body.paste(frost, (0, 0), mask)
         else:
             tint = tuple(int(c * active + 200 * (1 - active)) for c in col)
-            body.paste(tint + (int(30 + 95 * active),), (0, 0), mask)
+            body.paste(tint + (int((30 + 95 * active) * self.opacity),), (0, 0), mask)
+        if self.haze:
+            hz = mask.filter(ImageFilter.GaussianBlur(11 * S)).point(lambda v: min(255, v * 2.2) * (0.22 if tint_idle else 0.4) * self.opacity)
+            h = Image.new("RGBA", (n_w, n_h), ((245, 245, 250) if tint_idle else col) + (255,))
+            h.putalpha(hz)
+            img.alpha_composite(h)
         # specular: a blurred bright band across the upper part of the shape
         hl = Image.new("L", (n_w, n_h), 0)
         arr = np.asarray(mask, dtype=np.float32) / 255
@@ -379,14 +391,14 @@ class Overlay:
         top = np.argmax(arr > 0.5, axis=0).astype(np.float32)[None, :]           # first lit row per column
         height = (arr > 0.5).sum(axis=0).astype(np.float32)[None, :] + 1e-3
         band = np.clip(1 - (ys - top) / (0.45 * height), 0, 1) * arr
-        hl = Image.fromarray((band * (70 if tint_idle else 120)).astype(np.uint8), "L").filter(ImageFilter.GaussianBlur(1.0 * S))
+        hl = Image.fromarray((band * (70 if tint_idle else 120) * self.opacity).astype(np.uint8), "L").filter(ImageFilter.GaussianBlur(1.0 * S))
         spec = Image.new("RGBA", (n_w, n_h), (255, 255, 255, 0))
         spec.putalpha(hl)
         body.alpha_composite(spec)
         # rim: the mask's edge, brighter on top
         edge = np.asarray(mask.filter(ImageFilter.FIND_EDGES), dtype=np.float32)
         rim = Image.new("RGBA", (n_w, n_h), (255, 255, 255, 0))
-        rim.putalpha(Image.fromarray(np.clip(edge * (0.35 if tint_idle else 0.5 + 0.3 * active), 0, 150).astype(np.uint8), "L"))
+        rim.putalpha(Image.fromarray(np.clip(edge * (0.35 if tint_idle else 0.5 + 0.3 * active) * self.opacity, 0, 150).astype(np.uint8), "L"))
         body.alpha_composite(rim)
         img.alpha_composite(body)
         return img
