@@ -31,8 +31,8 @@ AC_SRC_ALPHA = 1
 HWND_TOPMOST = -1
 SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE = 0x2, 0x1, 0x10
 
-COLORS = {"idle": (150, 150, 160), "recording": (235, 70, 70), "persistent": (245, 160, 40),
-          "busy": (80, 140, 240), "loading": (80, 140, 240)}
+COLORS = {"idle": (220, 220, 230), "recording": (235, 60, 60), "persistent": (245, 150, 40),
+          "busy": (255, 170, 50), "loading": (255, 170, 50)}
 
 WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM)
 
@@ -88,17 +88,21 @@ def set_dpi_aware() -> float:
 
 
 class Overlay:
-    """Call tick() from the UI thread's timer (~30 fps); post(state) from any thread."""
+    """A small glassy stick (about 7:1) at the bottom centre. Near-invisible at rest; tinted
+    red with shiny level bars while recording (amber in persistent mode); an orange-to-yellow
+    pulse sweeping along it while transcribing. Call tick() from the UI thread's timer
+    (~25 fps); post(state) from any thread."""
 
-    BASE = 72        # disc diameter in logical px
-    PAD = 28         # room for glow + shadow
-    BARS = 7
+    W, H = 96, 14    # stick size in logical px
+    PAD = 14         # room for glow + shadow
+    BARS = 11
     SS = 2           # supersampling
 
     def __init__(self, get_level, scale: float = 1.0):
         self.get_level = get_level
         self.scale = scale
-        self.size = int((self.BASE + 2 * self.PAD) * scale)
+        self.w = int((self.W + 2 * self.PAD) * scale)
+        self.h = int((self.H + 2 * self.PAD) * scale)
         self.q: queue.Queue = queue.Queue()
         self.state = "idle"
         self.hist = deque([0.0] * self.BARS, maxlen=self.BARS)
@@ -117,11 +121,11 @@ class Overlay:
         wc.lpszClassName = "murmur_overlay"
         user32.RegisterClassW(ctypes.byref(wc))
         sw, sh = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
-        self.x = (sw - self.size) // 2
-        self.y = sh - self.size - int(36 * self.scale)
+        self.x = (sw - self.w) // 2
+        self.y = sh - self.h - int(40 * self.scale)
         ex = WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW
         self.hwnd = user32.CreateWindowExW(ex, "murmur_overlay", "murmur", WS_POPUP, self.x, self.y,
-                                           self.size, self.size, None, None, wc.hInstance, None)
+                                           self.w, self.h, None, None, wc.hInstance, None)
         user32.ShowWindow(self.hwnd, SW_SHOWNOACTIVATE)
 
     def _blit(self, img: Image.Image) -> None:
@@ -148,74 +152,105 @@ class Overlay:
         user32.ReleaseDC(None, hdc_screen)
 
     # --- drawing ------------------------------------------------------------
+    def _geom(self):
+        S = self.SS * self.scale
+        n_w, n_h = self.w * self.SS, self.h * self.SS
+        x0, y0 = self.PAD * S, self.PAD * S
+        x1, y1 = x0 + self.W * S, y0 + self.H * S
+        return n_w, n_h, x0, y0, x1, y1, (y1 - y0) / 2
+
     def _base(self, state: str, active: float) -> Image.Image:
-        """Glow + shadow + glass disc. Blurs are slow, so this is cached per (state, active step)."""
+        """Shadow + glass stick, tinted by state. Blurs are slow: cached per (state, step)."""
         key = (state, round(active, 1))
         if key in self._cache:
             return self._cache[key]
-        S = self.SS
-        n = self.size * S
-        img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
-        c = n / 2
+        n_w, n_h, x0, y0, x1, y1, r = self._geom()
+        S = self.SS * self.scale
+        img = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
         col = COLORS[state]
-        disc_r = self._disc_r(active)
 
-        glow = Image.new("RGBA", (n, n), (0, 0, 0, 0))
-        ImageDraw.Draw(glow).ellipse((c - disc_r * 1.15, c - disc_r * 1.15, c + disc_r * 1.15, c + disc_r * 1.15),
-                                     fill=col + (int(40 + 110 * active),))
-        img.alpha_composite(glow.filter(ImageFilter.GaussianBlur(self.PAD * self.scale * S * 0.45)))
+        # soft shadow underneath, and a colour glow when active
+        sh = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
+        ImageDraw.Draw(sh).rounded_rectangle((x0, y0 + 2 * S, x1, y1 + 2 * S), radius=r,
+                                             fill=(0, 0, 0, int(60 + 50 * active)))
+        img.alpha_composite(sh.filter(ImageFilter.GaussianBlur(4 * S)))
+        if active > 0.05:
+            gl = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
+            ImageDraw.Draw(gl).rounded_rectangle((x0 - 2 * S, y0 - 2 * S, x1 + 2 * S, y1 + 2 * S),
+                                                 radius=r + 2 * S, fill=col + (int(90 * active),))
+            img.alpha_composite(gl.filter(ImageFilter.GaussianBlur(7 * S)))
 
-        sh = Image.new("RGBA", (n, n), (0, 0, 0, 0))
-        off = 4 * self.scale * S
-        ImageDraw.Draw(sh).ellipse((c - disc_r, c - disc_r + off, c + disc_r, c + disc_r + off), fill=(0, 0, 0, 120))
-        img.alpha_composite(sh.filter(ImageFilter.GaussianBlur(6 * self.scale * S)))
-
-        disc = Image.new("RGBA", (n, n), (0, 0, 0, 0))
-        d = ImageDraw.Draw(disc)
-        d.ellipse((c - disc_r, c - disc_r, c + disc_r, c + disc_r), fill=(24, 24, 30, int(170 + 60 * active)))
-        hl = Image.new("RGBA", (n, n), (0, 0, 0, 0))
-        ImageDraw.Draw(hl).ellipse((c - disc_r * 0.8, c - disc_r * 0.95, c + disc_r * 0.8, c - disc_r * 0.1),
-                                   fill=(255, 255, 255, 70))
-        hl = hl.filter(ImageFilter.GaussianBlur(disc_r * 0.25))
-        mask = Image.new("L", (n, n), 0)
-        ImageDraw.Draw(mask).ellipse((c - disc_r, c - disc_r, c + disc_r, c + disc_r), fill=255)
-        hl.putalpha(Image.composite(hl.split()[3], Image.new("L", (n, n), 0), mask))
-        disc.alpha_composite(hl)
-        d.ellipse((c - disc_r, c - disc_r, c + disc_r, c + disc_r), outline=(255, 255, 255, 45),
-                  width=int(1.5 * S * self.scale))
-        img.alpha_composite(disc)
+        # glass body: mostly see-through at rest, tinted when active
+        glass = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
+        g = ImageDraw.Draw(glass)
+        if state == "idle":
+            tint = (220, 220, 230)
+        else:
+            tint = tuple(int(c * active + 200 * (1 - active)) for c in col)
+        g.rounded_rectangle((x0, y0, x1, y1), radius=r, fill=tint + (int(28 + 85 * active),))
+        # specular band along the top, fading out
+        hl = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
+        ImageDraw.Draw(hl).rounded_rectangle((x0 + 2 * S, y0 + 1 * S, x1 - 2 * S, y0 + (y1 - y0) * 0.45),
+                                             radius=r * 0.8, fill=(255, 255, 255, 110))
+        hl = hl.filter(ImageFilter.GaussianBlur(1.2 * S))
+        mask = Image.new("L", (n_w, n_h), 0)
+        ImageDraw.Draw(mask).rounded_rectangle((x0, y0, x1, y1), radius=r, fill=255)
+        hl.putalpha(Image.composite(hl.split()[3], Image.new("L", (n_w, n_h), 0), mask))
+        glass.alpha_composite(hl)
+        g.rounded_rectangle((x0, y0, x1, y1), radius=r, outline=(255, 255, 255, int(70 + 60 * active)),
+                            width=max(1, int(1.0 * S)))
+        img.alpha_composite(glass)
         if len(self._cache) > 40:
             self._cache.clear()
         self._cache[key] = img
         return img
 
-    def _disc_r(self, active: float) -> float:
-        return (self.BASE / 2) * self.scale * self.SS * (0.78 + 0.22 * active)
+    def _bars(self, d, col) -> None:
+        """Shiny vertical bars rising from the stick's centre line."""
+        n_w, n_h, x0, y0, x1, y1, r = self._geom()
+        S = self.SS * self.scale
+        cy = (y0 + y1) / 2
+        inner_w = (x1 - x0) - 2 * r
+        gap = inner_w / (self.BARS - 1)
+        bw = 1.3 * S                       # half-width
+        hmax = (y1 - y0) * 0.8
+        for i, lvl in enumerate(self.hist):
+            h = hmax * (0.18 + 0.82 * min(1.0, lvl / 0.10) ** 0.55)
+            x = x0 + r + gap * i
+            d.rounded_rectangle((x - bw, cy - h / 2, x + bw, cy + h / 2), radius=bw, fill=(255, 255, 255, 235))
+            d.rounded_rectangle((x - bw, cy - h / 2, x + bw, cy + h / 2), radius=bw, fill=col + (150,))
+            # bright core along the left edge reads as a reflection
+            d.rounded_rectangle((x - bw * 0.7, cy - h / 2 + bw, x - bw * 0.1, cy + h / 2 - bw),
+                                radius=bw * 0.3, fill=(255, 255, 255, 120))
+
+    def _pulse(self, img, alpha_scale: float = 1.0) -> None:
+        """Orange-to-yellow gradient sweeping along the stick, breathing in brightness."""
+        n_w, n_h, x0, y0, x1, y1, r = self._geom()
+        S = self.SS * self.scale
+        t = self.frame / 25.0
+        xs = np.linspace(0, 1, n_w, dtype=np.float32)
+        wave = 0.5 + 0.5 * np.sin(2 * np.pi * (xs * 1.5 - t * 0.8))
+        orange = np.array([255, 140, 30], np.float32)
+        yellow = np.array([255, 225, 90], np.float32)
+        row = orange[None, :] * (1 - wave[:, None]) + yellow[None, :] * wave[:, None]
+        breathe = 0.65 + 0.35 * np.sin(2 * np.pi * t * 0.9)
+        a = np.full((n_w, 1), int(170 * breathe * alpha_scale), np.float32)
+        rgba = np.concatenate([row, a], axis=1).astype(np.uint8)
+        grad = Image.fromarray(np.broadcast_to(rgba[None, :, :], (n_h, n_w, 4)).copy(), "RGBA")
+        mask = Image.new("L", (n_w, n_h), 0)
+        ImageDraw.Draw(mask).rounded_rectangle((x0 + 1.5 * S, y0 + 1.5 * S, x1 - 1.5 * S, y1 - 1.5 * S),
+                                              radius=r, fill=255)
+        grad.putalpha(Image.composite(grad.split()[3], Image.new("L", (n_w, n_h), 0), mask))
+        img.alpha_composite(grad)
 
     def _render(self) -> Image.Image:
         active = self.anim
         img = self._base(self.state, active).copy()
-        c = img.size[0] / 2
         col = COLORS[self.state]
-        disc_r = self._disc_r(active)
-        d = ImageDraw.Draw(img)
         if self.state in ("recording", "persistent"):
-            bw = disc_r * 0.055          # half-width of a bar
-            gap = disc_r * 0.19
-            x0 = c - gap * (self.BARS - 1) / 2
-            for i, lvl in enumerate(self.hist):
-                # loudness -> height, curved so quiet speech still shows; 0.12 RMS ~ loud
-                h = disc_r * (0.16 + 1.0 * min(1.0, lvl / 0.12) ** 0.6)
-                x = x0 + gap * i
-                d.rounded_rectangle((x - bw, c - h / 2, x + bw, c + h / 2), radius=bw, fill=col + (235,))
+            self._bars(ImageDraw.Draw(img), col)
         elif self.state in ("busy", "loading"):
-            ang = (self.frame * 9) % 360
-            r = disc_r * 0.5
-            d.arc((c - r, c - r, c + r, c + r), start=ang, end=ang + 100, fill=col + (230,),
-                  width=int(disc_r * 0.1))
-        else:  # idle: a small quiet dot
-            r = disc_r * 0.1
-            d.ellipse((c - r, c - r, c + r, c + r), fill=col + (140,))
+            self._pulse(img, 1.0 if self.state == "busy" else 0.6)
         return img.reduce(self.SS)  # box filter: the 2x supersample already did the anti-aliasing
 
     # --- API ----------------------------------------------------------------
@@ -231,7 +266,7 @@ class Overlay:
         self.frame += 1
         if self.state in ("recording", "persistent"):
             self.hist.append(self.get_level())
-        if self.state == "idle" and abs(self.anim) < 0.01 and self.frame % 10:
+        if self.state == "idle" and self.anim < 0.01 and self.frame % 10:
             return  # idle look is static: no need to redraw every frame
         self._blit(self._render())
         user32.SetWindowPos(self.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
