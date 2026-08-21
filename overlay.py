@@ -89,14 +89,16 @@ def set_dpi_aware() -> float:
 
 class Overlay:
     """A small glass stick at the bottom centre. Near-invisible at rest. While recording it
-    turns red (amber in persistent mode) and a waveform of thin glowing bars rises out of it
-    - the bars are centred on the stick and extend well above and below it, newest at the
-    right, scrolling left. An orange-to-yellow pulse runs along it while transcribing.
+    turns red (amber in persistent mode) and a bundle of thin neon curves flows out of it,
+    mirrored about the centre line: the voice level sets the envelope (newest at the right,
+    scrolling left), several sine strands ride inside it, and everything pinches back to
+    the stick at both ends. An orange-to-yellow pulse runs along it while transcribing.
     Call tick() from the UI thread's timer (~25 fps); post(state) from any thread."""
 
     W, H = 48, 7     # stick size in logical px
     PAD = 22         # headroom for the waveform, glow and shadow
-    POINTS = 23      # bars across the stick; one level sample each
+    POINTS = 40      # level samples across the stick (the envelope)
+    STRANDS = 6      # curves per side
     SS = 2           # supersampling
 
     def __init__(self, get_level, scale: float = 1.0):
@@ -167,37 +169,49 @@ class Overlay:
         ImageDraw.Draw(m).rounded_rectangle((x0, y0, x1, y1), radius=r, fill=255)
         return m
 
-    def _bars(self, img: Image.Image, col, amp: float) -> None:
-        """Thin rounded bars centred on the stick, rising out of it with the voice. Heights
-        are normalised to a slowly decaying running peak so they fill for any mic gain."""
+    def _waves(self, img: Image.Image, col, amp: float) -> None:
+        """A bundle of thin glowing curves inside a voice-driven envelope, mirrored top/bottom."""
         n_w, n_h, x0, y0, x1, y1, r = self._geom()
         S = self.SS * self.scale
         cy = (y0 + y1) / 2
-        lv = np.array(self.hist, dtype=np.float32)                    # oldest .. newest
-        norm = np.clip((lv - 0.002) / max(self.peak, 0.004), 0, 1) ** 0.8
-        norm = np.convolve(np.pad(norm, 1, mode="edge"), [0.25, 0.5, 0.25], mode="valid")
-        hmin = (y1 - y0) * 0.35
-        hmax = self.H * S * 4.2 * amp                                  # tallest bar, above+below
-        xs = np.linspace(x0 + r * 0.9, x1 - r * 0.9, len(norm))
-        bw = 0.7 * S                                                   # half-width
+        # envelope: level history (oldest left .. newest right), auto-gained, smoothed, pinched at the ends
+        lv = np.array(self.hist, dtype=np.float32)
+        env = np.clip((lv - 0.002) / max(self.peak, 0.004), 0, 1) ** 0.7
+        N = 160
+        xs = np.linspace(x0 + r * 0.6, x1 - r * 0.6, N)
+        env = np.interp(np.linspace(0, len(env) - 1, N), np.arange(len(env)), env)
+        k = np.exp(-0.5 * (np.arange(-10, 11) / 4.0) ** 2); k /= k.sum()
+        env = np.convolve(np.pad(env, 10, mode="edge"), k, mode="valid")
+        env *= np.sin(np.linspace(0, np.pi, N)) ** 0.6           # contained: flat at both ends
+        hmax = min(self.H * S * 4.0, (self.PAD - 3) * S) * amp   # never past the window edge
+        t = self.frame / 25.0
+        u = np.linspace(0, 1, N)
         layer = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
         d = ImageDraw.Draw(layer)
-        for x, v in zip(xs, norm):
-            h = hmin + hmax * float(v)
-            d.rounded_rectangle((x - bw, cy - h / 2, x + bw, cy + h / 2), radius=bw, fill=col + (240,))
-        # glow behind the bars, then the bars, then a thin bright core so they read as glass
-        glow = layer.split()[3].filter(ImageFilter.GaussianBlur(2.2 * S)).point(lambda v: min(255, v * 1.5) * 0.55)
+        light = tuple(min(255, int(c * 0.45 + 255 * 0.55)) for c in col)
+        for i in range(self.STRANDS):
+            f = i % 3
+            # each strand: a slow travelling ripple (different speed/frequency) inside the envelope
+            ripple = 0.6 + 0.4 * np.sin(2 * np.pi * (u * (0.8 + 0.45 * f) - t * (0.3 + 0.12 * i)) + i * 1.1)
+            y = hmax * env * ripple * (0.55 + 0.45 * (i + 1) / self.STRANDS)
+            mix = i / max(1, self.STRANDS - 1)
+            c = tuple(int(col[j] * (1 - mix) + light[j] * mix) for j in range(3))
+            width = max(1, int((1.3 - 0.12 * i) * S))
+            for sign in (1, -1):
+                pts = [(float(x), float(cy + sign * yy)) for x, yy in zip(xs, y)]
+                d.line(pts, fill=c + (170,), width=width, joint="curve")
+        glow = layer.split()[3].filter(ImageFilter.GaussianBlur(2.5 * S)).point(lambda v: min(255, v * 2.0) * 0.5)
         g = Image.new("RGBA", (n_w, n_h), col + (255,))
         g.putalpha(glow)
         img.alpha_composite(g)
         img.alpha_composite(layer)
+        # bright centre strand reads as the neon core
         core = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
         dc = ImageDraw.Draw(core)
-        for x, v in zip(xs, norm):
-            h = hmin + hmax * float(v)
-            if h > 4 * bw:
-                dc.rounded_rectangle((x - bw * 0.35, cy - h / 2 + bw, x + bw * 0.35, cy + h / 2 - bw),
-                                     radius=bw * 0.35, fill=(255, 255, 255, 150))
+        y = hmax * env * (0.6 + 0.4 * np.sin(2 * np.pi * (u * 1.3 - t * 0.4))) * 0.95
+        for sign in (1, -1):
+            dc.line([(float(x), float(cy + sign * yy)) for x, yy in zip(xs, y)], fill=(255, 255, 255, 140),
+                    width=max(1, int(0.6 * S)), joint="curve")
         img.alpha_composite(core)
 
     def _glass(self, mask: Image.Image, col, active: float, tint_idle: bool) -> Image.Image:
@@ -213,7 +227,7 @@ class Overlay:
         sh = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 255))
         sh.putalpha(shm)
         img.alpha_composite(sh)
-        if active > 0.05:
+        if active > 0.05 and not tint_idle:
             glm = mask.filter(ImageFilter.GaussianBlur(5 * S)).point(lambda v: min(255, v * 1.6) * 0.5 * active)
             gl = Image.new("RGBA", (n_w, n_h), col + (255,))
             gl.putalpha(glm)
@@ -221,7 +235,7 @@ class Overlay:
         # body
         tint = (220, 220, 230) if tint_idle else tuple(int(c * active + 200 * (1 - active)) for c in col)
         body = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
-        body.paste(tint + (int(30 + 95 * active),), (0, 0), mask)
+        body.paste(tint + (30 if tint_idle else int(30 + 95 * active),), (0, 0), mask)
         # specular: a blurred bright band across the upper part of the shape
         hl = Image.new("L", (n_w, n_h), 0)
         arr = np.asarray(mask, dtype=np.float32) / 255
@@ -236,7 +250,7 @@ class Overlay:
         # rim: the mask's edge, brighter on top
         edge = np.asarray(mask.filter(ImageFilter.FIND_EDGES), dtype=np.float32)
         rim = Image.new("RGBA", (n_w, n_h), (255, 255, 255, 0))
-        rim.putalpha(Image.fromarray(np.clip(edge * (0.5 + 0.3 * active), 0, 150).astype(np.uint8), "L"))
+        rim.putalpha(Image.fromarray(np.clip(edge * (0.5 if tint_idle else 0.5 + 0.3 * active), 0, 150).astype(np.uint8), "L"))
         body.alpha_composite(rim)
         img.alpha_composite(body)
         return img
@@ -276,7 +290,7 @@ class Overlay:
         active = self.anim
         if self.state in ("recording", "persistent"):
             img = self._base(self.state, active).copy()
-            self._bars(img, COLORS[self.state], active)
+            self._waves(img, COLORS[self.state], active)
         else:
             img = self._base(self.state, active).copy()
             if self.state in ("busy", "loading"):
