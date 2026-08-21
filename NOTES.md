@@ -37,7 +37,9 @@ Decisions
   result is the stick's own silhouette; _fill paints it as one piece with a bright core line,
   glow and rim. Rejected on the way: bars inside the stick, swelling level blob, separated bars,
   sine strands (read as "blob + separate waves"). Idle never glows (no white flash on fade).
-  ~20 ms/frame. Asymmetry = per side, three wandering lobe centres (the spectrum read by distance
+  ~27 ms/frame. Shape = 14 fixed-pitch rounded bars (72% duty) rising from the container, union
+  with the stick, blurred 0.5px then glowed; the continuous silhouette read as "bars too small".
+  Asymmetry = per side, three wandering lobe centres (the spectrum read by distance
   from each axis, soft-OR'd) x a smooth random field (4 sines, random phases, slow drift); a single
   centred mirror read as symmetric and a lows-left layout as lopsided; the lows-left version read as "too focused to the left". Record -> busy is
   one morph: the shape keeps relaxing while _live_color crossfades accent -> busy (busymix eased)

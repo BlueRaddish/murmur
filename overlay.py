@@ -111,6 +111,7 @@ class Overlay:
     W, H = 48, 7     # stick size in logical px
     PAD = 22         # headroom for the waveform, glow and shadow
     BANDS = 20       # spectrum bands per half (mirrored -> 40 across)
+    NBARS = 14       # fixed-size bars across the container
     SS = 2           # supersampling
 
     def __init__(self, get_samples, scale: float = 1.0):
@@ -283,15 +284,21 @@ class Overlay:
         top_p = shape
         bot_p = shape * 0.85
         hmax = min(self.H * S * 4.0, (self.PAD - 3) * S) * amp
-        xs = np.linspace(x0 + r, x1 - r, N)
-        top = [(float(x), float(cy - (r + hmax * h))) for x, h in zip(xs, top_p)]
-        bot = [(float(x), float(cy + (r + hmax * h))) for x, h in zip(xs, bot_p)][::-1]
+        # fixed-size bars: NBARS at a fixed pitch across the container, each a rounded bar whose
+        # top and bottom follow the profile at its centre; the container (stick) stays underneath
         m = Image.new("L", (n_w, n_h), 0)
         d = ImageDraw.Draw(m)
-        d.polygon(top + bot, fill=255)
-        d.ellipse((x0, y0, x0 + 2 * r, y1), fill=255)
-        d.ellipse((x1 - 2 * r, y0, x1, y1), fill=255)
-        return m.filter(ImageFilter.GaussianBlur(0.4 * S))
+        d.rounded_rectangle((x0, y0, x1, y1), radius=r, fill=255)
+        inner_w = (x1 - x0) - 2 * r * 0.9
+        pitch = inner_w / self.NBARS
+        bw = pitch * 0.36                                        # half-width: 72% of the pitch
+        idx = np.linspace(0, N - 1, self.NBARS * 2 + 1)[1::2]    # profile sample at each bar centre
+        for i in range(self.NBARS):
+            xc = x0 + r * 0.9 + pitch * (i + 0.5)
+            ht = r + hmax * float(np.interp(idx[i], np.arange(N), top_p))
+            hb = r + hmax * float(np.interp(idx[i], np.arange(N), bot_p))
+            d.rounded_rectangle((xc - bw, cy - ht, xc + bw, cy + hb), radius=bw, fill=255)
+        return m.filter(ImageFilter.GaussianBlur(0.5 * S))
 
     @staticmethod
     def _lerp(a, b, m):
