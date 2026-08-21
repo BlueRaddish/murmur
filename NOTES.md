@@ -37,8 +37,9 @@ Decisions
   result is the stick's own silhouette; _fill paints it as one piece with a bright core line,
   glow and rim. Rejected on the way: bars inside the stick, swelling level blob, separated bars,
   sine strands (read as "blob + separate waves"). Idle never glows (no white flash on fade).
-  ~29 ms/frame. Asymmetry = mirrored spectrum x a smooth random field (4 sines, random phases,
-  slow drift) per side; the lows-left version read as "too focused to the left". Record -> busy is
+  ~20 ms/frame. Asymmetry = per side, three wandering lobe centres (the spectrum read by distance
+  from each axis, soft-OR'd) x a smooth random field (4 sines, random phases, slow drift); a single
+  centred mirror read as symmetric and a lows-left layout as lopsided; the lows-left version read as "too focused to the left". Record -> busy is
   one morph: the shape keeps relaxing while _live_color crossfades accent -> busy (busymix eased)
   and the pulse fades in on top; accent breathes slowly while recording. Resting glass is frosted:
   whitish body with seeded grain, weaker rim. `opacity` (0.2-1) from config scales body/glow/pulse. Release: anim eases at 0.06 and bands fall at 0.955 once idle, and the spectrum
@@ -51,6 +52,9 @@ Environment facts (this laptop, 2026-08-20)
   ramps). The *Headset Microphone* (`--mic 2`) carries real audio. WASAPI endpoints refuse
   16 kHz, hence the native-rate fallback + resample.
 - A running Wispr holds the mic; close it before testing.
+- Typist refuses to paste when murmur's own window is foreground (the text stays in history): the
+  user reported "no output" right after saving settings, which fits that; the log now also records
+  duration and RMS on "nothing heard" so a dead mic is distinguishable from silence.
 
 Verified
 - tests/test_murmur.py (state machine + real tiny.en transcription of TTS audio).

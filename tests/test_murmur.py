@@ -195,6 +195,7 @@ o.scale, o.w, o.h = 2.0, int((overlay.Overlay.W + 44) * 2), int((overlay.Overlay
 o.frame, o.anim, o._cache, o.peak = 3, 1.0, {}, 1.0
 o.bands = np.zeros(overlay.Overlay.BANDS, dtype=np.float32); o.colors = dict(overlay.COLORS); o.fall = 0.9
 o.opacity, o.busymix, o.rng = 0.9, 0.0, np.random.default_rng(1); o.noise_phase = o.rng.uniform(0, 6.28, size=(2, 4))
+o.axes = [[o.rng.uniform(0.2, 0.8, 3), o.rng.uniform(0, 6.28, 3), o.rng.uniform(0.02, 0.06, 3)] for _ in range(2)]
 o.set_colors({"opacity": "1.7"}); assert o.opacity == 1.0
 o.set_colors({"opacity": "x"}); assert o.opacity == 0.9
 assert overlay.hex_rgb("#1a2B3c", None) == (26, 43, 60) and overlay.hex_rgb("abc", None) == (170, 187, 204)

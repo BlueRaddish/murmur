@@ -168,7 +168,22 @@ class Typist:
         self.kb = Controller()
 
     def type(self, text: str) -> None:
+        if self.foreground_is_ours():
+            log("  (murmur's own window is focused; kept in history, not pasted)")
+            return
         old = None
+
+    @staticmethod
+    def foreground_is_ours() -> bool:
+        """True when the focused window belongs to this process (the settings window)."""
+        try:
+            import ctypes
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            pid = ctypes.c_ulong()
+            ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            return pid.value == os.getpid()
+        except Exception:
+            return False
         try:
             old = pyperclip.paste()
         except Exception:
@@ -374,7 +389,8 @@ class Murmur:
                 tail = self.transcribe(audio[take.committed:], " ".join(take.parts))
                 text = clean(" ".join(p for p in take.parts + [tail] if p))
                 if not text:
-                    log("  (nothing heard)")
+                    rms = float(np.sqrt((audio ** 2).mean())) if len(audio) else 0.0
+                    log(f"  (nothing heard: {len(audio) / SAMPLE_RATE:.1f}s, rms {rms:.4f})")
                     return
                 log(f"  {text}  [{time.time() - t0:.1f}s]")
                 self.typist.type(text)

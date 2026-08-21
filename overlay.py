@@ -122,6 +122,10 @@ class Overlay:
         self.busymix = 0.0               # 0 = accent colour, 1 = transcribing colour; eased
         self.rng = np.random.default_rng(7)
         self.noise_phase = self.rng.uniform(0, 2 * np.pi, size=(2, 4))   # random field per side
+        # asymmetry axes: each side has a few lobe centres that wander; the spectrum is laid out
+        # around each centre (lows at the centre, highs outward) and the lobes are soft-OR'd
+        self.axes = [[self.rng.uniform(0.2, 0.8, 3), self.rng.uniform(0, 2 * np.pi, 3),
+                      self.rng.uniform(0.02, 0.06, 3)] for _ in range(2)]
         self.scale = scale
         self.w = int((self.W + 2 * self.PAD) * scale)
         self.h = int((self.H + 2 * self.PAD) * scale)
@@ -256,9 +260,27 @@ class Overlay:
                  + 0.5 * np.sin(2 * np.pi * (u * 4.1 + 0.05 * t) + ph[2]) + 0.4 * np.sin(2 * np.pi * (u * 0.6 - 0.13 * t) + ph[3]))
             return 0.72 + 0.28 * f / 2.6
 
-        mirrored = np.concatenate([self.bands[::-1], self.bands])
-        top_p = profile(mirrored) * field(0)
-        bot_p = profile(mirrored) * field(1) * 0.9
+        def lobes(side):
+            """Profile over x from several wandering axes. Each axis k sits at c_k(t) and spans
+            w_k; the band curve is read by distance from the axis. Combined as 1-prod(1-v)."""
+            centres, phases, speeds = self.axes[side]
+            acc = np.ones(N, dtype=np.float32)
+            widths = (0.55, 0.38, 0.3)
+            gains = (1.0, 0.8, 0.65)
+            for k in range(3):
+                c = centres[k] + 0.22 * np.sin(2 * np.pi * speeds[k] * t + phases[k]) \
+                    + 0.08 * np.sin(2 * np.pi * speeds[k] * 2.7 * t + phases[k] * 1.7)
+                d = np.clip(np.abs(u - c) / widths[k], 0, 1)
+                v = np.interp(d * (len(self.bands) - 1), np.arange(len(self.bands)), self.bands) * gains[k]
+                v *= (1 - d) ** 0.35                              # fade each lobe at its rim
+                acc *= 1 - np.clip(v, 0, 1)
+            pr = 1 - acc
+            pr = np.convolve(np.pad(pr, 8, mode="edge"), k_, mode="valid")
+            return pr * taper
+
+        k_ = k
+        top_p = lobes(0) * field(0)
+        bot_p = lobes(1) * field(1) * 0.9
         hmax = min(self.H * S * 4.0, (self.PAD - 3) * S) * amp
         xs = np.linspace(x0 + r, x1 - r, N)
         top = [(float(x), float(cy - (r + hmax * h))) for x, h in zip(xs, top_p)]
