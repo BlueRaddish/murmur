@@ -52,6 +52,10 @@ Environment facts (this laptop, 2026-08-20)
   ramps). The *Headset Microphone* (`--mic 2`) carries real audio. WASAPI endpoints refuse
   16 kHz, hence the native-rate fallback + resample.
 - A running Wispr holds the mic; close it before testing.
+- **2026-08-20 regression:** a patch inserted foreground_is_ours() into the middle of Typist.type(),
+  making the paste unreachable for one build; tests/test_murmur.py now exercises Typist end to end.
+  Typist no longer restores the old clipboard (the text stays there as a fallback), waits for
+  Ctrl/Win to be physically up before Ctrl+V (else Windows sees Win+V), retries a locked clipboard.
 - Typist refuses to paste when murmur's own window is foreground (the text stays in history): the
   user reported "no output" right after saving settings, which fits that; the log now also records
   duration and RMS on "nothing heard" so a dead mic is distinguishable from silence.

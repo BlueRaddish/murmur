@@ -90,7 +90,7 @@ winget install JRSoftware.InnoSetup      # optional, for the installer
 
 `pynput` listens for the chord globally. While held, `sounddevice` records the mic at
 16 kHz. On release the audio goes to faster-whisper (int8 on CPU), the text is placed on the
-clipboard, Ctrl+V is sent, and your previous clipboard is restored. While recording, a
+clipboard and Ctrl+V is sent; the text stays on the clipboard afterwards. While recording, a
 background pass every 1.5 s transcribes the uncommitted audio and commits every segment but
 the last. `overlay.py` renders the stick with PIL into a per-pixel-alpha layered window
 (crisp at any DPI, click-through);

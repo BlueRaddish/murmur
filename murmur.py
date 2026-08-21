@@ -161,17 +161,14 @@ class Recorder:
 
 
 class Typist:
-    """Types text into the focused window via clipboard paste (reliable for unicode
-    and instant for long text), then restores whatever was on the clipboard."""
+    """Puts the text on the clipboard and pastes it into the focused window (reliable for
+    unicode, instant for long text). The text stays on the clipboard afterwards, so it can
+    be pasted again by hand if the target app missed it."""
+
+    VK_CONTROL, VK_LWIN, VK_RWIN, VK_MENU, VK_SHIFT = 0x11, 0x5B, 0x5C, 0x12, 0x10
 
     def __init__(self):
         self.kb = Controller()
-
-    def type(self, text: str) -> None:
-        if self.foreground_is_ours():
-            log("  (murmur's own window is focused; kept in history, not pasted)")
-            return
-        old = None
 
     @staticmethod
     def foreground_is_ours() -> bool:
@@ -184,17 +181,39 @@ class Typist:
             return pid.value == os.getpid()
         except Exception:
             return False
+
+    @staticmethod
+    def modifiers_down() -> bool:
         try:
-            old = pyperclip.paste()
+            import ctypes
+            gk = ctypes.windll.user32.GetAsyncKeyState
+            return any(gk(vk) & 0x8000 for vk in (Typist.VK_CONTROL, Typist.VK_LWIN, Typist.VK_RWIN,
+                                                   Typist.VK_MENU, Typist.VK_SHIFT))
         except Exception:
-            pass
-        pyperclip.copy(text)
+            return False
+
+    def type(self, text: str) -> None:
+        if self.foreground_is_ours():
+            log("  (murmur's own window is focused; kept in history, not pasted)")
+            return
+        # the clipboard can be briefly locked by another app: retry rather than lose the text
+        for attempt in range(8):
+            try:
+                pyperclip.copy(text)
+                break
+            except Exception as e:
+                if attempt == 7:
+                    log(f"  clipboard: {e}")
+                    return
+                time.sleep(0.05)
+        # if Ctrl/Win are still physically held (short tail after a fast release, or persistent
+        # mode's stop chord), Ctrl+V would become Ctrl+Win+V - wait for them to come up first
+        t0 = time.monotonic()
+        while self.modifiers_down() and time.monotonic() - t0 < 1.5:
+            time.sleep(0.02)
         with self.kb.pressed(Key.ctrl):
             self.kb.press("v")
             self.kb.release("v")
-        time.sleep(0.15)  # let the target app read the clipboard before we restore it
-        if old is not None:
-            pyperclip.copy(old)
 
 
 class Take:

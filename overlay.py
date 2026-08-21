@@ -279,8 +279,9 @@ class Overlay:
             return pr * taper
 
         k_ = k
-        top_p = lobes(0) * field(0)
-        bot_p = lobes(1) * field(1) * 0.9
+        shape = lobes(0) * field(0)       # one set of axes for both halves: they move together
+        top_p = shape
+        bot_p = shape * 0.85
         hmax = min(self.H * S * 4.0, (self.PAD - 3) * S) * amp
         xs = np.linspace(x0 + r, x1 - r, N)
         top = [(float(x), float(cy - (r + hmax * h))) for x, h in zip(xs, top_p)]
@@ -332,7 +333,7 @@ class Overlay:
         img.alpha_composite(body)
         edge = np.asarray(mask.filter(ImageFilter.FIND_EDGES), dtype=np.float32)
         rim = Image.new("RGBA", (n_w, n_h), (255, 255, 255, 0))
-        rim.putalpha(Image.fromarray(np.clip(edge * 0.7, 0, 160).astype(np.uint8), "L"))
+        rim.putalpha(Image.fromarray(np.clip(edge * 0.7 * active, 0, 160).astype(np.uint8), "L"))
         img.alpha_composite(rim)
 
     def _glass(self, mask: Image.Image, col, active: float, tint_idle: bool) -> Image.Image:
@@ -417,7 +418,7 @@ class Overlay:
 
     def _render(self) -> Image.Image:
         active = self.anim
-        shaped = self.bands.max() > 0.01
+        shaped = self.bands.max() > 0.01 or (self.state == "idle" and active > 0.01)
         if self.state in ("recording", "persistent") or shaped:
             # the spectrum shape persists after release and relaxes; its colour crossfades into the
             # transcribing colour while busy, and the pulse fades in on top of it
@@ -425,8 +426,8 @@ class Overlay:
             self._fill(img, self._spectrum_mask(max(active, 0.15)), self._live_color(self.state), max(active, 0.15))
             if self.busymix > 0.02:
                 self._pulse(img, self.busymix * (1.0 if self.state == "busy" else 0.6))
-            if self.state == "idle":                           # cross-fade towards the resting stick
-                img = Image.blend(self._base("idle", 0.0), img, min(1.0, active * 1.5 + 0.1))
+            if self.state == "idle":                           # cross-fade into the resting stick
+                img = Image.blend(self._base("idle", 0.0), img, min(1.0, active * 1.2))
         else:
             img = self._base(self.state, active).copy()
             if self.state in ("busy", "loading"):

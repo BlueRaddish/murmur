@@ -188,6 +188,27 @@ try:
 finally: murmur.sd.InputStream = _orig
 print("stream cleanup ok")
 
+# Typist: text stays on the clipboard, paste waits for modifiers to come up, clipboard lock is retried
+import pyperclip
+ty = murmur.Typist(); ty.foreground_is_ours = lambda: False
+pressed = []
+ty.kb = type("KB", (), {"pressed": lambda self, k: __import__("contextlib").nullcontext(pressed.append(("hold", k))),
+                        "press": lambda self, k: pressed.append(("press", k)), "release": lambda self, k: pressed.append(("rel", k))})()
+held = {"n": 3}
+def mods(): held["n"] -= 1; return held["n"] > 0
+ty.modifiers_down = mods
+fails = {"n": 2}; _copy = pyperclip.copy
+def flaky(t):
+    if fails["n"] > 0: fails["n"] -= 1; raise RuntimeError("clipboard locked")
+    _copy(t)
+pyperclip.copy = flaky
+try:
+    ty.type("hello clip")
+finally:
+    pyperclip.copy = _copy
+assert pyperclip.paste() == "hello clip" and held["n"] == 0 and ("press", "v") in pressed
+print("typist ok")
+
 # overlay renders every state with silence, speech-like audio and garbage, without raising
 import overlay
 o = overlay.Overlay.__new__(overlay.Overlay)
