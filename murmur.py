@@ -460,11 +460,11 @@ class Murmur:
     # --- transcription ------------------------------------------------------
     def _segments(self, audio: np.ndarray, prev: str = "") -> list:
         # Whisper copies the prompt's punctuation style: a comma list with no full stop made every
-        # piece come out unpunctuated and lower-case, so the prompt reads as sentences.
-        ctx = prev[-200:].strip()
-        if ctx and ctx[-1].isalnum():   # ends mid-sentence with no punctuation: close it for the prompt;
-            ctx += "."                   # a trailing comma stays, so the next window continues the sentence
-        prompt = " ".join(p for p in (self.vocab and self.vocab + ".", ctx) if p) or None
+        # window come out unpunctuated and lower-case, so the vocab list is closed with a period.
+        # The context is passed exactly as committed: Whisper ends every sentence it finishes
+        # with punctuation, so a bare word at the end means mid-sentence, and closing it made the
+        # next window start a new sentence ("Docker runs The Kubernetes tests").
+        prompt = " ".join(p for p in (self.vocab and self.vocab + ".", prev[-200:].strip()) if p) or None
         # beam 5 (Whisper's classic). beam_size 1 in config is 1.6x faster and scored the same on
         # TTS'd technical text, but real speech is noisier and the user rates accuracy first.
         # temperature=0: no retry ladder. Whisper's default re-decodes a piece at up to five

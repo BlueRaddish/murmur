@@ -151,10 +151,10 @@ m.model.transcribe = _t
 # a released take being transcribed takes precedence over background passes
 m.recorder.snapshot = lambda start=0: np.zeros(16000 * 7, dtype=np.float32)[start:]
 m.pending = 1; assert m._stream_pass(murmur.Take()) == 0; m.pending = 0
-# prompt style: context ending in a word gets a period, a trailing comma is kept (the next window
-# must continue the sentence, not start a new one), existing terminal punctuation is untouched
+# prompt style: the vocab list is closed with a period; the context is passed exactly as committed
+# (a bare word means mid-sentence: the next window must continue it, not start a new one)
 m.recorder.snapshot = lambda start=0: np.zeros(16000 * 7, dtype=np.float32)[start:]; m.model.transcribe = _t
-for prev, tail in (("hello there", "hello there."), ("disabled,", "disabled,"), ("done.", "done."), ("really?", "really?")):
+for prev, tail in (("hello there", "tmux. hello there"), ("disabled,", "tmux. disabled,"), ("done.", "tmux. done."), ("", "tmux.")):
     m._segments(np.zeros(16000, dtype=np.float32), prev); assert m.model.calls[-1][1].endswith(tail), (prev, m.model.calls[-1][1])
 # beam size comes from config (beam 5 by default)
 orig = m.model; m.model = FakeModel(); m.recorder.snapshot = lambda start=0: np.zeros(16000 * 7, dtype=np.float32)[start:]

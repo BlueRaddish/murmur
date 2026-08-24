@@ -47,10 +47,13 @@ Decisions
   for the same reason (greedy matched it on TTS only). `streaming: false` in config = whole
   take at release. The prompt is written as sentences (vocab + "." + context + "."): Whisper
   copies the prompt's punctuation style, and the comma-list prompt made every piece come out
-  unpunctuated and lower-case. Sim (61 s TTS spoken in realtime into a fake recorder, real
-  small.en, busy CPU; sim_stream.py in the session scratchpad): four runs of the final code
-  gave text 5.6-7.8 s after release at WER 0.014-0.034, vs 12-18 s / 0.048 for the same audio in
-  one call - the spread is the foreign load moving between runs, not the code.
+  unpunctuated and lower-case; the committed context is passed as is (closing a bare-word
+  ending with a period made the next window start a new sentence: "Docker runs The Kubernetes").
+  Sim (61 s TTS spoken in realtime into a fake recorder, real small.en, beam 5, busy CPU;
+  sim_stream.py in the session scratchpad), rolled-back code: text 8.8-9.2 s after release at
+  WER 0.014-0.020, vs 19.6-22.3 s / 0.041 for the same audio in one call. (The rejected
+  phrase-pieces variant had measured 5.6-7.8 s / 0.014-0.034 on the same TTS - faster, and
+  useless on real speech.)
 - Overlay (v0.4): 48x7 glass stick (_glass builds shadow/glow/body/specular/rim from a mask, cached
   per state). Recording is a spectrum visualizer in the cava/easyeffects mould: Recorder keeps the
   last 2048 samples; _analyse does FFT -> 20 log bands (90 Hz-5.5 kHz) -> log magnitude ->
@@ -78,9 +81,10 @@ Decisions
 - Performance (v0.6, measured 2026-08-24 on the i7-9750H with the CPU ~95% busy from other apps,
   interleaved A/B, min of rounds):
   - Every Whisper call has a fixed cost (the encoder always sees a padded 30 s window): 3 s of
-    audio 4.5 s, 6 s 4.9 s, 15 s 5.6 s (small.en, greedy, above-normal priority). So pieces are
-    phrase-sized (>= 3 s at a pause) or 6-20 s (run-on), never word-sized: word-sized would be
-    ~200 encoder passes for 200 words, and context-free fragments hallucinate.
+    audio 4.5 s, 6 s 4.9 s, 15 s 5.6 s (small.en, greedy, above-normal priority). So windows are
+    6-30 s of new audio cut only at Whisper's own segment boundaries, never word-sized: word-sized
+    would be ~200 encoder passes for 200 words, and context-free fragments hallucinate (and, as
+    the rejected phrase-pieces variant showed, so do pause-cut fragments on real speech).
   - Every take in the user's log had hit "stream: model slower than realtime, streaming off":
     the old rule judged the cold first pass and then transcribed the whole take at release
     (130 s -> 36 s). Gone: a slow model just gets bigger pieces.
@@ -90,7 +94,8 @@ Decisions
     neutral at high; the two runs' "normal" figures differ because the foreign load did. 2 threads
     lose to 4 (the default) everywhere; 12 collapsed before.
   - beam 5 vs 3 vs 1 on 60 s of TTS'd technical text: 26.1 / 25.0 / 21.9 s, WER 0.048 / 0.075
-    / 0.054 (differences are capitalisation). Greedy is the default; `beam_size` in config.
+    / 0.054 (differences are capitalisation). beam 5 stays the default (real speech is noisier
+    than TTS and the user rates accuracy first); `beam_size: 1` in config is the speed knob.
   - distil-small.en: WER 0.63 and slower (42 s vs 10 s for 15 s) - repetition loops into the
     temperature ladder. Rejected. base.en: 2x faster, WER 0.14-0.16 (Py installer, ino setup,
     Reg X, Stlib) - stays optional.
