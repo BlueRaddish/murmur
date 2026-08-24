@@ -57,9 +57,11 @@ transcribing. If it stays a flat red line while you talk, it is listening to the
 input: pick the microphone in Settings.
 
 **Latency.** Transcription runs while you are still talking: every 6 s or so of new speech
-is decoded in the background and everything up to the last sentence boundary Whisper itself
-found is committed; that last sentence is decoded again with the next window, so nothing is
-ever cut at *your* pauses (cutting there was tried and turned a dictation into fragments).
+is decoded in the background and everything up to the last segment boundary Whisper itself
+found is committed; that last segment is decoded again with the next window. Cuts happen only
+where Whisper ends a segment with the continuation in view - the same boundaries a whole-take
+transcription produces - never at a silence detector's idea of a pause (that was tried and
+turned a dictation into fragments).
 On release only the window in flight and the tail are left, so a two-minute dictation lands
 in seconds instead of half a minute. Each Whisper call costs about the same (~1 s on an idle
 CPU, 4-5 s on a busy one) whether it gets 3 s or 15 s of audio, which is why windows are

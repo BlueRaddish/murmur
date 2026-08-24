@@ -129,9 +129,12 @@ m.model.transcribe = _t
 take3 = murmur.Take(); m.model.transcribe = lambda audio, **kw: (iter([Seg(" a", 1.0), Seg(" b", 99.0, start=99.0)]), None)
 m.recorder.snapshot = lambda start=0: np.zeros(16000 * 7, dtype=np.float32)[start:]
 m._stream_pass(take3); assert take3.committed == 7 * 16000
-# no speech in the window: advance, keeping the last half second (a word may be starting)
+# no result for the window: advance, keeping the last 1.5 s (a word Whisper refused may be starting)
 take4 = murmur.Take(); m.model.transcribe = lambda audio, **kw: (iter([]), None)
-m._stream_pass(take4); assert take4.committed == 7 * 16000 - 8000 and take4.parts == []
+m._stream_pass(take4); assert take4.committed == 7 * 16000 - 24000 and take4.parts == []
+# a first segment a few frames long is not a boundary: stall instead of a 20 ms advance and a re-decode
+take4b = murmur.Take(); m.model.transcribe = lambda audio, **kw: (iter([Seg(" ...", 0.02, start=0.0), Seg(" real text", 6.5, start=0.02)]), None)
+assert m._stream_pass(take4b) == 7 * 16000 and take4b.committed == 0 and take4b.parts == [] and take4b.stalled == 7 * 16000
 # one segment below the cap: nothing committed yet (it may still be mid-sentence)
 take5 = murmur.Take(); m.model.transcribe = lambda audio, **kw: (iter([Seg(" run on", 6.5, start=0.2)]), None)
 assert m._stream_pass(take5) == 7 * 16000 and take5.committed == 0 and take5.parts == []

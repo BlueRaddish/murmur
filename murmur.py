@@ -493,16 +493,17 @@ class Murmur:
     STREAM_CAP = 20.0    # usual window ceiling: bounds the wait for the pass in flight at release
     STREAM_MAX = 30.0    # a window that came back as one segment may grow to Whisper's own window
     STREAM_GROW = 3.0    # after a pass that could commit nothing, this much new audio before retrying
-    STREAM_KEEP = 0.5    # seconds kept back after a window with no speech: a word may be starting
+    STREAM_KEEP = 1.5    # kept back after a window with no result: a word Whisper refused may be starting
 
     def _stream_loop(self, take: "Take") -> None:
         """Runs while a take is recording: passes go back-to-back as soon as STREAM_MIN seconds
         are uncommitted, so at release only the window in flight plus a short tail remain.
         Every Whisper call costs ~1 s idle / 4-5 s on a busy CPU whatever its length (the
         encoder always sees a padded 30 s window; 3 s of audio took 4.5 s, 15 s took 5.6 s),
-        so windows are medium-sized and are cut only where Whisper itself ends a sentence -
-        never at the speaker's pauses: cutting there (tried as "phrase pieces", v0.6 pre-release)
-        turned a real dictation into "Go ahead and... On my status line... Setup. Obsession."
+        so windows are medium-sized and are cut only where Whisper itself ends a segment,
+        decided with the continuation in view - the boundaries a whole-take transcription would
+        produce. Cutting at the speaker's silences instead (tried as "phrase pieces", v0.6
+        pre-release) turned a real dictation into "Go ahead and... Setup. Obsession."
         A model slower than realtime just gets bigger windows; it is never switched off."""
         while take.active:
             try:
@@ -540,17 +541,22 @@ class Murmur:
                 return 0
             segs = self._segments(audio, " ".join(take.parts))
         take.stalled = 0
-        if len(segs) == 1 and n >= SAMPLE_RATE * self.STREAM_MAX:
-            take.parts.append(clean(segs[0].text))
-            take.committed += n
-        elif len(segs) >= 2:
+        full = n >= SAMPLE_RATE * self.STREAM_MAX
+        advance = min(int(segs[-1].start * SAMPLE_RATE), n) if len(segs) >= 2 else 0
+        if len(segs) >= 2 and advance >= SAMPLE_RATE * self.STREAM_KEEP:
             take.parts.append(clean(" ".join(s.text for s in segs[:-1])))
-            take.committed += min(int(segs[-1].start * SAMPLE_RATE), len(audio))
+            take.committed += advance
+        elif segs and full:   # 30 s and still no usable boundary: take it whole, as a whole-take call would
+            take.parts.append(clean(" ".join(s.text for s in segs)))
+            take.committed += n
         elif not segs:
-            take.committed += max(0, len(audio) - int(SAMPLE_RATE * self.STREAM_KEEP))
+            take.committed += max(0, n - int(SAMPLE_RATE * self.STREAM_KEEP))
         else:
-            take.stalled = n      # one segment, nothing safe to commit: wait for more audio
-        return len(audio)
+            # one segment, or a first segment a few frames long (a stray token at the window start
+            # would otherwise move the pointer 20 ms and re-decode the same audio at once, appending
+            # the junk every pass): nothing safe to commit, wait for more audio
+            take.stalled = n
+        return n
 
     def handle(self, audio: np.ndarray, take: "Take" = None) -> None:
         if take is None:
