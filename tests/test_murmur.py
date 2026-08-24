@@ -22,7 +22,8 @@ class FakeRec:
     def __init__(self): self.calls = []; self.level = 0.0
     def start(self): self.calls.append("start")
     def stop(self): self.calls.append("stop"); return np.zeros(0, dtype=np.float32)
-    def snapshot(self): return np.zeros(0, dtype=np.float32)
+    def snapshot(self, start=0): return np.zeros(0, dtype=np.float32)
+    total = property(lambda self: len(self.snapshot()))
 
 def fresh():
     m = murmur.Murmur.__new__(murmur.Murmur)
@@ -94,33 +95,35 @@ real_handle(m, np.zeros(0)); assert states[-1] == "idle" and m.pending == 0
 # streaming: a pass commits all segments but the last and advances the sample pointer;
 # the final handle() transcribes only the tail and joins committed text in front
 class Seg:
+    avg_logprob, compression_ratio, temperature = -0.2, 1.0, 0.0
     def __init__(self, text, end, start=None): self.text, self.end, self.start = text, end, (end - 1.5 if start is None else start)
 class FakeModel:
-    def __init__(self): self.calls = []; self.beams = []
+    def __init__(self): self.calls = []; self.beams = []; self.temps = []
     def transcribe(self, audio, **kw):
-        self.calls.append((len(audio), kw.get("initial_prompt"))); self.beams.append(kw.get("beam_size"))
+        self.calls.append((len(audio), kw.get("initial_prompt"))); self.beams.append(kw.get("beam_size")); self.temps.append(kw.get("temperature"))
         n = len(audio) / 16000
         if n >= 6: return iter([Seg(" first sentence.", 2.0), Seg(" second one.", 4.0), Seg(" third partial", n, start=4.4)]), None
         return iter([Seg(" the tail.", n)]), None
 m = fresh(); m.model = FakeModel(); m.vocab = "tmux"; m.language = "en"; m._tail_silent = lambda a: False
-m.recorder.snapshot = lambda: np.zeros(16000 * 7, dtype=np.float32)
+m._speech = lambda a, min_silence_ms=2000: []   # no VAD gaps unless a test says so
+m.recorder.snapshot = lambda start=0: np.zeros(16000 * 7, dtype=np.float32)[start:]
 take = murmur.Take()
 assert m._stream_pass(take) == 7 * 16000 and take.parts == ["first sentence. second one."]
 assert take.committed == int(4.4 * 16000)   # start of the last (uncommitted) segment, not the end of the committed one
 assert m.model.calls[-1] == (7 * 16000, "tmux.")
-m.recorder.snapshot = lambda: np.zeros(16000 * 5, dtype=np.float32)   # only 1 s new since commit: wait
+m.recorder.snapshot = lambda start=0: np.zeros(16000 * 5, dtype=np.float32)[start:]   # only 1 s new since commit: wait
 assert m._stream_pass(take) == 0
 # a pass that finishes after the recording stopped uses the same boundary rule (never mid-word)
 take2 = murmur.Take()
 _t = m.model.transcribe
 def stop_midway(audio, **kw): take2.active = False; return _t(audio, **kw)
 m.model.transcribe = stop_midway
-m.recorder.snapshot = lambda: np.zeros(16000 * 7, dtype=np.float32)
+m.recorder.snapshot = lambda start=0: np.zeros(16000 * 7, dtype=np.float32)[start:]
 assert m._stream_pass(take2) == 7 * 16000 and take2.committed == int(4.4 * 16000) and take2.parts == ["first sentence. second one."]
 m.model.transcribe = _t
 # a segment end past the buffer cannot push committed past the audio
 take3 = murmur.Take(); m.model.transcribe = lambda audio, **kw: (iter([Seg(" a", 1.0), Seg(" b", 99.0, start=99.0)]), None)
-m.recorder.snapshot = lambda: np.zeros(16000 * 7, dtype=np.float32)
+m.recorder.snapshot = lambda start=0: np.zeros(16000 * 7, dtype=np.float32)[start:]
 m._stream_pass(take3); assert take3.committed == 7 * 16000
 # no speech in the window: advance, keeping the last half second (a word may be starting)
 take4 = murmur.Take(); m.model.transcribe = lambda audio, **kw: (iter([]), None)
@@ -129,31 +132,62 @@ m._stream_pass(take4); assert take4.committed == 7 * 16000 - 8000 and take4.part
 take5 = murmur.Take(); m.model.transcribe = lambda audio, **kw: (iter([Seg(" run on", 6.5, start=0.2)]), None)
 assert m._stream_pass(take5) == 7 * 16000 and take5.committed == 0 and take5.parts == []
 # window is capped at STREAM_MAX; a full window that is one segment is committed whole
-m.recorder.snapshot = lambda: np.zeros(16000 * 30, dtype=np.float32)
+m.recorder.snapshot = lambda start=0: np.zeros(16000 * 30, dtype=np.float32)[start:]
 seen = []; m.model.transcribe = lambda audio, **kw: (seen.append(len(audio)), (iter([Seg(" run on", 19.5, start=0.2)]), None))[1]
 assert m._stream_pass(take5) == 20 * 16000 and seen == [20 * 16000] and take5.committed == 20 * 16000 and take5.parts == ["run on"]
-# pause-cut: a phrase that ended in silence is committed whole (half a second held back);
-# under PAUSE_MIN it waits; an empty result adds no part
-m.recorder.snapshot = lambda: np.zeros(16000 * 4, dtype=np.float32); m.model.transcribe = _t
-m._tail_silent = lambda a: True
-take6 = murmur.Take(); assert m._stream_pass(take6) == 4 * 16000 and take6.parts == ["the tail."] and take6.committed == 4 * 16000 - 8000
-m.recorder.snapshot = lambda: np.zeros(16000 * 2, dtype=np.float32)
+# pause-cut: a phrase that ended in silence is transcribed and committed minus the half second
+# held back (exactly what was transcribed); under PAUSE_MIN it waits; an empty result adds no part
+m.recorder.snapshot = lambda start=0: np.zeros(16000 * 4, dtype=np.float32)[start:]; m.model.transcribe = _t
+m._tail_silent = lambda a: True; m._speech = lambda a, min_silence_ms=2000: [{"start": 0, "end": len(a)}]
+take6 = murmur.Take(); assert m._stream_pass(take6) == 4 * 16000 - 8000 and take6.parts == ["the tail."] and take6.committed == 4 * 16000 - 8000
+assert m.model.calls[-1][0] == 4 * 16000 - 8000   # the model saw the committed range, not the held-back half second
+m.recorder.snapshot = lambda start=0: np.zeros(16000 * 2, dtype=np.float32)[start:]
 take7 = murmur.Take(); assert m._stream_pass(take7) == 0 and take7.committed == 0
-m.recorder.snapshot = lambda: np.zeros(16000 * 4, dtype=np.float32); m.model.transcribe = lambda audio, **kw: (iter([]), None)
-take8 = murmur.Take(); assert m._stream_pass(take8) == 4 * 16000 and take8.parts == [] and take8.committed == 4 * 16000 - 8000
+m.recorder.snapshot = lambda start=0: np.zeros(16000 * 4, dtype=np.float32)[start:]; m.model.transcribe = lambda audio, **kw: (iter([]), None)
+take8 = murmur.Take(); assert m._stream_pass(take8) == 4 * 16000 - 8000 and take8.parts == [] and take8.committed == 4 * 16000 - 8000
+# a piece with no speech at all advances without calling the model
+m._speech = lambda a, min_silence_ms=2000: []; m.model.transcribe = lambda audio, **kw: (_ for _ in ()).throw(AssertionError("model called"))
+take9 = murmur.Take(); assert m._stream_pass(take9) == 4 * 16000 - 8000 and take9.parts == [] and take9.committed == 4 * 16000 - 8000
 m._tail_silent = lambda a: False; m.model.transcribe = _t
+# run-on window ended at the last VAD gap in its tail: edge in silence, committed whole
+m.recorder.snapshot = lambda start=0: np.zeros(16000 * 10, dtype=np.float32)[start:]
+m._speech = lambda a, min_silence_ms=2000: [{"start": 0, "end": 16000}, {"start": len(a) - 16000, "end": len(a)}] if min_silence_ms < 2000 else []
+seen = []; m.model.transcribe = lambda audio, **kw: (seen.append(len(audio)), (iter([Seg(" first bit.", 2.0), Seg(" second bit", 8.5, start=3.0)]), None))[1]
+take10 = murmur.Take(); assert m._stream_pass(take10) == 10 * 16000 - 16000
+assert seen == [10 * 16000 - 16000] and take10.committed == 10 * 16000 - 16000 and take10.parts == ["first bit. second bit"]
+m._speech = lambda a, min_silence_ms=2000: []; m.model.transcribe = _t
+# one segment below the cap: stalled until STREAM_GROW more audio has arrived
+m.recorder.snapshot = lambda start=0: np.zeros(16000 * 7, dtype=np.float32)[start:]
+m.model.transcribe = lambda audio, **kw: (iter([Seg(" run on", 6.5, start=0.2)]), None)
+take11 = murmur.Take(); assert m._stream_pass(take11) == 7 * 16000 and take11.stalled == 7 * 16000
+m.recorder.snapshot = lambda start=0: np.zeros(16000 * 8, dtype=np.float32)[start:]
+assert m._stream_pass(take11) == 0                     # only 1 s more: no retry yet
+m.recorder.snapshot = lambda start=0: np.zeros(16000 * 10, dtype=np.float32)[start:]
+assert m._stream_pass(take11) == 10 * 16000            # 3 s more: retried
+m.model.transcribe = _t
+# a released take being transcribed takes precedence over background passes
+m.recorder.snapshot = lambda start=0: np.zeros(16000 * 7, dtype=np.float32)[start:]
+m.pending = 1; assert m._stream_pass(murmur.Take()) == 0; m.pending = 0
 # beam size comes from config (greedy by default)
-orig = m.model; m.model = FakeModel(); m.recorder.snapshot = lambda: np.zeros(16000 * 7, dtype=np.float32)
-m._stream_pass(murmur.Take()); assert m.model.beams[-1] == 1
+orig = m.model; m.model = FakeModel(); m.recorder.snapshot = lambda start=0: np.zeros(16000 * 7, dtype=np.float32)[start:]
+m._stream_pass(murmur.Take()); assert m.model.beams[-1] == 1 and m.model.temps[-1] == 0.0   # greedy, no retry ladder
 m.cfg["beam_size"] = 3; m._stream_pass(murmur.Take()); assert m.model.beams[-1] == 3; del m.cfg["beam_size"]
 m.model = orig; m.model.transcribe = _t
-m.recorder.snapshot = lambda: np.zeros(16000 * 5, dtype=np.float32)
+m.recorder.snapshot = lambda start=0: np.zeros(16000 * 5, dtype=np.float32)[start:]
 take.active = False; take.done.set()
 out = []; m.typist = type("T", (), {"type": lambda self, t: out.append(t)})(); m.on_text = lambda t: None
 m.pending = 1; murmur.Murmur.handle(m, np.zeros(16000 * 7, dtype=np.float32), take)
 assert out == ["first sentence. second one. the tail."], out
 assert m.model.calls[-1][0] == 7 * 16000 - int(4.4 * 16000) and m.model.calls[-1][1].endswith("first sentence. second one.")   # tail only, with context, prompt punctuated
 print("streaming ok")
+
+# Recorder.snapshot(start) returns exactly the audio past `start`, copying only the chunks needed
+rec = murmur.Recorder(); rec._rate = 16000
+for i in range(5):
+    rec._cb(np.full((1000, 1), i, dtype=np.float32))
+assert rec.total == 5000 and len(rec.snapshot()) == 5000 and len(rec.snapshot(1500)) == 3500
+assert rec.snapshot(1500)[0] == 1 and rec.snapshot(4999)[0] == 4 and len(rec.snapshot(5000)) == 0
+print("recorder snapshot ok")
 # language derives from model at load time, is never written to config
 assert "language" in murmur.DEFAULTS and murmur.DEFAULTS["language"] is None
 

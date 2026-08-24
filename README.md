@@ -19,7 +19,8 @@ before it reaches you. murmur has no server side at all:
   with Wi-Fi off.
 - **Text** goes to your clipboard and, if you keep history on, to
   `%APPDATA%\murmur\history.jsonl` - a plain file you can read, prune (Settings > retention,
-  0 keeps nothing) or delete.
+  0 keeps nothing) or delete. The log next to it (`murmur.log`) records timings and word
+  counts, never the words.
 - **Nothing rewrites you.** What Whisper hears is what gets typed, technical terms included.
 
 ## Install
@@ -64,7 +65,10 @@ smaller than a phrase on purpose: each Whisper call costs about the same (~1 s o
 CPU, 4-5 s on a busy one) whether it gets 3 s or 15 s of audio, and fragments without
 context are misheard. While it works murmur raises its own process priority a notch, which
 on a busy machine halves the time. `beam_size` in `config.json` is 1 (greedy); 5 is
-Whisper's classic setting and 1.6x slower for no measurable gain on technical dictation.
+Whisper's classic setting and 1.6x slower on a 15 s piece for no measurable gain on
+technical dictation. Decoding is one deterministic pass: Whisper's retry ladder (re-decoding
+at rising temperatures whenever confidence dips) is off, because on an ordinary sentence it
+cost 20 s and kept a random sample.
 `base.en` is another 2x faster than `small.en` but mangles technical terms; switch in
 Settings if you prefer speed.
 
@@ -116,8 +120,9 @@ winget install JRSoftware.InnoSetup      # optional, for the installer
 `pynput` listens for the chord globally. While held, `sounddevice` records the mic at
 16 kHz and a background thread keeps transcribing with faster-whisper (int8 on CPU): a piece
 closes when the last 0.8 s are silent (Silero VAD) or when 6 s of run-on speech have piled
-up, in which case every segment but the last is committed and the pointer moves to where that
-last segment starts. On release the remaining tail is transcribed, the committed text is
+up; a run-on window is ended at the last 0.3 s gap in its tail so its edge is in silence, and
+when there is no gap every segment but the last is committed and the pointer moves to where
+that last segment starts. On release the remaining tail is transcribed, the committed text is
 joined in front, the whole thing is placed on the clipboard and Ctrl+V is sent; the text
 stays on the clipboard afterwards. The model is loaded from the local cache without asking
 Hugging Face first, and CTranslate2's OpenMP threads are told not to spin-wait

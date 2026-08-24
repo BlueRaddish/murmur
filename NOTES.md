@@ -25,12 +25,23 @@ Decisions
 - PyInstaller 6 puts --add-data files in _internal/; resources resolve via sys._MEIPASS.
 - build.ps1 must not use $ErrorActionPreference=Stop: PS 5.1 turns native stderr into errors.
 
-- Streaming (v0.4): Take per recording; _stream_pass commits all-but-last segment and advances the
-  pointer to the *start* of the last segment (a VAD gap; segment.end lands inside the last word,
-  and cutting at the snapshot point split words 3 times out of 4 in review). A take turns
-  streaming off once a pass measures slower than realtime. Measured on this
-  laptop under heavy load: small.en ~0.4x realtime, base.en ~1.5-2x; 12 threads collapses (227 s)
-  so cpu_threads stays default. Streaming only helps when the model is faster than realtime.
+- Streaming (v0.4, superseded by v0.6 below): Take per recording; _stream_pass committed
+  all-but-last segment and advanced the pointer to the *start* of the last segment (segment.end
+  lands inside the last word, and cutting at the snapshot point split words 3 times out of 4 in
+  review). It switched streaming off once a pass measured slower than realtime - which, judged
+  on the cold first pass, was every take on this laptop. 12 threads collapsed (227 s), so
+  cpu_threads stays default.
+- Streaming (v0.6): pieces close at a pause (0.8 s silent tail after >= 3 s; transcribed and
+  committed minus a 0.5 s hold-back, exactly the range transcribed; no speech at all -> pointer
+  advances without a model call) or at 6-20 s of run-on speech, where the window is ended at the
+  last 0.3 s gap in its final 8 s so the edge is in silence and it is committed whole; with no
+  gap it is the old all-but-last rule, and a single-segment window stalls for 3 s of new audio
+  instead of re-transcribing the same audio at once. Background passes yield while a released
+  take is being transcribed (pending > 0). Recorder.snapshot(start) copies only the chunks
+  past `start`. The prompt is written as sentences (vocab + "." + context + "."): Whisper
+  copies the prompt's punctuation style, and the comma-list prompt made every piece come out
+  unpunctuated and lower-case. Sim (61 s TTS, realtime, busy CPU): text 5.6 s after release,
+  WER 0.020, vs 18.0 s / 0.048 in one call.
 - Overlay (v0.4): 48x7 glass stick (_glass builds shadow/glow/body/specular/rim from a mask, cached
   per state). Recording is a spectrum visualizer in the cava/easyeffects mould: Recorder keeps the
   last 2048 samples; _analyse does FFT -> 20 log bands (90 Hz-5.5 kHz) -> log magnitude ->
@@ -64,20 +75,30 @@ Decisions
   - Every take in the user's log had hit "stream: model slower than realtime, streaming off":
     the old rule judged the cold first pass and then transcribed the whole take at release
     (130 s -> 36 s). Gone: a slow model just gets bigger pieces.
-  - Priority class while transcribing: normal 15.9 s, above-normal 8.2 s, high 8.1 s for the
-    same 6 s (`boosted()`). KMP_BLOCKTIME=0 (Intel OpenMP spin-wait off): 15.6 -> 9.9 s at normal
-    priority, neutral at high. 2 threads lose to 4 (the default) everywhere; 12 collapsed before.
+  - Priority class while transcribing (measured with KMP_BLOCKTIME=0 already set): normal
+    15.9 s, above-normal 8.2 s, high 8.1 s for the same 6 s (`boosted()`). In a separate run
+    KMP_BLOCKTIME=0 (Intel OpenMP spin-wait off) took normal priority from 15.6 to 9.9 s and was
+    neutral at high; the two runs' "normal" figures differ because the foreign load did. 2 threads
+    lose to 4 (the default) everywhere; 12 collapsed before.
   - beam 5 vs 3 vs 1 on 60 s of TTS'd technical text: 26.1 / 25.0 / 21.9 s, WER 0.048 / 0.075
     / 0.054 (differences are capitalisation). Greedy is the default; `beam_size` in config.
   - distil-small.en: WER 0.63 and slower (42 s vs 10 s for 15 s) - repetition loops into the
     temperature ladder. Rejected. base.en: 2x faster, WER 0.14-0.16 (Py installer, ino setup,
     Reg X, Stlib) - stays optional.
-  - temperature=0 only: no change on clean speech (the ladder never fired). Kept default.
+  - temperature=0 only. On the 60 s text in one call the retry ladder never fired; in the realtime
+    sim it did, on an ordinary 6 s piece whose log-prob was -1.09 (threshold -1.0): 20.7 s instead
+    of 3 s, and the kept result was the temperature-1.0 *sample* ("py installer", "inno setup",
+    lower-case). Dictation wants one deterministic decode; low log-prob / high compression is
+    logged as a diagnostic, never acted on.
   - WhisperModel() asked huggingface.co on every start: 13.8 s vs 5.7 s with local_files_only.
     Now local first, download only if missing. Model warm-up run dropped: cold-vs-warm is 0.6 s,
     a 30 s-window pass at load cost 1 s idle / 6-12 s busy; only the VAD session is pre-created.
-  - Frozen bundle: IPython/jedi/tornado/zmq/nbformat/jsonschema/setuptools rode in through
-    huggingface_hub._login, tqdm.notebook and tokenizers.tools; excluded.
+  - Frozen bundle: IPython/jedi/tornado/zmq/nbformat/jsonschema rode in through
+    huggingface_hub._login, tqdm.notebook and tokenizers.tools; excluded. setuptools must stay:
+    excluding it kills the exe at start (PyInstaller's pkg_resources hook needs its vendored
+    jaraco.text).
+  - murmur.log holds timings and word counts only (the installed build never logs the text);
+    history.jsonl under the retention setting is the only place text is kept.
 
 Environment facts (this laptop, 2026-08-20)
 - Apple Audio driver: the *Internal Digital Microphone* device returns junk (slow 0-0.25
