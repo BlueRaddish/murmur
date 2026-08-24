@@ -51,7 +51,8 @@ CTRL_KEYS = {Key.ctrl, Key.ctrl_l, Key.ctrl_r}
 CMD_KEYS = {Key.cmd, Key.cmd_l, Key.cmd_r}
 
 DEFAULTS = {"model": "small.en", "device": "cpu", "language": None, "mic": None, "trigger_vk": None,
-            "retention_days": 7, "color": "#e63c3c", "color_busy": "#ffaa32", "opacity": 0.9, "haze": False}
+            "beam_size": 1, "retention_days": 7, "color": "#e63c3c", "color_busy": "#ffaa32",
+            "opacity": 0.9, "haze": False}
 
 
 def since_launch() -> str:
@@ -181,11 +182,10 @@ class Recorder:
         with self._lock:
             self._chunks = []
         self.level = 0.0
-        try:
-            self._stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32",
+        try:   # the rate that worked last time (16 k to begin with), so a take starts on the first open
+            self._stream = sd.InputStream(samplerate=self._rate, channels=1, dtype="float32",
                                           device=self.device, callback=self._cb)
-            self._rate = SAMPLE_RATE
-        except sd.PortAudioError:  # device refuses 16k (WASAPI does): use native rate, resample later
+        except sd.PortAudioError:  # device refuses it (WASAPI refuses 16k): native rate, resample later
             self._rate = int(sd.query_devices(self.device, "input")["default_samplerate"])
             self._stream = sd.InputStream(samplerate=self._rate, channels=1, dtype="float32",
                                           device=self.device, callback=self._cb)
@@ -275,6 +275,7 @@ class Murmur:
     Every transition goes through start()/stop() so UI and log stay in step."""
 
     def __init__(self, cfg: dict, vocab: str, on_state=None, on_text=None):
+        log(f"importing faster_whisper  {since_launch()}")
         from faster_whisper import WhisperModel
         log(f"loading {cfg['model']} on {cfg['device']}...  {since_launch()}")
         compute = "int8" if cfg["device"] == "cpu" else "float16"
@@ -310,26 +311,22 @@ class Murmur:
         """The cached copy first. Without local_files_only faster-whisper asks huggingface.co
         whether the model changed on every start - ~8 s here, and the only network access
         murmur would ever make. Falls back to the download when the model is not cached."""
-        try:
-            return WhisperModel(name, device=device, compute_type=compute, local_files_only=True)
-        except Exception as e:
-            log(f"  not cached ({type(e).__name__}); downloading {name}...")
-            return WhisperModel(name, device=device, compute_type=compute)
+        with boosted():   # the user is waiting for this too: 9.6 s -> 6 s on a busy CPU
+            try:
+                return WhisperModel(name, device=device, compute_type=compute, local_files_only=True)
+            except Exception as e:
+                log(f"  not cached ({type(e).__name__}); downloading {name}...")
+                return WhisperModel(name, device=device, compute_type=compute)
 
     def warm_up(self) -> None:
-        """The first transcription pays for the VAD session and CTranslate2's lazy allocations -
-        seconds, under load. Pay it now, not inside the first streaming pass (which would then
-        be judged slower than realtime) or the user's first dictation."""
-        t0 = time.monotonic()
+        """Create the VAD session now (~0.6 s) rather than inside the first dictation. The model
+        itself gets no warm-up run: measured cold-vs-warm difference is ~0.6 s, not worth
+        delaying "ready" by a full 30 s-window pass (1 s idle, 6-12 s on a busy CPU)."""
         try:
             from faster_whisper.vad import get_vad_model
             get_vad_model()
-            with boosted():
-                list(self.model.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), language=self.language,
-                                           beam_size=1, vad_filter=False)[0])   # silence skips VAD, not the model
         except Exception as e:
-            log(f"  warm-up skipped: {e}")
-        log(f"  warm-up {time.monotonic() - t0:.1f}s")
+            log(f"  vad warm-up skipped: {e}")
 
     # --- recording control --------------------------------------------------
     def start(self, persistent: bool) -> None:
@@ -427,10 +424,12 @@ class Murmur:
     # --- transcription ------------------------------------------------------
     def _segments(self, audio: np.ndarray, prev: str = "") -> list:
         prompt = ", ".join(p for p in (self.vocab, prev[-200:]) if p) or None
+        # beam 1 (greedy) by default: 1.6x faster than beam 5 at the same word error rate on
+        # technical dictation (0.054 vs 0.048 on the 60 s test text); config beam_size to change.
         with boosted():
             segs, _ = self.model.transcribe(
-                audio, language=self.language, beam_size=5, initial_prompt=prompt,
-                vad_filter=True, condition_on_previous_text=False,
+                audio, language=self.language, beam_size=self.cfg.get("beam_size") or 1,
+                initial_prompt=prompt, vad_filter=True, condition_on_previous_text=False,
             )
             return list(segs)
 
@@ -439,41 +438,61 @@ class Murmur:
             return ""
         return clean(" ".join(s.text for s in self._segments(audio, prev)))
 
-    STREAM_EVERY = 1.5   # seconds between background passes
-    STREAM_MIN = 2.5     # seconds of uncommitted audio before a pass is worth it
+    STREAM_MIN = 6.0     # seconds of uncommitted audio before a pass is worth its fixed cost
+    STREAM_MAX = 20.0    # longest window per pass: bounds the wait for an in-flight pass at release
+    STREAM_KEEP = 0.5    # seconds kept back after a silent end: a word may just be starting
+    PAUSE_S = 0.8        # a silent tail this long means the phrase is over
+    PAUSE_MIN = 3.0      # phrases shorter than this wait for more: fragments lose context
+
+    def _tail_silent(self, audio: np.ndarray) -> bool:
+        from faster_whisper.vad import get_speech_timestamps   # session cached; ~5 ms for 0.8 s
+        return not get_speech_timestamps(audio[-int(self.PAUSE_S * SAMPLE_RATE):])
 
     def _stream_loop(self, take: "Take") -> None:
-        """Runs while a take is recording. Passes overlap with speech, so release leaves
-        only a short tail to transcribe."""
-        last = time.monotonic()
+        """Runs while a take is recording: passes go back-to-back as soon as STREAM_MIN seconds
+        are uncommitted, so at release only the piece in flight plus a short tail remain.
+        Every Whisper call costs ~1 s idle / 4-5 s on a busy CPU whatever its length (the
+        encoder always sees a padded 30 s window; 3 s of audio took 4.5 s, 15 s took 5.6 s),
+        so the pieces are medium-sized: word-sized pieces would cost more and lose context.
+        A model slower than realtime just gets bigger pieces; it is never switched off."""
         while take.active:
-            time.sleep(0.1)
-            if time.monotonic() - last < self.STREAM_EVERY:
-                continue
             try:
                 t0 = time.monotonic()
                 covered = self._stream_pass(take)
-                if not covered:
-                    continue
-                if time.monotonic() - t0 > covered / SAMPLE_RATE:
-                    # slower than realtime: further passes would only delay the final tail.
-                    # Per-take ceiling; upgrade path is a measured speed factor kept in config.
-                    log("  stream: model slower than realtime, streaming off for this take")
-                    break
+                if covered:
+                    log(f"  stream: {covered / SAMPLE_RATE:.1f}s in {time.monotonic() - t0:.1f}s")
+                    continue   # straight on to the next piece if one is already waiting
             except Exception as e:
                 log(f"  stream: {e}")
                 break
-            last = time.monotonic()
+            time.sleep(0.15)
         take.done.set()
 
     def _stream_pass(self, take: "Take") -> int:
-        """Transcribe the uncommitted audio; commit every segment except the last (which may
-        still be mid-sentence) and advance to where that last segment *starts* - a VAD gap,
-        never the inside of a word (segment.end is too coarse to cut on). Returns the number
-        of samples the pass covered, 0 if there was nothing to do."""
+        """Transcribe the next piece of uncommitted audio. Two ways a piece closes:
+        - it ended in a pause (PAUSE_S of silence after at least PAUSE_MIN): the phrase is over,
+          transcribe it and commit it whole - the practical form of "transcribe every bit";
+        - run-on speech reached STREAM_MIN: commit every segment but the last (which may be
+          mid-sentence) and advance to where that last segment *starts* - a boundary Whisper
+          chose, never the window edge, which can fall inside a word. A window with no speech
+          advances almost entirely (STREAM_KEEP held back); a full-length window that came
+          back as one segment is committed whole so a run-on cannot stall the pointer.
+        Returns the samples covered, 0 if there was nothing to do."""
         audio = self.recorder.snapshot()[take.committed:]
-        if len(audio) < SAMPLE_RATE * self.STREAM_MIN:
+        n = len(audio)
+        if SAMPLE_RATE * self.PAUSE_MIN <= n < SAMPLE_RATE * self.STREAM_MAX and self._tail_silent(audio):
+            with self.lock:
+                if not take.active:
+                    return 0
+                segs = self._segments(audio, " ".join(take.parts))
+            text = clean(" ".join(s.text for s in segs))
+            if text:
+                take.parts.append(text)
+            take.committed += n - int(SAMPLE_RATE * self.STREAM_KEEP)
+            return n
+        if n < SAMPLE_RATE * self.STREAM_MIN:
             return 0
+        audio = audio[: int(SAMPLE_RATE * self.STREAM_MAX)]
         with self.lock:
             if not take.active:
                 return 0
@@ -481,23 +500,29 @@ class Murmur:
         if len(segs) >= 2:
             take.parts.append(clean(" ".join(s.text for s in segs[:-1])))
             take.committed += min(int(segs[-1].start * SAMPLE_RATE), len(audio))
+        elif not segs:
+            take.committed += max(0, len(audio) - int(SAMPLE_RATE * self.STREAM_KEEP))
+        elif len(audio) >= SAMPLE_RATE * self.STREAM_MAX:
+            take.parts.append(clean(segs[0].text))
+            take.committed += len(audio)
         return len(audio)
 
     def handle(self, audio: np.ndarray, take: "Take" = None) -> None:
         if take is None:
             take = Take()
             take.done.set()
+        t0 = time.time()
         take.done.wait()      # an in-flight pass may still be committing
+        waited = time.time() - t0
         with self.lock:  # one transcription at a time
             try:
-                t0 = time.time()
                 tail = self.transcribe(audio[take.committed:], " ".join(take.parts))
                 text = clean(" ".join(p for p in take.parts + [tail] if p))
                 if not text:
                     rms = float(np.sqrt((audio ** 2).mean())) if len(audio) else 0.0
                     log(f"  (nothing heard: {len(audio) / SAMPLE_RATE:.1f}s, rms {rms:.4f})")
                     return
-                log(f"  {text}  [{time.time() - t0:.1f}s]")
+                log(f"  {text}  [{time.time() - t0:.1f}s, of which {waited:.1f}s waiting for the pass in flight]")
                 self.typist.type(text)
                 try:
                     self.on_text(text)        # bookkeeping: never allowed to cost the paste

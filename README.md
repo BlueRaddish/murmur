@@ -14,7 +14,7 @@ before it reaches you. murmur has no server side at all:
 
 - **Audio** is recorded into memory, transcribed by Whisper on this computer, and discarded.
   No account, no API key, no telemetry.
-- **Network** is used exactly once: the first run downloads the model (~250 MB) from Hugging
+- **Network** is used exactly once: the first run downloads the model (~480 MB) from Hugging
   Face. After that murmur checks the local copy first and never goes online again - it works
   with Wi-Fi off.
 - **Text** goes to your clipboard and, if you keep history on, to
@@ -34,7 +34,7 @@ pip install -r requirements.txt
 python murmur.py
 ```
 
-First run downloads the model (`small.en`, ~250 MB) - the bar pulses until the model is ready.
+First run downloads the model (`small.en`, ~480 MB) - the bar pulses until the model is ready.
 
 ## Use
 
@@ -55,10 +55,18 @@ them live. An orange-to-yellow pulse runs along it while
 transcribing. If it stays a flat red line while you talk, it is listening to the wrong
 input: pick the microphone in Settings.
 
-**Latency.** Transcription starts while you are still talking: finished sentences are
-committed in the background, so on release only the last couple of seconds are left to
-process. How fast that is depends on the model and how busy the CPU is - `base.en` is
-2-3x faster than `small.en` at some cost in accuracy; switch in Settings.
+**Latency.** Transcription runs while you are still talking, phrase by phrase: every time
+you pause for most of a second the phrase you just said is transcribed and committed, and
+run-on speech is taken in 6-20 s pieces at the sentence boundaries Whisper itself finds. On
+release only the piece in flight and what you said since your last pause are left, so a
+two-minute dictation lands in a few seconds instead of half a minute. Pieces are never
+smaller than a phrase on purpose: each Whisper call costs about the same (~1 s on an idle
+CPU, 4-5 s on a busy one) whether it gets 3 s or 15 s of audio, and fragments without
+context are misheard. While it works murmur raises its own process priority a notch, which
+on a busy machine halves the time. `beam_size` in `config.json` is 1 (greedy); 5 is
+Whisper's classic setting and 1.6x slower for no measurable gain on technical dictation.
+`base.en` is another 2x faster than `small.en` but mangles technical terms; switch in
+Settings if you prefer speed.
 
 **History.** Double-click the tray icon (or "Open murmur") for a window with everything
 transcribed in the last 7 days - copy it back if a paste went missing or you overwrote the
@@ -106,11 +114,15 @@ winget install JRSoftware.InnoSetup      # optional, for the installer
 ## How it works
 
 `pynput` listens for the chord globally. While held, `sounddevice` records the mic at
-16 kHz. On release the audio goes to faster-whisper (int8 on CPU), the text is placed on the
-clipboard and Ctrl+V is sent; the text stays on the clipboard afterwards. While recording, a
-background pass every 1.5 s transcribes the uncommitted audio and commits every segment but
-the last. `overlay.py` renders the stick with PIL into a per-pixel-alpha layered window
-(crisp at any DPI, click-through);
+16 kHz and a background thread keeps transcribing with faster-whisper (int8 on CPU): a piece
+closes when the last 0.8 s are silent (Silero VAD) or when 6 s of run-on speech have piled
+up, in which case every segment but the last is committed and the pointer moves to where that
+last segment starts. On release the remaining tail is transcribed, the committed text is
+joined in front, the whole thing is placed on the clipboard and Ctrl+V is sent; the text
+stays on the clipboard afterwards. The model is loaded from the local cache without asking
+Hugging Face first, and CTranslate2's OpenMP threads are told not to spin-wait
+(`KMP_BLOCKTIME=0`), which matters on a busy CPU. `overlay.py` renders the stick with PIL into
+a per-pixel-alpha layered window (crisp at any DPI, click-through);
 `window.py` is the tkinter history/settings window; the tray icon is pystray.
 
 ## Test

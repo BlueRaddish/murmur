@@ -96,13 +96,13 @@ real_handle(m, np.zeros(0)); assert states[-1] == "idle" and m.pending == 0
 class Seg:
     def __init__(self, text, end, start=None): self.text, self.end, self.start = text, end, (end - 1.5 if start is None else start)
 class FakeModel:
-    def __init__(self): self.calls = []
+    def __init__(self): self.calls = []; self.beams = []
     def transcribe(self, audio, **kw):
-        self.calls.append((len(audio), kw.get("initial_prompt")))
+        self.calls.append((len(audio), kw.get("initial_prompt"))); self.beams.append(kw.get("beam_size"))
         n = len(audio) / 16000
         if n >= 6: return iter([Seg(" first sentence.", 2.0), Seg(" second one.", 4.0), Seg(" third partial", n, start=4.4)]), None
         return iter([Seg(" the tail.", n)]), None
-m = fresh(); m.model = FakeModel(); m.vocab = "tmux"; m.language = "en"
+m = fresh(); m.model = FakeModel(); m.vocab = "tmux"; m.language = "en"; m._tail_silent = lambda a: False
 m.recorder.snapshot = lambda: np.zeros(16000 * 7, dtype=np.float32)
 take = murmur.Take()
 assert m._stream_pass(take) == 7 * 16000 and take.parts == ["first sentence. second one."]
@@ -120,9 +120,33 @@ assert m._stream_pass(take2) == 7 * 16000 and take2.committed == int(4.4 * 16000
 m.model.transcribe = _t
 # a segment end past the buffer cannot push committed past the audio
 take3 = murmur.Take(); m.model.transcribe = lambda audio, **kw: (iter([Seg(" a", 1.0), Seg(" b", 99.0, start=99.0)]), None)
-m.recorder.snapshot = lambda: np.zeros(16000 * 3, dtype=np.float32)
-m._stream_pass(take3); assert take3.committed == 3 * 16000
-m.model.transcribe = _t
+m.recorder.snapshot = lambda: np.zeros(16000 * 7, dtype=np.float32)
+m._stream_pass(take3); assert take3.committed == 7 * 16000
+# no speech in the window: advance, keeping the last half second (a word may be starting)
+take4 = murmur.Take(); m.model.transcribe = lambda audio, **kw: (iter([]), None)
+m._stream_pass(take4); assert take4.committed == 7 * 16000 - 8000 and take4.parts == []
+# one segment below the cap: nothing committed yet (it may still be mid-sentence)
+take5 = murmur.Take(); m.model.transcribe = lambda audio, **kw: (iter([Seg(" run on", 6.5, start=0.2)]), None)
+assert m._stream_pass(take5) == 7 * 16000 and take5.committed == 0 and take5.parts == []
+# window is capped at STREAM_MAX; a full window that is one segment is committed whole
+m.recorder.snapshot = lambda: np.zeros(16000 * 30, dtype=np.float32)
+seen = []; m.model.transcribe = lambda audio, **kw: (seen.append(len(audio)), (iter([Seg(" run on", 19.5, start=0.2)]), None))[1]
+assert m._stream_pass(take5) == 20 * 16000 and seen == [20 * 16000] and take5.committed == 20 * 16000 and take5.parts == ["run on"]
+# pause-cut: a phrase that ended in silence is committed whole (half a second held back);
+# under PAUSE_MIN it waits; an empty result adds no part
+m.recorder.snapshot = lambda: np.zeros(16000 * 4, dtype=np.float32); m.model.transcribe = _t
+m._tail_silent = lambda a: True
+take6 = murmur.Take(); assert m._stream_pass(take6) == 4 * 16000 and take6.parts == ["the tail."] and take6.committed == 4 * 16000 - 8000
+m.recorder.snapshot = lambda: np.zeros(16000 * 2, dtype=np.float32)
+take7 = murmur.Take(); assert m._stream_pass(take7) == 0 and take7.committed == 0
+m.recorder.snapshot = lambda: np.zeros(16000 * 4, dtype=np.float32); m.model.transcribe = lambda audio, **kw: (iter([]), None)
+take8 = murmur.Take(); assert m._stream_pass(take8) == 4 * 16000 and take8.parts == [] and take8.committed == 4 * 16000 - 8000
+m._tail_silent = lambda a: False; m.model.transcribe = _t
+# beam size comes from config (greedy by default)
+orig = m.model; m.model = FakeModel(); m.recorder.snapshot = lambda: np.zeros(16000 * 7, dtype=np.float32)
+m._stream_pass(murmur.Take()); assert m.model.beams[-1] == 1
+m.cfg["beam_size"] = 3; m._stream_pass(murmur.Take()); assert m.model.beams[-1] == 3; del m.cfg["beam_size"]
+m.model = orig; m.model.transcribe = _t
 m.recorder.snapshot = lambda: np.zeros(16000 * 5, dtype=np.float32)
 take.active = False; take.done.set()
 out = []; m.typist = type("T", (), {"type": lambda self, t: out.append(t)})(); m.on_text = lambda t: None
@@ -155,6 +179,7 @@ with wave.open(str(wav)) as w:
 # resample to 16k by linear interpolation (fine for a test)
 audio = np.interp(np.arange(0, len(pcm), rate / murmur.SAMPLE_RATE), np.arange(len(pcm)), pcm).astype(np.float32)
 m2 = murmur.Murmur(dict(murmur.DEFAULTS, model="tiny.en"), murmur.load_vocab(Path(__file__).parents[1] / "vocab.txt"))
+assert m2._tail_silent(np.zeros(16000, dtype=np.float32)) and not m2._tail_silent(audio[: len(audio) // 2])   # real VAD: silence vs mid-sentence
 text = m2.transcribe(audio)
 print("transcribed:", text)
 assert "rebase" in text.lower() and "main" in text.lower(), text

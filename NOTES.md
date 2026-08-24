@@ -2,7 +2,7 @@
 
 Decisions
 - Single file, no package. Clipboard-paste over keystroke typing: instant for long text,
-  unicode-safe; clipboard is restored 150 ms after paste.
+  unicode-safe; the text stays on the clipboard (restoring the old clipboard raced the paste).
 - No post-processing beyond whitespace. That is the feature.
 - Chord = any Ctrl + any Win/Cmd (pynput `Key.cmd` is the Win key on Windows). Edge-triggered:
   the chord fires once when both become held, and "released" once when either goes up.
@@ -54,6 +54,30 @@ Decisions
   shape keeps drawing (cross-faded to the resting stick) until flat. Colours come from config
   (`color`, `color_busy`) via Overlay.set_colors; persistent mode shares the recording colour - the
   old amber read as "orange while recording" to the user.
+
+- Performance (v0.6, measured 2026-08-24 on the i7-9750H with the CPU ~95% busy from other apps,
+  interleaved A/B, min of rounds):
+  - Every Whisper call has a fixed cost (the encoder always sees a padded 30 s window): 3 s of
+    audio 4.5 s, 6 s 4.9 s, 15 s 5.6 s (small.en, greedy, above-normal priority). So pieces are
+    phrase-sized (>= 3 s at a pause) or 6-20 s (run-on), never word-sized: word-sized would be
+    ~200 encoder passes for 200 words, and context-free fragments hallucinate.
+  - Every take in the user's log had hit "stream: model slower than realtime, streaming off":
+    the old rule judged the cold first pass and then transcribed the whole take at release
+    (130 s -> 36 s). Gone: a slow model just gets bigger pieces.
+  - Priority class while transcribing: normal 15.9 s, above-normal 8.2 s, high 8.1 s for the
+    same 6 s (`boosted()`). KMP_BLOCKTIME=0 (Intel OpenMP spin-wait off): 15.6 -> 9.9 s at normal
+    priority, neutral at high. 2 threads lose to 4 (the default) everywhere; 12 collapsed before.
+  - beam 5 vs 3 vs 1 on 60 s of TTS'd technical text: 26.1 / 25.0 / 21.9 s, WER 0.048 / 0.075
+    / 0.054 (differences are capitalisation). Greedy is the default; `beam_size` in config.
+  - distil-small.en: WER 0.63 and slower (42 s vs 10 s for 15 s) - repetition loops into the
+    temperature ladder. Rejected. base.en: 2x faster, WER 0.14-0.16 (Py installer, ino setup,
+    Reg X, Stlib) - stays optional.
+  - temperature=0 only: no change on clean speech (the ladder never fired). Kept default.
+  - WhisperModel() asked huggingface.co on every start: 13.8 s vs 5.7 s with local_files_only.
+    Now local first, download only if missing. Model warm-up run dropped: cold-vs-warm is 0.6 s,
+    a 30 s-window pass at load cost 1 s idle / 6-12 s busy; only the VAD session is pre-created.
+  - Frozen bundle: IPython/jedi/tornado/zmq/nbformat/jsonschema/setuptools rode in through
+    huggingface_hub._login, tqdm.notebook and tokenizers.tools; excluded.
 
 Environment facts (this laptop, 2026-08-20)
 - Apple Audio driver: the *Internal Digital Microphone* device returns junk (slow 0-0.25
