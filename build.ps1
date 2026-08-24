@@ -10,7 +10,7 @@ python -m PyInstaller --noconfirm --clean --noconsole --onedir --name murmur --i
   --hidden-import pystray._win32 `
   --exclude-module scipy --exclude-module matplotlib --exclude-module torch --exclude-module tensorflow `
   --exclude-module IPython --exclude-module jedi --exclude-module tornado --exclude-module zmq `
-  --exclude-module nbformat --exclude-module jsonschema --exclude-module setuptools `
+  --exclude-module nbformat --exclude-module jsonschema `
   murmur.py
 if ($LASTEXITCODE -ne 0) { throw "pyinstaller failed" }
 $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
