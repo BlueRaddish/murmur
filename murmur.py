@@ -462,8 +462,8 @@ class Murmur:
         # Whisper copies the prompt's punctuation style: a comma list with no full stop made every
         # piece come out unpunctuated and lower-case, so the prompt reads as sentences.
         ctx = prev[-200:].strip()
-        if ctx and ctx[-1] not in ".!?":
-            ctx += "."
+        if ctx and ctx[-1].isalnum():   # ends mid-sentence with no punctuation: close it for the prompt;
+            ctx += "."                   # a trailing comma stays, so the next window continues the sentence
         prompt = " ".join(p for p in (self.vocab and self.vocab + ".", ctx) if p) or None
         # beam 5 (Whisper's classic). beam_size 1 in config is 1.6x faster and scored the same on
         # TTS'd technical text, but real speech is noisier and the user rates accuracy first.
