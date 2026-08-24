@@ -31,14 +31,21 @@ Decisions
   review). It switched streaming off once a pass measured slower than realtime - which, judged
   on the cold first pass, was every take on this laptop. 12 threads collapsed (227 s), so
   cpu_threads stays default.
-- Streaming (v0.6): pieces close at a pause (0.8 s silent tail after >= 3 s; transcribed and
-  committed minus a 0.5 s hold-back, exactly the range transcribed; no speech at all -> pointer
-  advances without a model call) or at 6-20 s of run-on speech, where the window is ended at the
-  last 0.3 s gap in its final 8 s so the edge is in silence and it is committed whole; with no
-  gap it is the old all-but-last rule, and a single-segment window stalls for 3 s of new audio
-  instead of re-transcribing the same audio at once. Background passes yield while a released
-  take is being transcribed (pending > 0). Recorder.snapshot(start) copies only the chunks
-  past `start`. The prompt is written as sentences (vocab + "." + context + "."): Whisper
+- Streaming (v0.6): windows of 6-30 s of new audio, every segment but the last committed, pointer
+  to that last segment's *start*; a single-segment window stalls for 3 s of new audio instead of
+  re-transcribing the same audio at once; a full 30 s single-segment window is committed whole.
+  Background passes yield while a released take is being transcribed (pending > 0).
+  Recorder.snapshot(start) copies only the chunks past `start`. Never switched off.
+  **Rejected (pre-release, on the user's real dictation): "phrase pieces"** - cutting a piece
+  whenever the last 0.8 s were silent (Silero, after >= 3 s) and ending run-on windows at a
+  0.3 s gap. On TTS it measured 5.6-7.8 s / WER 0.014-0.034; on real speech it produced
+  "Go ahead and... On my status line, I want you to also... Setup. The context window...
+  Obsession." - the speaker's thinking pauses and unvoiced stretches read as silence, pieces
+  lost their continuation, and Whisper both trailed off ("...") and misheard the fragments.
+  Rule: cut only where Whisper itself ends a sentence, with the continuation in view. TTS has
+  no thinking pauses; it is not a proxy for that failure. beam_size default went back to 5
+  for the same reason (greedy matched it on TTS only). `streaming: false` in config = whole
+  take at release. The prompt is written as sentences (vocab + "." + context + "."): Whisper
   copies the prompt's punctuation style, and the comma-list prompt made every piece come out
   unpunctuated and lower-case. Sim (61 s TTS spoken in realtime into a fake recorder, real
   small.en, busy CPU; sim_stream.py in the session scratchpad): four runs of the final code

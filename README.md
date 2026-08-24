@@ -56,20 +56,19 @@ them live. An orange-to-yellow pulse runs along it while
 transcribing. If it stays a flat red line while you talk, it is listening to the wrong
 input: pick the microphone in Settings.
 
-**Latency.** Transcription runs while you are still talking, phrase by phrase: every time
-you pause for most of a second (once at least 3 s have been said) the phrase you just said is
-transcribed and committed, and run-on speech is taken in 6-20 s pieces ended at a short gap
-or at the sentence boundaries Whisper itself finds. On
-release only the piece in flight and what you said since your last pause are left, so a
-two-minute dictation lands in a few seconds instead of half a minute. Pieces are never
-smaller than a phrase on purpose: each Whisper call costs about the same (~1 s on an idle
-CPU, 4-5 s on a busy one) whether it gets 3 s or 15 s of audio, and fragments without
-context are misheard. While it works murmur raises its own process priority a notch, which
-on a busy machine halves the time. `beam_size` in `config.json` is 1 (greedy); 5 is
-Whisper's classic setting and 1.6x slower on a 15 s piece for no measurable gain on
-technical dictation. Decoding is one deterministic pass: Whisper's retry ladder (re-decoding
-at rising temperatures whenever confidence dips) is off, because on an ordinary sentence it
-cost 20 s and kept a random sample.
+**Latency.** Transcription runs while you are still talking: every 6 s or so of new speech
+is decoded in the background and everything up to the last sentence boundary Whisper itself
+found is committed; that last sentence is decoded again with the next window, so nothing is
+ever cut at *your* pauses (cutting there was tried and turned a dictation into fragments).
+On release only the window in flight and the tail are left, so a two-minute dictation lands
+in seconds instead of half a minute. Each Whisper call costs about the same (~1 s on an idle
+CPU, 4-5 s on a busy one) whether it gets 3 s or 15 s of audio, which is why windows are
+medium-sized and never word-sized. While it works murmur raises its own process priority a
+notch, which on a busy machine halves the time. `beam_size` in `config.json` is 5 (Whisper's
+classic); 1 is greedy and 1.6x faster. Decoding is one deterministic pass: Whisper's retry
+ladder (re-decoding at rising temperatures whenever confidence dips) is off, because on an
+ordinary sentence it cost 20 s and kept a random sample. `"streaming": false` in
+`config.json` transcribes each take whole at release instead.
 `base.en` is another 2x faster than `small.en` but mangles technical terms; switch in
 Settings if you prefer speed.
 
@@ -119,11 +118,9 @@ winget install JRSoftware.InnoSetup      # optional, for the installer
 ## How it works
 
 `pynput` listens for the chord globally. While held, `sounddevice` records the mic at
-16 kHz and a background thread keeps transcribing with faster-whisper (int8 on CPU): a piece
-closes when the last 0.8 s are silent (Silero VAD) or when 6 s of run-on speech have piled
-up; a run-on window is ended at the last 0.3 s gap in its tail so its edge is in silence, and
-when there is no gap every segment but the last is committed and the pointer moves to where
-that last segment starts. On release the remaining tail is transcribed, the committed text is
+16 kHz and a background thread keeps transcribing with faster-whisper (int8 on CPU): once 6 s
+of new audio have piled up a window (up to 30 s) is decoded, every segment but the last is
+committed and the pointer moves to where that last segment starts. On release the remaining tail is transcribed, the committed text is
 joined in front, the whole thing is placed on the clipboard and Ctrl+V is sent; the text
 stays on the clipboard afterwards. The model is loaded from the local cache without asking
 Hugging Face first, and CTranslate2's OpenMP threads are told not to spin-wait
