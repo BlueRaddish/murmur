@@ -40,8 +40,10 @@ Decisions
   take is being transcribed (pending > 0). Recorder.snapshot(start) copies only the chunks
   past `start`. The prompt is written as sentences (vocab + "." + context + "."): Whisper
   copies the prompt's punctuation style, and the comma-list prompt made every piece come out
-  unpunctuated and lower-case. Sim (61 s TTS, realtime, busy CPU): text 5.6 s after release,
-  WER 0.020, vs 18.0 s / 0.048 in one call.
+  unpunctuated and lower-case. Sim (61 s TTS spoken in realtime into a fake recorder, real
+  small.en, busy CPU; sim_stream.py in the session scratchpad): four runs of the final code
+  gave text 5.6-7.8 s after release at WER 0.014-0.034, vs 12-18 s / 0.048 for the same audio in
+  one call - the spread is the foreign load moving between runs, not the code.
 - Overlay (v0.4): 48x7 glass stick (_glass builds shadow/glow/body/specular/rim from a mask, cached
   per state). Recording is a spectrum visualizer in the cava/easyeffects mould: Recorder keeps the
   last 2048 samples; _analyse does FFT -> 20 log bands (90 Hz-5.5 kHz) -> log magnitude ->

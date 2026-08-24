@@ -5,3 +5,4 @@ pyperclip
 numpy
 pystray
 Pillow
+huggingface_hub>=1.28   # partial-snapshot errors are FileNotFoundError from here: load_model relies on it

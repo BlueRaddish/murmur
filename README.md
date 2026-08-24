@@ -57,8 +57,9 @@ transcribing. If it stays a flat red line while you talk, it is listening to the
 input: pick the microphone in Settings.
 
 **Latency.** Transcription runs while you are still talking, phrase by phrase: every time
-you pause for most of a second the phrase you just said is transcribed and committed, and
-run-on speech is taken in 6-20 s pieces at the sentence boundaries Whisper itself finds. On
+you pause for most of a second (once at least 3 s have been said) the phrase you just said is
+transcribed and committed, and run-on speech is taken in 6-20 s pieces ended at a short gap
+or at the sentence boundaries Whisper itself finds. On
 release only the piece in flight and what you said since your last pause are left, so a
 two-minute dictation lands in a few seconds instead of half a minute. Pieces are never
 smaller than a phrase on purpose: each Whisper call costs about the same (~1 s on an idle

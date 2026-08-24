@@ -15,12 +15,30 @@ A glassy disc at the bottom of the screen shows the mode and live mic level, so 
 see it is actually hearing you. The tray's "Open murmur" window keeps a history of
 everything transcribed (default 7 days, adjustable) in case a paste goes missing.
 """
+import ctypes
 import time
-T0 = time.monotonic()   # first thing: the startup timeline in the log counts from here
+
+
+def process_age() -> float:
+    """Seconds since this process was created (Windows), so the startup timeline also counts
+    the PyInstaller bootloader and its runtime hooks, which run before this file. 0 elsewhere."""
+    try:
+        k32 = ctypes.windll.kernel32
+        k32.GetCurrentProcess.restype = ctypes.c_void_p
+        k32.GetProcessTimes.argtypes = [ctypes.c_void_p] * 5
+        ft = (ctypes.c_uint64 * 4)()     # creation, exit, kernel, user as FILETIME (100 ns units)
+        k32.GetProcessTimes(k32.GetCurrentProcess(), *(ctypes.byref(ft, 8 * i) for i in range(4)))
+        now = ctypes.c_uint64()
+        k32.GetSystemTimeAsFileTime(ctypes.byref(now))
+        return max(0.0, (now.value - ft[0]) / 1e7)
+    except Exception:
+        return 0.0
+
+
+T0 = time.monotonic() - process_age()   # the startup timeline in the log counts from launch
 
 import argparse
 import contextlib
-import ctypes
 import json
 import os
 import sys

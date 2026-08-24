@@ -89,8 +89,10 @@ chord(m); chord(m, False); m.last_chord_release -= 1; chord(m); chord(m, False)
 assert m.pending == 2 and states == ["recording", "busy", "recording", "busy"], states
 import threading as _th
 m.transcribe = lambda a, prev="": ""; m.typist = None
+logged = []; _log = murmur.log; murmur.log = logged.append
 real_handle(m, np.zeros(0)); assert "idle" not in states
 real_handle(m, np.zeros(0)); assert states[-1] == "idle" and m.pending == 0
+murmur.log = _log; assert not any("error" in l for l in logged), logged   # handle() swallows exceptions: check none happened
 
 # streaming: a pass commits all segments but the last and advances the sample pointer;
 # the final handle() transcribes only the tail and joins committed text in front
@@ -287,6 +289,16 @@ class FakeWM:
 assert isinstance(murmur.Murmur.load_model(FakeWM, "small.en", "cpu", "int8"), FakeWM) and calls == [True]
 calls.clear()
 assert isinstance(murmur.Murmur.load_model(FakeWM, "missing", "cpu", "int8"), FakeWM) and calls == [True, False]
+# any other failure of the cached load is a real error: no silent trip to the network
+class BrokenWM:
+    def __init__(self, name, **kw):
+        calls.append(kw.get("local_files_only", False)); raise RuntimeError("CUDA not available")
+calls.clear()
+try:
+    murmur.Murmur.load_model(BrokenWM, "small.en", "cuda", "float16"); assert False
+except RuntimeError:
+    assert calls == [True]
+assert murmur.process_age() >= 0 and murmur.T0 <= __import__("time").monotonic()
 print("load_model ok")
 
 # boosted(): priority class goes up for the block and comes back down after, even on error
