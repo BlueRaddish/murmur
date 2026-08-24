@@ -423,7 +423,12 @@ class Murmur:
 
     # --- transcription ------------------------------------------------------
     def _segments(self, audio: np.ndarray, prev: str = "") -> list:
-        prompt = ", ".join(p for p in (self.vocab, prev[-200:]) if p) or None
+        # Whisper copies the prompt's punctuation style: a comma list with no full stop made every
+        # piece come out unpunctuated and lower-case, so the prompt reads as sentences.
+        ctx = prev[-200:].strip()
+        if ctx and ctx[-1] not in ".!?":
+            ctx += "."
+        prompt = " ".join(p for p in (self.vocab and self.vocab + ".", ctx) if p) or None
         # beam 1 (greedy) by default: 1.6x faster than beam 5 at the same word error rate on
         # technical dictation (0.054 vs 0.048 on the 60 s test text); config beam_size to change.
         with boosted():

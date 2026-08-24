@@ -107,7 +107,7 @@ m.recorder.snapshot = lambda: np.zeros(16000 * 7, dtype=np.float32)
 take = murmur.Take()
 assert m._stream_pass(take) == 7 * 16000 and take.parts == ["first sentence. second one."]
 assert take.committed == int(4.4 * 16000)   # start of the last (uncommitted) segment, not the end of the committed one
-assert m.model.calls[-1] == (7 * 16000, "tmux")
+assert m.model.calls[-1] == (7 * 16000, "tmux.")
 m.recorder.snapshot = lambda: np.zeros(16000 * 5, dtype=np.float32)   # only 1 s new since commit: wait
 assert m._stream_pass(take) == 0
 # a pass that finishes after the recording stopped uses the same boundary rule (never mid-word)
@@ -152,7 +152,7 @@ take.active = False; take.done.set()
 out = []; m.typist = type("T", (), {"type": lambda self, t: out.append(t)})(); m.on_text = lambda t: None
 m.pending = 1; murmur.Murmur.handle(m, np.zeros(16000 * 7, dtype=np.float32), take)
 assert out == ["first sentence. second one. the tail."], out
-assert m.model.calls[-1][0] == 7 * 16000 - int(4.4 * 16000) and "first sentence" in m.model.calls[-1][1]   # tail only, with context
+assert m.model.calls[-1][0] == 7 * 16000 - int(4.4 * 16000) and m.model.calls[-1][1].endswith("first sentence. second one.")   # tail only, with context, prompt punctuated
 print("streaming ok")
 # language derives from model at load time, is never written to config
 assert "language" in murmur.DEFAULTS and murmur.DEFAULTS["language"] is None
