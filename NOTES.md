@@ -35,7 +35,13 @@ Decisions
   to that last segment's *start*; a single-segment window stalls for 3 s of new audio instead of
   re-transcribing the same audio at once; a full 30 s single-segment window is committed whole.
   Background passes yield while a released take is being transcribed (pending > 0).
-  Recorder.snapshot(start) copies only the chunks past `start`. Never switched off.
+  Recorder.snapshot(start) copies only the chunks past `start`. Never switched off. Windows are
+  capped at 20 s (30 s only for a single-segment window) to bound the in-flight wait at release
+  on a starved CPU. Review of the rollback added: a boundary under 1.5 s into the window is a
+  stray token, not a cut (a 20 ms "..." segment would otherwise advance the pointer 20 ms and
+  re-decode the same audio every pass, appending "..." each time) - it stalls like a
+  single-segment window; and an empty window result holds back 1.5 s, not 0.5 s, because
+  faster-whisper also returns nothing for a word fragment its no-speech gate refused.
   **Rejected (pre-release, on the user's real dictation): "phrase pieces"** - cutting a piece
   whenever the last 0.8 s were silent (Silero, after >= 3 s) and ending run-on windows at a
   0.3 s gap. On TTS it measured 5.6-7.8 s / WER 0.014-0.034; on real speech it produced
