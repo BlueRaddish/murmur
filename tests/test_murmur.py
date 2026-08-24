@@ -135,10 +135,13 @@ m._stream_pass(take4); assert take4.committed == 7 * 16000 - 8000 and take4.part
 # one segment below the cap: nothing committed yet (it may still be mid-sentence)
 take5 = murmur.Take(); m.model.transcribe = lambda audio, **kw: (iter([Seg(" run on", 6.5, start=0.2)]), None)
 assert m._stream_pass(take5) == 7 * 16000 and take5.committed == 0 and take5.parts == []
-# window is capped at STREAM_MAX (Whisper's 30 s); a full window that is one segment is committed whole
+# a stalled (single-segment) window may grow to STREAM_MAX (Whisper's 30 s); full and still one segment -> committed whole
 m.recorder.snapshot = lambda start=0: np.zeros(16000 * 40, dtype=np.float32)[start:]
 seen = []; m.model.transcribe = lambda audio, **kw: (seen.append(len(audio)), (iter([Seg(" run on", 29.5, start=0.2)]), None))[1]
-assert m._stream_pass(take5) == 30 * 16000 and seen == [30 * 16000] and take5.committed == 30 * 16000 and take5.parts == ["run on"]
+assert take5.stalled and m._stream_pass(take5) == 30 * 16000 and seen == [30 * 16000] and take5.committed == 30 * 16000 and take5.parts == ["run on"]
+# an ordinary window is capped at STREAM_CAP even when more audio is pending
+seen = []; m.model.transcribe = lambda audio, **kw: (seen.append(len(audio)), (iter([Seg(" a.", 2.0), Seg(" b", 19.0, start=3.0)]), None))[1]
+take5b = murmur.Take(); assert m._stream_pass(take5b) == 20 * 16000 and seen == [20 * 16000] and take5b.committed == 3 * 16000
 # one segment below the cap: stalled until STREAM_GROW more audio has arrived
 m.recorder.snapshot = lambda start=0: np.zeros(16000 * 7, dtype=np.float32)[start:]
 m.model.transcribe = lambda audio, **kw: (iter([Seg(" run on", 6.5, start=0.2)]), None)

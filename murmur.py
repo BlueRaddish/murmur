@@ -490,7 +490,8 @@ class Murmur:
         return clean(" ".join(s.text for s in self._segments(audio, prev)))
 
     STREAM_MIN = 6.0     # seconds of uncommitted audio before a pass is worth its fixed cost
-    STREAM_MAX = 30.0    # Whisper's own window; longer would be chunked inside faster-whisper anyway
+    STREAM_CAP = 20.0    # usual window ceiling: bounds the wait for the pass in flight at release
+    STREAM_MAX = 30.0    # a window that came back as one segment may grow to Whisper's own window
     STREAM_GROW = 3.0    # after a pass that could commit nothing, this much new audio before retrying
     STREAM_KEEP = 0.5    # seconds kept back after a window with no speech: a word may be starting
 
@@ -517,7 +518,8 @@ class Murmur:
         take.done.set()
 
     def _stream_pass(self, take: "Take") -> int:
-        """Transcribe the next window of uncommitted audio (STREAM_MIN..STREAM_MAX seconds).
+        """Transcribe the next window of uncommitted audio (STREAM_MIN..STREAM_CAP seconds, up to
+        STREAM_MAX once a window has come back as a single segment).
         Every segment but the last is committed and the pointer moves to where that last segment
         *starts* - a boundary Whisper chose with the continuation in view, never the window
         edge, which can fall inside a word; the held-back segment is decoded again with the
@@ -530,7 +532,8 @@ class Murmur:
         n = self.recorder.total - take.committed
         if self.pending or n < SAMPLE_RATE * self.STREAM_MIN or n < take.stalled + SAMPLE_RATE * self.STREAM_GROW:
             return 0
-        audio = self.recorder.snapshot(take.committed)[: int(SAMPLE_RATE * self.STREAM_MAX)]
+        cap = self.STREAM_MAX if take.stalled else self.STREAM_CAP
+        audio = self.recorder.snapshot(take.committed)[: int(SAMPLE_RATE * cap)]
         n = len(audio)
         with self.lock:
             if not take.active:
