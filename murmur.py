@@ -118,11 +118,12 @@ PRIORITY_CLASSES = {"normal": 0x20, "above": 0x8000, "high": 0x80}
 
 
 @contextlib.contextmanager
-def boosted(cls: str = "high"):
+def boosted(cls: str = "above"):
     """Raise this process's priority class for the duration of a transcription burst.
     murmur idles at normal priority; while it is working the user is waiting on it, and on a
-    busy machine the class decides everything: measured 15.6 s (normal) vs 7.4 s (high) for the
-    same 6 s of audio. Restored afterwards, no-op off Windows."""
+    busy machine the class decides everything: measured 15.9 s (normal) vs 8.2 s (above normal)
+    vs 8.1 s (high) for the same 6 s of audio - so above-normal takes the whole win without
+    starving the rest of the machine. Restored afterwards, no-op off Windows."""
     k32 = getattr(getattr(ctypes, "windll", None), "kernel32", None)
     if k32 is None or cls not in PRIORITY_CLASSES:
         yield
