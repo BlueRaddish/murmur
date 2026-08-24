@@ -1,7 +1,8 @@
 """murmur - hold Ctrl+Win, talk, release. Local Whisper types what you said.
 
-No cloud, no LLM rewriting. Technical terms are protected by vocab.txt,
-which is fed to Whisper as a prompt so it prefers those spellings.
+Completely local: audio is transcribed on this machine and discarded; the only network
+access is the one-time model download. No LLM rewriting. Technical terms are protected by
+vocab.txt, which is fed to Whisper as a prompt so it prefers those spellings.
 
 Modes
   hold        hold Ctrl+Win, speak, release -> typed.
@@ -14,13 +15,22 @@ A glassy disc at the bottom of the screen shows the mode and live mic level, so 
 see it is actually hearing you. The tray's "Open murmur" window keeps a history of
 everything transcribed (default 7 days, adjustable) in case a paste goes missing.
 """
+import time
+T0 = time.monotonic()   # first thing: the startup timeline in the log counts from here
+
 import argparse
+import contextlib
+import ctypes
 import json
 import os
 import sys
 import threading
-import time
 from pathlib import Path
+
+# CTranslate2 ships Intel OpenMP, whose worker threads spin for 200 ms after every parallel
+# region. On a CPU that other apps keep busy that spinning is pure loss: measured 15.6 s -> 9.9 s
+# for the same 6 s of audio with the spin off. Must be set before the DLL loads.
+os.environ.setdefault("KMP_BLOCKTIME", "0")
 
 import numpy as np
 import pyperclip
@@ -42,6 +52,10 @@ CMD_KEYS = {Key.cmd, Key.cmd_l, Key.cmd_r}
 
 DEFAULTS = {"model": "small.en", "device": "cpu", "language": None, "mic": None, "trigger_vk": None,
             "retention_days": 7, "color": "#e63c3c", "color_busy": "#ffaa32", "opacity": 0.9, "haze": False}
+
+
+def since_launch() -> str:
+    return f"[+{time.monotonic() - T0:.1f}s]"
 
 
 def log(msg: str) -> None:
@@ -98,6 +112,31 @@ def load_vocab(path: Path) -> str:
 def clean(text: str) -> str:
     """Whitespace only. Deliberately no rewriting - that is the point of this tool."""
     return " ".join(text.split())
+
+
+PRIORITY_CLASSES = {"normal": 0x20, "above": 0x8000, "high": 0x80}
+
+
+@contextlib.contextmanager
+def boosted(cls: str = "high"):
+    """Raise this process's priority class for the duration of a transcription burst.
+    murmur idles at normal priority; while it is working the user is waiting on it, and on a
+    busy machine the class decides everything: measured 15.6 s (normal) vs 7.4 s (high) for the
+    same 6 s of audio. Restored afterwards, no-op off Windows."""
+    k32 = getattr(getattr(ctypes, "windll", None), "kernel32", None)
+    if k32 is None or cls not in PRIORITY_CLASSES:
+        yield
+        return
+    k32.GetCurrentProcess.restype = ctypes.c_void_p
+    k32.GetPriorityClass.argtypes = [ctypes.c_void_p]
+    k32.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    me = k32.GetCurrentProcess()
+    before = k32.GetPriorityClass(me)
+    k32.SetPriorityClass(me, PRIORITY_CLASSES[cls])
+    try:
+        yield
+    finally:
+        k32.SetPriorityClass(me, before or PRIORITY_CLASSES["normal"])
 
 
 def resample(audio: np.ndarray, src: int, dst: int) -> np.ndarray:
@@ -236,12 +275,14 @@ class Murmur:
 
     def __init__(self, cfg: dict, vocab: str, on_state=None, on_text=None):
         from faster_whisper import WhisperModel
-        log(f"loading {cfg['model']} on {cfg['device']}...")
+        log(f"loading {cfg['model']} on {cfg['device']}...  {since_launch()}")
         compute = "int8" if cfg["device"] == "cpu" else "float16"
-        self.model = WhisperModel(cfg["model"], device=cfg["device"], compute_type=compute)
+        self.model = self.load_model(WhisperModel, cfg["model"], cfg["device"], compute)
         self.cfg = cfg
         self.vocab = vocab
         self.language = cfg["language"] or ("en" if cfg["model"].endswith(".en") else None)
+        self.warm_up()
+        log(f"model ready  {since_launch()}")
         self.recorder = Recorder(cfg["mic"])
         self.typist = Typist()
         self.on_state = on_state or (lambda s: None)
@@ -262,6 +303,32 @@ class Murmur:
     def _set(self, state: str) -> None:
         self.state = state
         self.on_state(state)
+
+    @staticmethod
+    def load_model(WhisperModel, name: str, device: str, compute: str):
+        """The cached copy first. Without local_files_only faster-whisper asks huggingface.co
+        whether the model changed on every start - ~8 s here, and the only network access
+        murmur would ever make. Falls back to the download when the model is not cached."""
+        try:
+            return WhisperModel(name, device=device, compute_type=compute, local_files_only=True)
+        except Exception as e:
+            log(f"  not cached ({type(e).__name__}); downloading {name}...")
+            return WhisperModel(name, device=device, compute_type=compute)
+
+    def warm_up(self) -> None:
+        """The first transcription pays for the VAD session and CTranslate2's lazy allocations -
+        seconds, under load. Pay it now, not inside the first streaming pass (which would then
+        be judged slower than realtime) or the user's first dictation."""
+        t0 = time.monotonic()
+        try:
+            from faster_whisper.vad import get_vad_model
+            get_vad_model()
+            with boosted():
+                list(self.model.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), language=self.language,
+                                           beam_size=1, vad_filter=False)[0])   # silence skips VAD, not the model
+        except Exception as e:
+            log(f"  warm-up skipped: {e}")
+        log(f"  warm-up {time.monotonic() - t0:.1f}s")
 
     # --- recording control --------------------------------------------------
     def start(self, persistent: bool) -> None:
@@ -359,11 +426,12 @@ class Murmur:
     # --- transcription ------------------------------------------------------
     def _segments(self, audio: np.ndarray, prev: str = "") -> list:
         prompt = ", ".join(p for p in (self.vocab, prev[-200:]) if p) or None
-        segs, _ = self.model.transcribe(
-            audio, language=self.language, beam_size=5, initial_prompt=prompt,
-            vad_filter=True, condition_on_previous_text=False,
-        )
-        return list(segs)
+        with boosted():
+            segs, _ = self.model.transcribe(
+                audio, language=self.language, beam_size=5, initial_prompt=prompt,
+                vad_filter=True, condition_on_previous_text=False,
+            )
+            return list(segs)
 
     def transcribe(self, audio: np.ndarray, prev: str = "") -> str:
         if len(audio) < SAMPLE_RATE * 0.3:  # under 300ms: a tap, not speech
@@ -443,7 +511,7 @@ class Murmur:
                         self._set("idle")
 
     def run(self) -> None:
-        log("ready: hold Ctrl+Win and talk; double-tap for persistent mode.")
+        log(f"ready: hold Ctrl+Win and talk; double-tap for persistent mode.  {since_launch()}")
         self._set("idle")
         self.listener = keyboard.Listener(on_press=self.on_press, on_release=self.on_release,
                                           win32_event_filter=self.win32_event_filter)
@@ -541,6 +609,7 @@ def run_app(factory, cfg: dict, cfg_path: Path) -> None:
 
     threading.Thread(target=icon.run, daemon=True).start()
     threading.Thread(target=load, daemon=True).start()
+    log(f"ui up  {since_launch()}")
     root.after(40, tick)
     try:
         root.mainloop()

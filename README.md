@@ -2,10 +2,25 @@
 
 Hold **Ctrl+Win**, talk, let go. What you said gets typed into whatever window has focus.
 
-Local [faster-whisper](https://github.com/SYSTRAN/faster-whisper) does the transcription.
-Nothing leaves your machine, nothing is subscription-gated, and **no language model
-"cleans up" your words** - `rebase`, `tmux`, `GDScript` come out as you said them. A
-`vocab.txt` of your own terms is handed to Whisper as a prompt so it prefers those spellings.
+**Completely local.** [faster-whisper](https://github.com/SYSTRAN/faster-whisper) runs
+on your own CPU; your voice never leaves the machine. And **no language model "cleans up"
+your words** - `rebase`, `tmux`, `GDScript` come out as you said them. A `vocab.txt` of
+your own terms is handed to Whisper as a prompt so it prefers those spellings.
+
+## Everything stays on this machine
+
+Cloud dictation tools stream your microphone to a server and hand the transcript to an LLM
+before it reaches you. murmur has no server side at all:
+
+- **Audio** is recorded into memory, transcribed by Whisper on this computer, and discarded.
+  No account, no API key, no telemetry.
+- **Network** is used exactly once: the first run downloads the model (~250 MB) from Hugging
+  Face. After that murmur checks the local copy first and never goes online again - it works
+  with Wi-Fi off.
+- **Text** goes to your clipboard and, if you keep history on, to
+  `%APPDATA%\murmur\history.jsonl` - a plain file you can read, prune (Settings > retention,
+  0 keeps nothing) or delete.
+- **Nothing rewrites you.** What Whisper hears is what gets typed, technical terms included.
 
 ## Install
 

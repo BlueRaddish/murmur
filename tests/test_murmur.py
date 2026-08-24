@@ -87,7 +87,7 @@ real_handle = murmur.Murmur.handle
 chord(m); chord(m, False); m.last_chord_release -= 1; chord(m); chord(m, False)
 assert m.pending == 2 and states == ["recording", "busy", "recording", "busy"], states
 import threading as _th
-m.transcribe = lambda a: ""; m.typist = None
+m.transcribe = lambda a, prev="": ""; m.typist = None
 real_handle(m, np.zeros(0)); assert "idle" not in states
 real_handle(m, np.zeros(0)); assert states[-1] == "idle" and m.pending == 0
 
@@ -217,6 +217,36 @@ finally:
     pyperclip.copy = _copy
 assert pyperclip.paste() == "hello clip" and held["n"] == 0 and ("press", "v") in pressed
 print("typist ok")
+
+# load_model: cached copy first (no network), download only when local_files_only fails
+calls = []
+class FakeWM:
+    def __init__(self, name, **kw):
+        calls.append(kw.get("local_files_only", False))
+        if kw.get("local_files_only") and name == "missing":
+            raise FileNotFoundError("not cached")
+assert isinstance(murmur.Murmur.load_model(FakeWM, "small.en", "cpu", "int8"), FakeWM) and calls == [True]
+calls.clear()
+assert isinstance(murmur.Murmur.load_model(FakeWM, "missing", "cpu", "int8"), FakeWM) and calls == [True, False]
+print("load_model ok")
+
+# boosted(): priority class goes up for the block and comes back down after, even on error
+import ctypes
+k32 = ctypes.windll.kernel32; k32.GetCurrentProcess.restype = ctypes.c_void_p; k32.GetPriorityClass.argtypes = [ctypes.c_void_p]
+before = k32.GetPriorityClass(k32.GetCurrentProcess())
+with murmur.boosted("high"):
+    assert k32.GetPriorityClass(k32.GetCurrentProcess()) == murmur.PRIORITY_CLASSES["high"]
+assert k32.GetPriorityClass(k32.GetCurrentProcess()) == before
+try:
+    with murmur.boosted("high"):
+        raise RuntimeError("x")
+except RuntimeError:
+    pass
+assert k32.GetPriorityClass(k32.GetCurrentProcess()) == before
+with murmur.boosted("nonsense"):
+    assert k32.GetPriorityClass(k32.GetCurrentProcess()) == before
+assert os.environ["KMP_BLOCKTIME"] == "0"
+print("boosted ok")
 
 # overlay renders every state with silence, speech-like audio and garbage, without raising
 import overlay
