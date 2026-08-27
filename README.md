@@ -1,4 +1,4 @@
-# murmur
+<img src="assets/lockup.svg" alt="murmur" height="48">
 
 Hold **Ctrl+Win**, talk, let go. What you said gets typed into whatever window has focus.
 

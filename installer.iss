@@ -1,6 +1,6 @@
 ; Inno Setup script. Per-user install, no admin. Adds a Start Menu entry and a
 ; run-at-login task, and offers to launch it.
-#define AppVersion "0.6.0"
+#define AppVersion "0.7.0"
 [Setup]
 AppId={{7C1F0D8A-6C2B-4E1E-9B57-MURMUR000001}
 AppName=murmur

@@ -138,6 +138,10 @@ R_IN = 2                            # = outer - inset, clamped at 0: the segment
 H_CTL = 32                          # control height
 H_ROW = 36                          # history row
 H_CHIP = 20                         # "restart to apply" chip
+H_MARK = 24                         # sidebar lockup: the mark's IMAGE box (its ink is 40/64 of
+GAP_MARK = 16                       # that, ~1.9x the wordmark's x-height) and the air after it.
+                                    # Both are up from the 20/10 first cut: at that size the mark
+                                    # read as a letter and the sidebar said "m murmur"
 W_CHIP = 88                         # trigger-key chip: fits "Previous Track" at 9 pt
 W_SIDE = 168                        # sidebar
 W_COL = 280                         # settings control column
@@ -618,6 +622,20 @@ class AppWindow:
             self.imgs[key] = tk.PhotoImage(data=base64.b64encode(make()).decode())
         return self.imgs[key]
 
+    def mark(self, size, color) -> tk.PhotoImage:
+        """The brand m drawn in a `size` px box, in `color`, then CROPPED to its ink - brand.mark
+        keeps the SVG's own margins, and a lockup has to put the shape's real feet on a baseline.
+        (The crop must go by the alpha channel: every pixel carries the colour, only alpha says
+        where the ink is.) Cached like every other rendered image; the PhotoImage's width()/
+        height() then hand the layout the mark's true size at any DPI."""
+        def make():
+            import brand
+            im = brand.mark(size, color)
+            buf = io.BytesIO()
+            im.crop(im.getchannel("A").getbbox()).save(buf, "PNG")
+            return buf.getvalue()
+        return self.img(("mark", size, color), make)
+
     def rr(self, w, h, r, fill, ground, border=None, bw=1, bar=None) -> tk.PhotoImage:
         """Cached rounded rect, sizes in device px. Every control's corner comes from here."""
         return self.img(("rr", w, h, r, fill, ground, border, bw, bar),
@@ -678,9 +696,11 @@ class AppWindow:
         p = self.pal
         s = tk.Frame(self.win, bg=p["surface"], width=self.px(W_SIDE))
         s.pack_propagate(False)
-        # chrome, not content: same size as a view title but muted, so "History" reads louder
-        tk.Label(s, text="murmur", font=self.F["title"], fg=p["muted"], bg=p["surface"]).pack(
-            anchor="w", padx=self.px(SP[3]), pady=(self.px(SP[4]), self.px(SP[4])))
+        lock = self._lockup(s)
+        # where the mark overshoots the word the block grows upward: give that height straight
+        # back out of the top pad, so the wordmark's baseline stays where the view titles' is
+        lock.pack(anchor="w", padx=self.px(SP[3]),
+                  pady=(self.px(SP[4]) - lock.rise, self.px(SP[4])))
         self.nav = {}
         for name, label in (("history", "History"), ("settings", "Settings")):
             # the pill IS the row's image; the text sits on a Label placed inside it, inset by
@@ -708,6 +728,28 @@ class AppWindow:
             l.pack(side="left")
             self.foot_links.append(l)
         return s
+
+    def _lockup(self, parent) -> tk.Canvas:
+        """mark + "murmur" on ONE baseline. Both in `muted`: up here the identity is chrome, the
+        same weight as the word it sits next to, so "History" still reads louder and the accent
+        stays reserved for the primary action.
+
+        A Canvas because only a canvas can share a baseline between a PNG and a text: both are
+        anchored "sw", the image on the baseline itself (mark() has cropped its margins away) and
+        the text one descent below it, which is where a "sw" text hangs its box. The mark's left
+        edge at x=0 puts it on the same left edge as the nav labels below."""
+        p, f = self.pal, self.mf["title"]
+        m = self.mark(self.px(H_MARK), p["muted"])
+        desc = f.metrics("descent")
+        h = max(f.metrics("linespace"), m.height() + desc)   # the taller of word and mark sets it
+        base = h - desc
+        x = m.width() + self.px(GAP_MARK)
+        c = tk.Canvas(parent, bg=p["surface"], bd=0, highlightthickness=0,
+                      width=x + f.measure("murmur"), height=h)
+        c.create_image(0, base, anchor="sw", image=m)
+        c.create_text(x, base + desc, anchor="sw", text="murmur", font=f, fill=p["muted"])
+        c.rise = h - f.metrics("linespace")               # how far the mark overshoots the word
+        return c
 
     def _nav_paint(self, name, fill) -> None:
         row, l = self.nav[name]

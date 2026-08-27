@@ -601,17 +601,27 @@ class Murmur:
 
 
 # --- UI: tray icon, overlay, app window -------------------------------------------
-COLORS = {"idle": "#787878", "recording": "#dc3232", "persistent": "#f09620", "busy": "#3c82dc",
-          "loading": "#3c82dc"}
+COLORS = {"idle": "#8b908b", "recording": "#dc3232", "persistent": "#dc3232", "busy": "#ffaa32",
+          "loading": "#ffaa32"}   # tray tints: the fallbacks when config's colours are unusable
 LABELS = {"idle": "ready (Ctrl+Win)", "recording": "recording", "persistent": "persistent, Ctrl+Win stops",
           "busy": "transcribing...", "loading": "loading model..."}
+CFG_COLOR = {"recording": "color", "persistent": "color", "busy": "color_busy", "loading": "color_busy"}
 
 
-def make_icon(state: str):
-    from PIL import Image, ImageDraw
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    ImageDraw.Draw(img).ellipse((8, 8, 56, 56), fill=COLORS[state])
-    return img
+def tray_color(state: str, cfg: dict):
+    """Tint for the tray mark: the colours the bar itself shows - the accent while the mic is open
+    (recording and persistent alike, as on the bar; the tray title says which), the transcribing
+    colour while it types - so tray and overlay never disagree. idle is a neutral that stays
+    visible on a light and a dark taskbar."""
+    from overlay import hex_rgb
+    fallback = hex_rgb(COLORS[state], (139, 144, 139))
+    key = CFG_COLOR.get(state)
+    return hex_rgb(cfg.get(key) or "", fallback) if key else fallback
+
+
+def make_icon(state: str, cfg: dict):
+    from brand import mark
+    return mark(64, tray_color(state, cfg))
 
 
 def run_app(factory, cfg: dict, cfg_path: Path) -> None:
@@ -634,14 +644,16 @@ def run_app(factory, cfg: dict, cfg_path: Path) -> None:
     def on_save(c: dict) -> None:
         save_config(cfg_path, c)
         overlay.configure(c)
+        # a colour change in Settings must reach the tray now, not at the next state change
+        icon.icon = make_icon(holder["app"].state if holder["app"] else "loading", c)
 
     win = AppWindow(root, history, cfg, on_save, scale, get_app=lambda: holder["app"],
                     links={"vocab": lambda: os.startfile(find_vocab()), "folder": lambda: os.startfile(APPDIR)},
                     icon=RES / "murmur.ico")
-    icon = pystray.Icon("murmur", make_icon("loading"), "murmur: " + LABELS["loading"])
+    icon = pystray.Icon("murmur", make_icon("loading", cfg), "murmur: " + LABELS["loading"])
 
     def on_state(state: str) -> None:
-        icon.icon = make_icon(state)
+        icon.icon = make_icon(state, cfg)
         icon.title = "murmur: " + LABELS[state]
         overlay.post(state)
 

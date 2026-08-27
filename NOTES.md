@@ -121,6 +121,41 @@ Decisions
   view, a wheel binding leaking through hide(), the detail measure running to ~200 ch maximised,
   a centred empty state, three controls with no keyboard path - all fixed; tests/test_window.py
   holds the contrast, chroma-budget, one-right-edge, focus-chain and wheel-leak asserts.
+- Identity, the Ripple m (2026-08-27, v0.7). murmur had no mark - a grey disc in the tray and a
+  plain "murmur" Label. The panel picked the m over a waveform or a mic: it is the product's own
+  first letter, and its two arches already *are* the thing (a sound going out) without borrowing
+  hardware imagery that says "recording device" when the point is that nothing is recorded
+  anywhere. Level build over rising because the tray needs the mark to sit square in a 16 px box.
+  Geometry (64 grid, "Ripple m, level"): two half-annuli on the baseline y=52, arch 1 centre
+  (20,24) radii 4/12, arch 2 centre (40,28) radii 8/16, three 8-wide legs at x 8/24/48 - the
+  small arch's right leg and the big arch's left leg are the same leg, which is what makes it
+  read as an m and not as two arches. Bbox 8..56 x 12..52. Brand green #1f9a3a, white mark on it.
+  Where it appears: tray icon tinted per state (idle #8b908b neutral, recording the user's
+  accent so tray and overlay agree, persistent the accent too and busy/loading cfg color_busy -
+  the tray says exactly what the bar says, and the tray title says which mic-open mode it is),
+  window title bar and installer/app icon (the tile), sidebar lockup, README lockup.
+  The README lockup ships with a fixed brand-green ink rather than currentColor: an <img> has
+  nothing to inherit from, and its prefers-color-scheme reads the reader's OS, not GitHub's theme
+  toggle, so a dark-theme reader on a light-mode OS got #16221a on #0d1117. No fixed colour
+  clears 4.5:1 on both #ffffff and #0d1117 (4.35:1 is the arithmetic ceiling); #1f9a3a is 3.7:1
+  and 5.2:1, which a 30 px logotype may have.
+  brand.py draws all of it from those numbers - PIL half-discs minus inner discs plus leg rects,
+  supersampled 4x - so **no image assets ship**: build.ps1 calls `python brand.py --ico
+  murmur.ico` and murmur.ico stays generated and git-ignored. Sizes <= 24 px switch to a coarser
+  16-unit grid (legs at 2/6/12, baseline 13) and <= 16 px is thresholded to whole pixels;
+  a downsampled 64-grid mark is grey mush next to the system icons. Tiles <= 32 px also drop the
+  208/256 inner box and give the mark the whole tile, its own 2/16 and 3/16 margins doing the
+  padding: 208/256 of 16 is 13, i.e. scale 0.8125, which drew legs 2/2/1 px wide on a baseline at
+  y=11.56 - purpose-drawn but not pixel-fitted, and pixel-fitted is most of what a frame per size
+  is for. Pillow's ICO writer resamples one image for every size, so save_ico() hands it a
+  purpose-drawn frame per size via append_images. The tray is the one place that gets none of
+  this: pystray saves its own ICO from the single image it is handed, so the mark reaches it
+  resampled - and it is handed mark(64) because a DPI-aware process on a 200% display has Windows
+  ask LoadImage for a 64 px frame, which an icon stopping at 32 would have to upscale.
+  tests/test_brand.py pins the PIL render against a headless-Chrome rasterisation of the same
+  SVG path (IoU 0.9987), the 16 px pixel grid, the seven ico frames
+  (whole-pixel legs in the 16 and 32 px ones included), every tray tint, and the rule that idle,
+  mic-open and transcribing are three different icons at the shipped defaults.
 
 - Performance (v0.6, measured 2026-08-24 on the i7-9750H with the CPU ~95% busy from other apps,
   interleaved A/B, min of rounds):

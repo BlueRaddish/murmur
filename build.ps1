@@ -2,7 +2,7 @@
 $ErrorActionPreference = "Continue"  # native exes write progress to stderr; PS 5.1 would treat that as failure
 Set-Location $PSScriptRoot
 Stop-Process -Name murmur -Force -ErrorAction SilentlyContinue  # a running copy locks dist
-python -c "import murmur; murmur.make_icon('idle').save('murmur.ico', sizes=[(16,16),(32,32),(48,48),(64,64)])"
+python brand.py --ico murmur.ico
 python -m PyInstaller --noconfirm --clean --noconsole --onedir --name murmur --icon murmur.ico `
   --add-data "vocab.txt;." --add-data "murmur.ico;." `
   --collect-all faster_whisper --collect-all ctranslate2 --collect-all av `

@@ -108,6 +108,28 @@ assert len(hist.items) == 45 and win.sel is hist.items[-1]        # newest selec
 assert "45 dictations" in win.count.cget("text") and "7 days" in win.count.cget("text")
 assert len(win.rows) == 45 and win.rows[0][0] is hist.items[-1]   # newest first
 
+# --- the sidebar lockup ---------------------------------------------------------------------
+drop = lambda w: (w.nav["history"][0].winfo_rooty()
+                  - w.win.grid_slaves(row=0, column=0)[0].winfo_rooty())
+lock = win.win.grid_slaves(row=0, column=0)[0].pack_slaves()[0]
+im_id, tx_id = lock.find_all()
+assert lock.type(im_id) == "image" and lock.itemcget(tx_id, "text") == "murmur"
+ib, tb, desc = lock.bbox(im_id), lock.bbox(tx_id), win.mf["title"].metrics("descent")
+assert ib[3] == tb[3] - desc, (ib, tb)                 # the mark's feet on the word's baseline
+assert abs((ib[3] - ib[1]) - 40 / 64 * win.px(W.H_MARK)) <= 1   # cropped to ink, not the box
+assert (lock.coords(tx_id)[0] - lock.coords(im_id)[0]
+        == win.mark(win.px(W.H_MARK), win.pal["muted"]).width() + win.px(W.GAP_MARK))
+# a mark taller than the word must not push the nav down - the overshoot comes out of the top pad
+was, W.H_MARK = W.H_MARK, 40
+tall = W.AppWindow(root, fake_history(2), fresh_cfg(), lambda c: None, theme="light")
+tall.show()
+root.update()
+assert tall.win.grid_slaves(row=0, column=0)[0].pack_slaves()[0].rise > 0   # ... and it happened
+assert drop(tall) == drop(win)
+tall.win.destroy()
+W.H_MARK = was
+print("lockup ok")
+
 win.go("settings")
 root.update()
 assert win.views["settings"].winfo_ismapped() and win.view == "settings"
@@ -184,7 +206,7 @@ root.update()
 assert cfg["color"] == W.PRESETS[3] == cfg["color"].lower() and len(saves) == n + 1
 
 n, e = len(saves), win.ctl["color"]["entry"]
-e.focus_set()
+e.focus_force()
 root.update()
 e.delete(0, "end")
 e.insert(0, "#12FF34")
@@ -217,7 +239,7 @@ root.update()
 assert len(saves) == n + 1 and 0.2 <= cfg["opacity"] < 0.9
 
 n = len(saves)
-win.e_days.focus_set()
+win.e_days.focus_force()
 root.update()
 win.e_days.delete(0, "end")
 win.e_days.insert(0, "3")
@@ -226,7 +248,7 @@ root.update()
 assert cfg["retention_days"] == 3.0 and hist.days == 3.0 and len(saves) == n + 1
 assert "3 days" in win.count.cget("text")
 n = len(saves)
-win.e_days.focus_set()
+win.e_days.focus_force()
 root.update()
 win.e_days.delete(0, "end")
 win.e_days.insert(0, "soon")
