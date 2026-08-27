@@ -156,6 +156,15 @@ Decisions
   SVG path (IoU 0.9987), the 16 px pixel grid, the seven ico frames
   (whole-pixel legs in the 16 and 32 px ones included), every tray tint, and the rule that idle,
   mic-open and transcribing are three different icons at the shipped defaults.
+- Mic by name (2026-08-27). The user's first take on 0.7.0 "went green then back to transparent,
+  nothing in history": the log showed 6 s takes at a constant rms 0.23 coming back empty in 0.0 s
+  (Whisper's VAD dropped everything before the encoder ran). Config said `"mic": 2`, chosen on
+  Aug 21 when 2 was the headset; Windows had re-enumerated and 2 was now the internal digital
+  mic, which delivers zeros or a flat hiss. Settings now saves the device *name* (the MME entry,
+  e.g. "Headset Microphone (Apple Audio"), `resolve_device` looks the index up at every take
+  start (first MME input containing the name; unknown -> default), and the log names the mic
+  whenever the opened device changes. sounddevice's own substring match was not used: the same
+  name exists once per host API (MME, DirectSound, WASAPI, WDM-KS) and it raises on ambiguity.
 
 - Performance (v0.6, measured 2026-08-24 on the i7-9750H with the CPU ~95% busy from other apps,
   interleaved A/B, min of rounds):

@@ -267,6 +267,10 @@ win._captured(0xB0)
 assert cfg["trigger_vk"] == 0xB0 and win.l_trig.cget("text") == W.MEDIA_KEYS[0xB0]
 win.clear_key()
 assert cfg["trigger_vk"] is None and not win.b_rm.f.winfo_ismapped()
+if win.mics:   # the microphone is saved by name, never by index
+    win.v_mic.set(f"{win.mics[0][0]}: {win.mics[0][1]}"); win._set_mic()
+    assert cfg["mic"] == win.mics[0][1] and isinstance(cfg["mic"], str)
+    win.v_mic.set("(system default)"); win._set_mic(); assert cfg["mic"] is None
 print("settings ok")
 
 # clear-all really clears, and the empty state draws

@@ -342,6 +342,18 @@ for style in ("waves", "light"):                      # both looks, haze on and 
 # Recorder keeps a rolling window of recent samples
 rec = murmur.Recorder(); rec._cb(np.full((300, 1), 0.5, dtype=np.float32)); s_ = rec.samples()
 assert len(s_) == 2048 and s_[-1] == 0.5 and s_[0] == 0.0
+# the mic is kept by name: indices shift when Windows re-enumerates devices (the headset went 2 -> 1)
+_qd = murmur.sd.query_devices
+murmur.sd.query_devices = lambda *a, **k: [
+    {"name": "Microsoft Sound Mapper - Input", "max_input_channels": 2, "hostapi": 0},
+    {"name": "Headset Microphone (Apple Audio", "max_input_channels": 1, "hostapi": 0},
+    {"name": "Internal Digital Microphone (Ap", "max_input_channels": 1, "hostapi": 0},
+    {"name": "Speakers", "max_input_channels": 0, "hostapi": 0},
+    {"name": "Headset Microphone (Apple Audio Device)", "max_input_channels": 1, "hostapi": 2}]
+assert murmur.resolve_device("headset microphone") == 1 and murmur.resolve_device("Internal") == 2
+assert murmur.resolve_device(None) is None and murmur.resolve_device(2) == 2 and murmur.resolve_device("nope") is None
+murmur.sd.query_devices = _qd
+print("mic by name ok")
 print("overlay render ok")
 
 # transitions: one time-based curve (180 ms in, 650 ms out) and one premultiplied dissolve

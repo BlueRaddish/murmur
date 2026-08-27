@@ -1532,7 +1532,8 @@ class AppWindow:
         if mic.startswith("("):
             self.cfg["mic"] = None
         elif not mic.endswith("(as configured)"):
-            self.cfg["mic"] = int(mic.split(":")[0])
+            # the name, not the index: indices shift when Windows re-enumerates audio devices
+            self.cfg["mic"] = dict(self.mics)[int(mic.split(":")[0])]
         self.save()
 
     def _set_model(self) -> None:

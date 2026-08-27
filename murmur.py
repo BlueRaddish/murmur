@@ -168,11 +168,28 @@ def resample(audio: np.ndarray, src: int, dst: int) -> np.ndarray:
     return np.interp(idx, np.arange(len(audio)), audio).astype(np.float32)
 
 
+def resolve_device(device):
+    """Config `mic` -> what sounddevice opens: None = the default input, an index as is, a name
+    substring -> the first MME input whose name contains it (host API 0, one entry per mic - the
+    list Settings shows). Looked up at every start, because indices shift whenever Windows
+    re-enumerates audio devices: on 2026-08-27 the headset moved from 2 to 1 and a config that
+    said 2 recorded the internal mic's hiss for hours. An unknown name falls back to the default."""
+    if device is None or isinstance(device, int):
+        return device
+    q = str(device).strip().lower()
+    for i, d in enumerate(sd.query_devices()):
+        if d["max_input_channels"] > 0 and d["hostapi"] == 0 and q in d["name"].lower():
+            return i
+    log(f"mic {device!r} not found, using the default input")
+    return None
+
+
 class Recorder:
     """Chunks are stored already at 16 kHz so snapshot() during recording is a concatenate."""
 
     def __init__(self, device=None):
         self.device = device
+        self._opened = "?"   # last device actually opened, so the log names the mic when it changes
         self._chunks: list = []
         self._lock = threading.Lock()
         self._stream = None
@@ -215,13 +232,20 @@ class Recorder:
             self._chunks = []
             self.total = 0
         self.level = 0.0
+        dev = resolve_device(self.device)
+        if dev != self._opened:
+            try:
+                log(f"mic: {sd.query_devices(dev, 'input')['name']}")
+            except Exception as e:
+                log(f"mic: {dev!r} ({e})")
+            self._opened = dev
         try:   # the rate that worked last time (16 k to begin with), so a take starts on the first open
             self._stream = sd.InputStream(samplerate=self._rate, channels=1, dtype="float32",
-                                          device=self.device, callback=self._cb)
+                                          device=dev, callback=self._cb)
         except sd.PortAudioError:  # device refuses it (WASAPI refuses 16k): native rate, resample later
-            self._rate = int(sd.query_devices(self.device, "input")["default_samplerate"])
+            self._rate = int(sd.query_devices(dev, "input")["default_samplerate"])
             self._stream = sd.InputStream(samplerate=self._rate, channels=1, dtype="float32",
-                                          device=self.device, callback=self._cb)
+                                          device=dev, callback=self._cb)
         try:
             self._stream.start()
         except Exception:
