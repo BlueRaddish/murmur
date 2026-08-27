@@ -70,7 +70,7 @@ CMD_KEYS = {Key.cmd, Key.cmd_l, Key.cmd_r}
 
 DEFAULTS = {"model": "small.en", "device": "cpu", "language": None, "mic": None, "trigger_vk": None,
             "beam_size": 5, "streaming": True, "retention_days": 7, "color": "#e63c3c",
-            "color_busy": "#ffaa32", "opacity": 0.9, "haze": False}
+            "color_busy": "#ffaa32", "opacity": 0.9, "haze": False, "indicator": "waves"}
 
 
 def since_launch() -> str:
@@ -629,13 +629,15 @@ def run_app(factory, cfg: dict, cfg_path: Path) -> None:
     holder = {"app": None}
     history = History(APPDIR / "history.jsonl", cfg["retention_days"])
     overlay = Overlay(lambda: holder["app"].recorder.samples() if holder["app"] else None, scale)
-    overlay.set_colors(cfg)
+    overlay.configure(cfg)
 
     def on_save(c: dict) -> None:
         save_config(cfg_path, c)
-        overlay.set_colors(c)
+        overlay.configure(c)
 
-    win = AppWindow(root, history, cfg, on_save, scale, get_app=lambda: holder["app"])
+    win = AppWindow(root, history, cfg, on_save, scale, get_app=lambda: holder["app"],
+                    links={"vocab": lambda: os.startfile(find_vocab()), "folder": lambda: os.startfile(APPDIR)},
+                    icon=RES / "murmur.ico")
     icon = pystray.Icon("murmur", make_icon("loading"), "murmur: " + LABELS["loading"])
 
     def on_state(state: str) -> None:

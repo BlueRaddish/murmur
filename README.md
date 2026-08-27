@@ -51,10 +51,12 @@ near-invisible at rest. While you talk it turns red and becomes a live spectrum 
 voice - one glowing shape that swells and ripples across its whole length and pinches
 back into the stick at the tips, then relaxes slowly when you stop; it auto-scales to your
 mic. Colours, opacity and haze are yours: Settings has an accent colour (recording) and a
-transcribing colour with preset swatches, an opacity slider and a haze toggle; Save applies
-them live. An orange-to-yellow pulse runs along it while
-transcribing. If it stays a flat red line while you talk, it is listening to the wrong
-input: pick the microphone in Settings.
+transcribing colour with preset swatches, an opacity slider and a haze toggle; every change
+applies as you make it. An orange-to-yellow pulse runs along it while transcribing. Settings >
+Style (or `"indicator": "waves" | "light"` in `config.json`) swaps the spectrum for a single
+light behind the glass that breathes in your accent colour and brightens as you speak. If the
+bar stays flat while you talk, it is listening to the wrong input: pick the microphone in
+Settings.
 
 **Latency.** Transcription runs while you are still talking: every 6 s or so of new speech
 is decoded in the background and everything up to the last segment boundary Whisper itself
@@ -76,10 +78,11 @@ Settings if you prefer speed.
 
 **History.** Double-click the tray icon (or "Open murmur") for a window with everything
 transcribed in the last 7 days - copy it back if a paste went missing or you overwrote the
-clipboard. The retention window is adjustable in Settings (0 keeps nothing). Stored in
+clipboard, delete one (undo offered) or clear all. The retention window is adjustable in
+Settings (0 keeps nothing). Stored in
 `%APPDATA%\murmur\history.jsonl`, local only.
 
-**Extra trigger key.** Settings > "Press a key..." binds any single key to toggle
+**Extra trigger key.** Settings > Trigger key > Change... binds any single key to toggle
 recording: a wired headset's inline button, a media key, F13 on a macro pad. murmur swallows
 that key so nothing else reacts to it, and it is never turned into a Ctrl+Win keystroke, so
 nothing extra reaches the app you're typing into. Different headsets send different codes;
@@ -87,8 +90,8 @@ the capture records whatever yours sends (the log shows the code).
 
 ## Options
 
-Settings tab in the app window, or `%APPDATA%\murmur\config.json`; command-line flags override
-for one run.
+Settings in the app window (changes apply at once; model, microphone and language after a
+restart), or `%APPDATA%\murmur\config.json`; command-line flags override for one run.
 
 ```
 --model tiny.en|base.en|small.en|medium.en|large-v3   default small.en

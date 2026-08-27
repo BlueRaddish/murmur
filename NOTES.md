@@ -83,6 +83,44 @@ Decisions
   shape keeps drawing (cross-faded to the resting stick) until flat. Colours come from config
   (`color`, `color_busy`) via Overlay.set_colors; persistent mode shares the recording colour - the
   old amber read as "orange while recording" to the user.
+- Overlay fade rewrite + light indicator (2026-08-26). The busy->idle fade "stopped glowing,
+  left an outline for a few seconds, then showed a bit of green". Three causes, one each:
+  three independent per-frame exponentials (anim 0.06 ~3 s, bands 0.955 ~4 s, busymix ~1 s)
+  that stall into a long dim tail and stutter when the CPU drops frames; _fill scaled glow and
+  rim by `active` but not the body, so the glow died first and left a flat body with a faint
+  rim; and busymix kept decaying while idle, crossfading the colour back to the green accent
+  during the fade-out (plus Image.blend mixing straight-alpha RGBA, and _render falling from
+  _fill to _base once the bands relaxed - a renderer swap mid-fade). Now: one time-based level
+  (clock attribute, 180 ms ease-out in / 650 ms smoothstep out, new segment from wherever the
+  level is), colour/pulse/breath frozen while idle (busymix and bands reset when it reaches 0),
+  every non-idle state rendered through _fill, and one premultiplied _dissolve(idle, active,
+  level) so glow, haze, body, rim and pulse fade together. Gone by ~0.7 s, no tail.
+- `indicator` in config ("waves" | "light", Overlay.set_colors is now configure()): light keeps
+  the resting frosted stick and puts an LED behind it - disc 0.8*H with a lighter core, halo
+  (1.8*H, blur 3*S, a 0.7) and bloom (blur 7*S, a 0.35) past the bar, brightness
+  0.55+0.45*breath (2.2 s, 0.9 s while transcribing) lifted 0.35*mic level (RMS auto-gained,
+  fast attack / slow release). No spectrum analysed in light style, no sweep pulse; same
+  colours, same dissolve. Sheets: scratchpad ui/fade_waves.png, light_breath.png.
+- App window redesign (2026-08-26). The user: "a lot better UI design on the settings and the
+  history pop up... a lot more senior, a lot more modern". Built to the UI design method (PARA
+  3-Resources/ui-design-method): brief -> tokens -> grey -> colour -> review against screenshots.
+  Tokens: a 12-step neutral ramp built in OKLCH from the *accent hue* (config `color`) at 2-6 %
+  chroma, accent at step 9, focus ring at 8 with real chroma, muted text at 11 de-chromed to
+  .035 (the first cut used the table's .14 and the whole light theme read green); light and dark
+  from the Windows AppsUseLightTheme key, dark title bar via DwmSetWindowAttribute(20). Type
+  Segoe UI 400 / Segoe UI Semibold 600 at 12/10/9 pt, Cascadia Mono for hex and the key chip.
+  Depth = hairlines + surface ladder, radius 0 (Tk cannot round corners; the toggle, colour dots
+  and slider knob are PIL-rendered PNGs via tk.PhotoImage(data=...), no ImageTk). Sidebar
+  (History / Settings, footer links to vocab.txt and the config folder) + content. History rows on
+  a Canvas (time meta + ellipsised text, hover/selected, Up/Down/Return/Ctrl+C/Delete), a detail
+  panel sized to its text and capped near 80 ch, Copy the one primary action, Delete with an 8 s
+  Undo, Clear all confirmed inline. Settings autosave on every change (no Save button); rows are
+  label + description left, control right in a fixed column; restart-needed rows grow a "restart
+  to apply" chip. The review (design + behaviour + code) caught: muted at accent chroma, the
+  trigger-key row 16 px short of the right edge, a 2.8:1 focus ring, Tab wandering into the hidden
+  view, a wheel binding leaking through hide(), the detail measure running to ~200 ch maximised,
+  a centred empty state, three controls with no keyboard path - all fixed; tests/test_window.py
+  holds the contrast, chroma-budget, one-right-edge, focus-chain and wheel-leak asserts.
 
 - Performance (v0.6, measured 2026-08-24 on the i7-9750H with the CPU ~95% busy from other apps,
   interleaved A/B, min of rounds):

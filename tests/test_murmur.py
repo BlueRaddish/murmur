@@ -312,25 +312,143 @@ print("boosted ok")
 
 # overlay renders every state with silence, speech-like audio and garbage, without raising
 import overlay
-o = overlay.Overlay.__new__(overlay.Overlay)
-o.scale, o.w, o.h = 2.0, int((overlay.Overlay.W + 44) * 2), int((overlay.Overlay.H + 44) * 2)
-o.frame, o.anim, o._cache, o.peak = 3, 1.0, {}, 1.0
-o.bands = np.zeros(overlay.Overlay.BANDS, dtype=np.float32); o.colors = dict(overlay.COLORS); o.fall = 0.9
-o.opacity, o.busymix, o.rng, o.haze = 0.9, 0.0, np.random.default_rng(1), True; o.noise_phase = o.rng.uniform(0, 6.28, size=(2, 4))
-o.axes = [[o.rng.uniform(0.2, 0.8, 3), o.rng.uniform(0, 6.28, 3), o.rng.uniform(0.02, 0.06, 3)] for _ in range(2)]
-o.set_colors({"opacity": "1.7"}); assert o.opacity == 1.0
-o.set_colors({"opacity": "x"}); assert o.opacity == 0.9
+o = overlay.Overlay(lambda: None, 2.0, window=False)      # window=False: pure rendering, no Win32
+assert o.hwnd is None
+o.configure({"opacity": "1.7"}); assert o.opacity == 1.0
+o.configure({"opacity": "x"}); assert o.opacity == 0.9
 assert overlay.hex_rgb("#1a2B3c", None) == (26, 43, 60) and overlay.hex_rgb("abc", None) == (170, 187, 204)
 assert overlay.hex_rgb("nope", (1, 2, 3)) == (1, 2, 3) and overlay.hex_rgb(None, (1, 2, 3)) == (1, 2, 3)
-o.set_colors({"color": "#00ff00", "color_busy": "zzz"}); assert o.colors["persistent"] == (0, 255, 0) and o.colors["busy"] == overlay.COLORS["busy"]
+o.configure({"color": "#00ff00", "color_busy": "zzz", "haze": True})
+assert o.colors["persistent"] == (0, 255, 0) and o.colors["busy"] == overlay.COLORS["busy"]
+assert o.style == "waves" and overlay.Overlay(lambda: None, 2.0, window=False).style == "waves"
+o.configure({"indicator": "light"}); assert o.style == "light"
+o.configure({"indicator": "spiral"}); assert o.style == "waves"      # unknown value -> waves
+o.configure({"indicator": None}); assert o.style == "waves"
+o.configure({"color": "#00ff00", "haze": True})
 tone = (0.1 * np.sin(np.arange(2048) / 16000 * 2 * np.pi * 180) + 0.05 * np.sin(np.arange(2048) / 16000 * 2 * np.pi * 1400)).astype(np.float32)
+o.level = 1.0
 for x in (None, np.zeros(2048, dtype=np.float32), tone, np.full(2048, np.nan, dtype=np.float32)):
     o._analyse(x)
     for st in ("idle", "recording", "persistent", "busy", "loading"):
         for o.busymix in (0.0, 0.5):
             o.state = st; img = o._render(); assert img.size == (o.w, o.h)
 o.bands[:] = 0; o._analyse(tone); assert o.bands.max() > 0.3 and o.bands.min() < o.bands.max()   # tone lifts its bands
+for style in ("waves", "light"):                      # both looks, haze on and off, every state
+    for hz in (True, False):
+        o.configure({"color": "#00ff00", "indicator": style, "haze": hz})
+        o.level, o.lvl = 1.0, 0.5
+        for st in ("idle", "recording", "persistent", "busy", "loading"):
+            o.state = st; assert o._render().size == (o.w, o.h)
 # Recorder keeps a rolling window of recent samples
 rec = murmur.Recorder(); rec._cb(np.full((300, 1), 0.5, dtype=np.float32)); s_ = rec.samples()
 assert len(s_) == 2048 and s_[-1] == 0.5 and s_[0] == 0.0
 print("overlay render ok")
+
+# transitions: one time-based curve (180 ms in, 650 ms out) and one premultiplied dissolve
+fake = [0.0]
+
+def fresh_overlay(samples=lambda: None, **cfg):
+    ov = overlay.Overlay(samples, 2.0, window=False)
+    ov.clock = lambda: fake[0]                         # fake clock: no sleeping in the test
+    ov.configure(dict({"color": "#00ff00", "color_busy": "#e63c3c"}, **cfg))   # the user's config
+    return ov
+
+def alpha_sum(img):
+    return int(np.asarray(img)[..., 3].astype(np.int64).sum())
+
+# enter: level is 1.0 well before 0.25 s, and tick() renders (into .last) with no window
+fake[0] = 0.0
+o = fresh_overlay(); o.post("recording")
+for i in range(8):                                     # 0 .. 0.28 s in 40 ms ticks
+    fake[0] = i * 0.04; o.tick()
+    if fake[0] >= 0.25: assert o.level == 1.0, (fake[0], o.level)
+assert o.level == 1.0 and o.last is not None and o.last.size == (o.w, o.h)
+
+# exit: alpha only falls, the hue does not drift back to the accent, gone by 0.8 s
+o = fresh_overlay(samples=lambda: tone)
+o.post("recording")
+for _ in range(25): fake[0] += 0.04; o.tick()          # 1 s of speech
+o.post("busy")
+for _ in range(25): fake[0] += 0.04; o.tick()          # 1 s of transcribing
+assert o.level == 1.0 and o.busymix > 0.9              # fully lit, fully in the busy colour
+idle_ref = np.asarray(o._base().reduce(o.SS)).astype(np.float32)
+idle_pre = idle_ref[..., :3] * idle_ref[..., 3:4]
+o.post("idle"); t0 = fake[0]; frames = []
+for _ in range(25):                                    # 1 s of fade
+    fake[0] += 0.04; o.tick()
+    a = np.asarray(o.last).astype(np.float32)
+    # hue of the light *added* to the resting stick (premultiplied): scale-free, so a colour
+    # drifting from the busy red (~-170) towards the green accent (+255) shows up at once. The
+    # plain mean over lit pixels cannot say this: it rises simply because the frosted glass
+    # underneath shows through more as the light fades.
+    add = a[..., 3].sum() - idle_ref[..., 3].sum()
+    d = a[..., :3] * a[..., 3:4] - idle_pre
+    frames.append((round(fake[0] - t0, 2), alpha_sum(o.last), float((d[..., 1].sum() - d[..., 0].sum()) / add) if add > 1000 else None, a))
+for (t1, s1, _, _), (t2, s2, _, _) in zip(frames, frames[1:]):
+    assert s2 <= s1 * 1.005, (t1, s1, t2, s2)          # monotonically non-increasing (0.5% jitter)
+hue = [g for _, _, g, _ in frames if g is not None]
+assert len(hue) > 4 and max(hue) <= hue[0] + 5, hue    # never drifts towards green
+at08 = [a for t, _, _, a in frames if t >= 0.79][0]                   # the resting stick again
+assert np.abs(at08 - idle_ref).max() <= 8 and abs(at08[..., 3].sum() - idle_ref[..., 3].sum()) < idle_ref[..., 3].sum() * 0.005
+assert o.level == 0.0 and o.busymix == 0.0 and o.bands.max() == 0.0        # take forgotten
+assert frames[-1][1] < frames[0][1] * 0.5
+
+# light style: the mic level lifts the light, and no spectrum is analysed
+fake[0] = 0.0; sig = [np.zeros(2048, dtype=np.float32)]
+o = fresh_overlay(samples=lambda: sig[0], indicator="light")
+assert o.style == "light"
+o.post("recording")
+for _ in range(15): fake[0] += 0.04; o.tick()
+assert o.lvl < 0.05
+o.phase = -np.pi / 2                                   # same breath phase for both measurements
+quiet = alpha_sum(o._render())
+sig[0] = tone
+for _ in range(15): fake[0] += 0.04; o.tick()
+assert o.lvl > 0.5 and o.bands.max() == 0.0
+o.phase = -np.pi / 2
+loud = alpha_sum(o._render())
+assert loud > quiet * 1.05, (quiet, loud)
+
+# _dissolve: the ends are exact, the middle is the alpha average
+act = o._light((0, 255, 0)); base = o._base()
+assert o._dissolve(base, act, 0.0) is base and o._dissolve(base, act, 1.0) is act
+mid = np.asarray(o._dissolve(base, act, 0.5)).astype(np.float32)
+assert np.abs(mid[..., 3] - (np.asarray(base)[..., 3].astype(np.float32) + np.asarray(act)[..., 3]) / 2).max() <= 1
+# the static frame is cached: once the bands have relaxed and level has settled, the fill
+# cannot change, so _render reuses it - and the reused frame must be pixel-identical
+fake[0] = 0.0
+o = fresh_overlay(samples=lambda: tone)
+o.post("recording")
+for _ in range(25): fake[0] += 0.04; o.tick()
+o.post("busy")
+for _ in range(60): fake[0] += 0.04; o.tick()          # the bands relax (fall 0.9) while busy
+assert o.level == 1.0 and o.bands.max() == 0.0 and "fill" in o._cache
+calls = [0]
+real_fill = o._fill
+o._fill = lambda *a: (calls.__setitem__(0, calls[0] + 1), real_fill(*a))[1]
+cached = np.asarray(o._render())
+assert calls[0] == 0, calls                            # served from the slot: no per-pixel work
+del o._cache["fill"]
+assert np.array_equal(cached, np.asarray(o._render())) and calls[0] == 1   # same pixels recomputed
+del o._fill
+o.post("recording")                                    # a live shape must not be served the slot
+for _ in range(4): fake[0] += 0.04; o.tick()
+assert o.bands.max() > 0.01 and not np.array_equal(cached, np.asarray(o.last))
+
+# the LED geometry is cached the same way and draws the same image
+o.configure({"color": "#00ff00", "indicator": "light"})
+o.state, o.level, o.lvl = "recording", 1.0, 0.3
+lit = np.asarray(o._render()); o._cache.pop("led")
+assert np.array_equal(lit, np.asarray(o._render()))
+
+# Save in the Settings dialog mid-take must not flatten a live waveform: only the light
+# style, which stops calling _analyse, has to forget the leftover shape
+o = fresh_overlay(samples=lambda: tone)
+o.post("recording")
+for _ in range(25): fake[0] += 0.04; o.tick()
+live = o.bands.max(); assert live > 0.3
+o.configure({"color": "#00ff00", "opacity": 0.5})      # what run_app's on_save does
+assert o.bands.max() == live
+o.configure({"indicator": "light"}); assert o.bands.max() == 0.0
+
+print("overlay transitions ok")
