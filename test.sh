@@ -3,3 +3,4 @@
 set -e
 cd "$(dirname "$0")"
 python tests/test_murmur.py
+python tests/test_window.py
