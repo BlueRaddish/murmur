@@ -278,6 +278,123 @@ if win.mics:   # the microphone is saved by name, never by index
     win.v_mic.set(f"{win.mics[0][0]}: {win.mics[0][1]}"); win._set_mic()
     assert cfg["mic"] == win.mics[0][1] and isinstance(cfg["mic"], str)
     win.v_mic.set("(system default)"); win._set_mic(); assert cfg["mic"] is None
+
+# --- promptify: a fake engine, the panel over the list, chips, voice, update, copy, persist ----
+import json as _json
+import time as _time
+import promptify as PF
+calls = []
+
+
+def fake_draft(cfg_, text, target="code", prompts=None, questions=None, answers=None, cancel=None, workdir=None):
+    calls.append(dict(text=text, target=target, prompts=prompts, questions=questions, answers=answers))
+    if prompts is None:
+        return {"prompts": ["Do the thing.", "Second ask."],
+                "questions": [{"q": "How many?", "why": "count", "options": ["3", "5"]},
+                              {"q": "Where?", "why": "path", "options": []}],
+                "notes": "heard x, wrote y", "engine": "claude", "model": "sonnet", "target": target,
+                "wall": 0.1, "t": 0}
+    return {"prompts": [p_ + " (updated)" for p_ in prompts], "questions": [], "notes": "",
+            "engine": "claude", "model": "sonnet", "target": target, "wall": 0.1, "t": 0}
+
+
+def settle(pred, n=100):
+    for _ in range(n):
+        root.update()
+        if pred():
+            return True
+        _time.sleep(0.02)
+    return False
+
+
+PF.draft, PF.available = fake_draft, lambda c: (True, "")
+win.go("history")
+assert win.sel is not None and not win.panel_open
+# the first use asks once; "Not now" backs out, "Promptify" remembers and runs
+cfg["prompt_ack"] = False
+win.promptify()
+root.update()
+assert win.panel_open and win.b_ack.f.winfo_ismapped() and not calls and not win.box.winfo_ismapped()
+win._close_panel()
+root.update()
+assert not win.panel_open and win.box.winfo_ismapped() and win.card.winfo_ismapped()
+win.promptify()
+root.update()
+win._ack_go()
+assert cfg["prompt_ack"] is True and saves[-1]["prompt_ack"] is True
+assert settle(lambda: win.p_fields.get("text") is not None), win.p_status.cget("text")
+assert calls[-1]["text"] == win.sel["text"] and calls[-1]["prompts"] is None and calls[-1]["target"] == "code"
+assert win.p_fields["text"].get("1.0", "end").strip() == "Do the thing." and len(win.p_fields["answers"]) == 2
+assert win.sel["draft"]["prompts"] == ["Do the thing.", "Second ask."] and "Drafted by Claude Code" in win.p_status.cget("text")
+# a chip fills its answer; a take that lands while an answer field has focus goes in at the caret
+win._pick(win.p_fields["answers"][0], "5")
+assert win.p_fields["answers"][0].get("1.0", "end").strip() == "5"
+win.p_fields["answers"][1].focus_force()
+root.update()
+assert win.receive("in the repo") and win.receive("under src") \
+    and win.p_fields["answers"][1].get("1.0", "end").strip() == "in the repo under src"
+win.p_src.focus_force()          # the list is unmapped under the panel; the transcript is not a field
+root.update()
+assert not win.receive("nowhere")                         # only the panel's own fields take it
+# the second prompt is reachable and edits ride along into pass 2 with the answers
+win._switch_prompt(1)
+assert win.p_fields["text"].get("1.0", "end").strip() == "Second ask."
+win._switch_prompt(0)
+win.p_fields["text"].insert("end", " Edited.")
+win._update()
+assert settle(lambda: calls[-1]["prompts"] is not None and win.p_fields.get("text") is not None
+              and "updated" in win.p_fields["text"].get("1.0", "end"))
+assert calls[-1]["prompts"] == ["Do the thing. Edited.", "Second ask."] and calls[-1]["answers"] == ["5", "in the repo under src"]
+assert calls[-1]["questions"][0]["q"] == "How many?"
+assert win.sel["draft"]["prompts"][0] == "Do the thing. Edited. (updated)" and not win.p_fields["answers"]
+win._copy_prompt()
+assert clip[-1] == "Do the thing. Edited. (updated)"
+saved = next(l for l in (_json.loads(x) for x in hist.path.read_text(encoding="utf-8").splitlines())
+             if l["text"] == win.sel["text"])
+assert saved["draft"]["prompts"][0].endswith("(updated)")          # the draft lives on the entry, on disk
+# Esc closes; reopening shows the kept draft without another call; the list is back
+win._escape()
+root.update()
+assert not win.panel_open and win.box.winfo_ismapped()
+n_calls = len(calls)
+win.promptify()
+root.update()
+assert len(calls) == n_calls and win.p_fields["text"].get("1.0", "end").strip() == "Do the thing. Edited. (updated)"
+win._close_panel()
+# an engine that cannot run: no panel, the reason in the status line; a failing engine: in the panel
+PF.available = lambda c: (False, "Claude Code CLI not found - install it")
+win.promptify()
+assert not win.panel_open and "not found" in win.s_text.cget("text")
+PF.available = lambda c: (True, "")
+
+
+def failing(*a, **k):
+    raise PF.PromptifyError("Claude Code is not logged in: run `claude`")
+
+
+PF.draft = failing
+del win.sel["draft"]
+win.promptify()
+assert settle(lambda: "not logged in" in win.p_status.cget("text"))
+assert win.panel_open and not win.b_cancel.f.winfo_ismapped()
+win._close_panel()
+PF.draft = fake_draft
+# settings: the key and URL rows come and go with the engine; model/key/url autosave
+win.go("settings")
+assert cfg.get("prompt_engine", "claude") == "claude" and not win.r_pkey.shown and not win.r_purl.shown
+win.v_engine.set("OpenRouter"); win._set_engine(); root.update()
+assert cfg["prompt_engine"] == "openrouter" and win.r_pkey.shown and not win.r_purl.shown
+assert "openrouter" in win.r_pmodel.desc.cget("text").lower() or "claude-sonnet" in win.r_pmodel.desc.cget("text")
+win.v_engine.set("Custom (OpenAI-compatible)"); win._set_engine(); root.update()
+assert win.r_pkey.shown and win.r_purl.shown
+win.v_engine.set("Claude Code"); win._set_engine(); root.update()
+assert not win.r_pkey.shown and not win.r_purl.shown and cfg["prompt_engine"] == "claude"
+win.e_pmodel.delete(0, "end"); win.e_pmodel.insert(0, " opus "); win._set_pmodel()
+win.e_pkey.delete(0, "end"); win.e_pkey.insert(0, "sk-test"); win._set_pkey()
+win.e_purl.delete(0, "end"); win.e_purl.insert(0, "http://localhost:11434/v1"); win._set_purl()
+assert cfg["prompt_model"] == "opus" and cfg["prompt_key"] == "sk-test" and cfg["prompt_url"] == "http://localhost:11434/v1"
+assert win.e_pkey.cget("show") == "•"
+print("promptify panel ok")
 print("settings ok")
 
 # clear-all really clears, and the empty state draws

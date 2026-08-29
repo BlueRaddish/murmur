@@ -70,7 +70,12 @@ CMD_KEYS = {Key.cmd, Key.cmd_l, Key.cmd_r}
 
 DEFAULTS = {"model": "small.en", "device": "cpu", "language": None, "mic": None, "trigger_vk": None,
             "beam_size": 5, "streaming": True, "retention_days": 7, "color": "#e63c3c",
-            "color_busy": "#ffaa32", "opacity": 0.9, "haze": False, "indicator": "waves"}
+            "color_busy": "#ffaa32", "opacity": 0.9, "haze": False, "indicator": "waves",
+            # Promptify: which engine writes the prompt, its model (blank = the engine's default),
+            # a key for the API engines, a base URL for the custom one, the target the prompt is
+            # written for, and whether the "this leaves the machine" line has been acknowledged
+            "prompt_engine": "claude", "prompt_model": "", "prompt_key": "", "prompt_url": "",
+            "prompt_target": "code", "prompt_ack": False}
 
 
 def since_launch() -> str:
@@ -655,6 +660,8 @@ def run_app(factory, cfg: dict, cfg_path: Path) -> None:
     import pystray
     from overlay import Overlay, set_dpi_aware
     from window import AppWindow, History
+    import promptify
+    promptify.log = log               # engine diagnostics (never its text) into murmur.log
 
     scale = set_dpi_aware()           # before Tk() so tkinter gets real pixels too
     root = tk.Tk()
@@ -682,8 +689,15 @@ def run_app(factory, cfg: dict, cfg_path: Path) -> None:
         overlay.post(state)
 
     def on_text(text: str) -> None:
-        if cfg["retention_days"] > 0:   # marshal to the Tk thread: History is not locked
-            root.after(0, lambda: (history.append(text), win.refresh()))
+        # marshal to the Tk thread: History is not locked. The window gets the take too: when
+        # one of its own fields has focus (an answer in the Promptify panel) the text goes in
+        # there - Typist skipped the paste because our window was in front
+        def land():
+            if cfg["retention_days"] > 0:
+                history.append(text)
+                win.refresh()
+            win.receive(text)
+        root.after(0, land)
 
     def quit_all(icon_=None, item=None) -> None:
         if holder["app"]:

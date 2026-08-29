@@ -4,7 +4,7 @@ Set-Location $PSScriptRoot
 Stop-Process -Name murmur -Force -ErrorAction SilentlyContinue  # a running copy locks dist
 python brand.py --ico murmur.ico
 python -m PyInstaller --noconfirm --clean --noconsole --onedir --name murmur --icon murmur.ico `
-  --add-data "vocab.txt;." --add-data "murmur.ico;." `
+  --add-data "vocab.txt;." --add-data "promptify.txt;." --add-data "murmur.ico;." `
   --collect-all faster_whisper --collect-all ctranslate2 --collect-all av `
   --collect-all tokenizers --collect-all huggingface_hub --collect-all pystray `
   --hidden-import pystray._win32 `

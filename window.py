@@ -15,6 +15,7 @@ import datetime
 import io
 import json
 import math
+import threading
 import time
 import tkinter as tk
 from pathlib import Path
@@ -22,6 +23,7 @@ from tkinter import font as tkfont
 from tkinter import ttk
 
 import brand
+import promptify
 
 # --- tokens ---------------------------------------------------------------------------------
 
@@ -431,9 +433,10 @@ class _Row:
 
     def __init__(self, ui, group, label, desc=None, col=W_COL):
         p, bg = ui.pal, group["bg"]
-        if group.winfo_children():
-            ui.hairline(group, color=p["s5"]).pack(fill="x", padx=ui.cpad)
-        self.ui = ui
+        self.rule = ui.hairline(group, color=p["s5"]) if group.winfo_children() else None
+        if self.rule is not None:
+            self.rule.pack(fill="x", padx=ui.cpad)
+        self.ui, self.shown = ui, True
         self.frame = tk.Frame(group, bg=bg)
         self.frame.pack(fill="x")
         main = tk.Frame(self.frame, bg=bg)
@@ -455,6 +458,21 @@ class _Row:
             self.desc.pack(anchor="w", pady=(ui.px(SP[0]), 0))
         self.err = tk.Label(self.frame, text="", font=ui.F["meta"], fg=p["danger_text"], bg=bg,
                             anchor="e")
+
+    def show(self, on, after=None) -> None:
+        """Rows that apply to some settings only come and go; `after` (a _Row) keeps the order.
+        The hairline above the row goes with it, or hiding a row would leave a double rule."""
+        if on and not self.shown:
+            kw = {"after": after.frame} if after is not None else {}
+            if self.rule is not None:
+                self.rule.pack(fill="x", padx=self.ui.cpad, **kw)
+                kw = {"after": self.rule}
+            self.frame.pack(fill="x", **kw)
+        elif not on and self.shown:
+            if self.rule is not None:
+                self.rule.pack_forget()
+            self.frame.pack_forget()
+        self.shown = bool(on)
 
     def restart(self) -> None:
         """Model / microphone / language changed: say so, and keep saying it."""
@@ -504,6 +522,7 @@ class AppWindow:
         self.hl = {}              # the two row-highlight images, keyed by the width they fit
         self.hl_id = {}           # ... and their canvas items
         self.ctl = {}             # the settings controls, by cfg key (the tests drive these)
+        self.panel_open = False   # the Promptify panel is showing in the list's place
         self.foot_links = []      # sidebar footer links, one per entry in `links`
         self.cards = []           # the settings group cards, top to bottom
         self.undo = None          # (index, item) while the undo offer stands
@@ -569,7 +588,7 @@ class AppWindow:
             f.grid(row=0, column=0, sticky="nsew")
             self.views[name] = f
             build(f)
-        w.bind("<Escape>", lambda e: self._clear_cancel())
+        w.bind("<Escape>", lambda e: self._escape())
         w.bind("<Up>", lambda e: self._nav_key(-1))
         w.bind("<Down>", lambda e: self._nav_key(1))
         self.go(self.view)
@@ -803,7 +822,7 @@ class AppWindow:
 
         # no rule under the header: a full-bleed hairline over a list of rounded highlights is
         # the most rigid line on the screen, and the air below the title separates them anyway
-        box = tk.Frame(f, bg=p["bg"])
+        box = self.box = tk.Frame(f, bg=p["bg"])
         box.grid(row=1, column=0, sticky="nsew")
         # the focus ring is NOT the canvas's own: a hard accent rectangle around a list of
         # rounded highlights is the one rigid line left in the view. It moves onto the selected
@@ -827,6 +846,7 @@ class AppWindow:
         for k, fn in (("<Up>", lambda e: self._move(-1)), ("<Down>", lambda e: self._move(1)),
                       ("<Return>", lambda e: self.copy_selected()),
                       ("<Control-c>", lambda e: self.copy_selected()),
+                      ("<Control-d>", lambda e: self.promptify()),
                       ("<Delete>", lambda e: self.delete_selected())):
             self.list.bind(k, fn)
 
@@ -852,6 +872,8 @@ class AppWindow:
         act.pack(fill="x", padx=self.cpad, pady=(self.px(SP[2]), self.cpad))
         self.b_copy = _Btn(self, act, "Copy", self.copy_selected, kind="primary")
         self.b_copy.f.pack(side="left")
+        self.b_prompt = _Btn(self, act, "Promptify", self.promptify)
+        self.b_prompt.f.pack(side="left", padx=(self.px(SP[1]), 0))
         self.b_del = _Btn(self, act, "Delete", self.delete_selected)
         self.b_del.f.pack(side="left", padx=(self.px(SP[1]), 0))
         self.status = tk.Frame(act, bg=p["surface"])
@@ -861,6 +883,7 @@ class AppWindow:
         self.s_text.pack(side="left")
         # underlined so the one clickable word in the status line does not read as more meta
         self.s_undo = self.link(self.status, "Undo", self._undo, font=self.F["body"] + ("underline",))
+        self._build_panel(f)
 
     def _scrolled(self, lo, hi) -> None:
         self.sb.set(lo, hi)
@@ -1132,6 +1155,7 @@ class AppWindow:
         self._indicator(body)
         self._listening(body)
         self._history_group(body)
+        self._promptify_group(body)
 
     def _settings_scrolled(self, lo, hi) -> None:
         self.ssb.set(lo, hi)
@@ -1290,7 +1314,7 @@ class AppWindow:
         e.bind("<Return>", lambda ev: commit())
         return e
 
-    def _combo(self, row, var, values, commit) -> None:
+    def _combo(self, row, var, values, commit, restart=True) -> None:
         """ttk cannot round a combobox, so it goes inside the same rounded field as an entry
         with its own border painted out (`bordercolor`/`lightcolor`/`darkcolor` = the fill) -
         the shape underneath is the only edge you see."""
@@ -1301,7 +1325,7 @@ class AppWindow:
         box.slot(c)
         c.bind("<FocusIn>", lambda e: box.paint("focus"))
         c.bind("<FocusOut>", lambda e: box.paint())
-        c.bind("<<ComboboxSelected>>", lambda e: (commit(), row.restart(), c.selection_clear()))
+        c.bind("<<ComboboxSelected>>", lambda e: (commit(), restart and row.restart(), c.selection_clear()))
 
     def _segment(self, parent, key, options, value, on_pick) -> None:
         """One rounded, hairlined container with the picked option as an inner pill. Each option
@@ -1358,6 +1382,7 @@ class AppWindow:
         f.bind("<FocusOut>", lambda e: (focus.__setitem__(0, False), paint()))
         self.ctl[key] = cells
         paint()
+        return f
 
     def _colors(self, row, key, default) -> None:
         """Nine presets plus a hex field - the field is the escape hatch, the dots are the taste."""
@@ -1595,6 +1620,433 @@ class AppWindow:
         except Exception:
             return []
 
+
+    # --- promptify: one dictation -> a prompt, in a panel over the list ----------------------
+    def _build_panel(self, f) -> None:
+        """The Promptify panel takes the list's slot while a draft is open: a prompt of 20-30
+        lines plus its questions cannot live under the 5-line detail card. Built once here,
+        filled per draft by `_fill_panel`. The dictation stays on top, collapsed to three lines -
+        still the thing being worked on, not the work."""
+        p, pad = self.pal, self.px(SP[4])
+        self.panel = tk.Frame(f, bg=p["bg"])
+        self.panel.grid(row=1, column=0, sticky="nsew")
+        self.panel.grid_remove()
+        self.p_head = tk.Frame(self.panel, bg=p["bg"])
+        self.p_head.pack(fill="x", padx=pad, pady=(0, self.px(SP[2])))
+        self.link(self.p_head, "‹ History", self._close_panel, font=self.F["body"]).pack(side="left")
+        tk.Label(self.p_head, text="Promptify", font=self.F["body6"], fg=p["ink"], bg=p["bg"]).pack(
+            side="left", padx=(self.px(SP[3]), 0))
+        self.p_seg = None
+        self.p_target = [self.cfg.get("prompt_target") or "code"]
+        # no line spacing in the panel's Texts: Tk sizes a Text in font lines and ignores spacing,
+        # so N spaced lines in a height-N widget clip the last one
+        self.p_src = tk.Text(self.panel, height=3, wrap="word", relief="flat", bd=0, highlightthickness=0,
+                             bg=p["bg"], fg=p["muted"], font=self.mf["body"], state="disabled",
+                             cursor="arrow")
+        self.p_src.pack(fill="x", padx=pad)
+        st = tk.Frame(self.panel, bg=p["bg"])
+        st.pack(fill="x", padx=pad, pady=(self.px(SP[2]), 0))
+        self.p_status = tk.Label(st, text="", font=self.F["body"], fg=p["muted"], bg=p["bg"],
+                                 anchor="w", justify="left")
+        self.p_status.pack(side="left", fill="x", expand=True)
+        self._wrap(self.p_status, self.px(200))
+        self.b_cancel = _Btn(self, st, "Cancel", self._cancel_draft)
+        self.b_ack = _Btn(self, st, "Promptify", self._ack_go, kind="primary")
+        self.b_ack_no = _Btn(self, st, "Not now", self._close_panel)
+        # the draft scrolls as ONE frame in ONE canvas (the settings pattern): fields placed as
+        # separate canvas items would drop out of the tab ring while scrolled out of sight
+        box = tk.Frame(self.panel, bg=p["bg"])
+        box.pack(fill="both", expand=True, pady=(self.px(SP[2]), 0))
+        self.pc = tk.Canvas(box, bg=p["bg"], highlightthickness=0, yscrollincrement=1)
+        self.psb = ttk.Scrollbar(box, orient="vertical", style="M.Vertical.TScrollbar",
+                                 command=self.pc.yview)
+        self.pc.configure(yscrollcommand=self._panel_scrolled)
+        self.pc.pack(side="left", fill="both", expand=True)
+        self.p_inner = tk.Frame(self.pc, bg=p["bg"])
+        wid = self.pc.create_window((0, 0), window=self.p_inner, anchor="nw")
+        self.p_inner.bind("<Configure>", lambda e: self.pc.configure(scrollregion=self.pc.bbox("all")))
+        self.pc.bind("<Configure>", lambda e: self.pc.itemconfigure(wid, width=e.width))
+        self.pc.bind("<Enter>", lambda e: self.pc.bind_all("<MouseWheel>", self._wheel_panel))
+        self.pc.bind("<Leave>", lambda e: self.pc.unbind_all("<MouseWheel>"))
+        self.draft_item = self.draft_thread = self.draft_cancel = None
+        self.p_fields = {}
+
+    def _panel_scrolled(self, lo, hi) -> None:
+        self.psb.set(lo, hi)
+        if float(lo) <= 0.0 and float(hi) >= 1.0:
+            self.psb.pack_forget()
+        else:
+            self.psb.pack(side="right", fill="y")
+
+    def _wheel_panel(self, e) -> None:
+        if self._visible():
+            self.pc.yview_scroll(int(-e.delta / 120) * 3 * self.px(H_CTL), "units")
+
+    def _wrap(self, label, pad) -> None:
+        """A label wraps to its parent's width less `pad`, whatever the window does."""
+        label.master.bind("<Configure>",
+                          lambda e: label.configure(wraplength=max(e.width - pad, self.px(120))), add="+")
+
+    def promptify(self) -> None:
+        """The button: show the entry's draft if it has one, else make one. The first time, say
+        where the words go - this is the one thing murmur does that sends them off the machine."""
+        it = self.sel
+        if it is None:
+            return
+        if self.draft_thread is not None and self.draft_thread.is_alive():
+            self.flash(self.s_text, "Still drafting the previous prompt", 3000)
+            return
+        ok, why = promptify.available(self.cfg)
+        if not ok:
+            self.flash(self.s_text, why, 8000)
+            return
+        self._open_panel(it)
+        if it.get("draft"):
+            self._fill_panel(it["draft"])
+            self._status(self._by_line(it["draft"]))
+        elif not self.cfg.get("prompt_ack"):
+            spec = promptify.engine_spec(self.cfg)
+            self._status(f"Sends this dictation to {spec['label']} ({spec['model'] or 'its default model'}) "
+                         "through your own login or key. The transcript itself is not changed.")
+            self.b_ack.f.pack(side="right")
+            self.b_ack_no.f.pack(side="right", padx=(0, self.px(SP[1])))
+        else:
+            self._run_draft(it)
+
+    def _ack_go(self) -> None:
+        self.cfg["prompt_ack"] = True
+        self.save()
+        self.b_ack.f.pack_forget()
+        self.b_ack_no.f.pack_forget()
+        self._run_draft(self.draft_item)
+
+    def _by_line(self, d) -> str:
+        label = promptify.ENGINES.get(d.get("engine"), {}).get("label", d.get("engine", ""))
+        return f"Drafted by {label} ({d.get('model', '')}) in {d.get('wall', 0):.0f} s"
+
+    def _status(self, text, danger=False) -> None:
+        self.p_status.configure(text=text, fg=self.pal["danger_text"] if danger else self.pal["muted"])
+
+    def _open_panel(self, it) -> None:
+        self.draft_item = it
+        self.panel_open = True
+        self.box.grid_remove()
+        self.card.grid_remove()
+        self.panel.grid()
+        self._clear_body()
+        for b in (self.b_cancel, self.b_ack, self.b_ack_no):
+            b.f.pack_forget()
+        self._status("")
+        self.p_src.configure(state="normal")
+        self.p_src.delete("1.0", "end")
+        self.p_src.insert("1.0", it["text"])
+        self.p_src.configure(state="disabled")
+        # the target segment is rebuilt per open: its value lives in the control's own closure
+        if self.p_seg is not None:
+            self.p_seg.destroy()
+        self.p_target[0] = (it.get("draft") or {}).get("target") or self.cfg.get("prompt_target") or "code"
+        self.p_seg = self._segment(self.p_head, "target", list(promptify.TARGETS), self.p_target[0],
+                                   self._set_target)
+
+    def _close_panel(self) -> None:
+        if not self.panel_open:
+            return
+        self._cancel_draft()
+        self._save_edits()
+        self.panel_open = False
+        self.panel.grid_remove()
+        self.box.grid()
+        if self.history.items:
+            self.card.grid()
+        self.list.focus_set()
+
+    def _escape(self) -> None:
+        if self.panel_open:
+            self._close_panel()
+        else:
+            self._clear_cancel()
+
+    def _set_target(self, v) -> None:
+        self.p_target[0] = v
+        self.cfg["prompt_target"] = v
+        self.save()
+
+    def _run_draft(self, it, prompts=None, questions=None, answers=None) -> None:
+        """Pass 1 (no prompts) or pass 2, on a worker thread. The worker only fills `res`; the
+        ticker on the Tk thread shows the elapsed time and consumes the result when the thread
+        ends - Tk calls from the worker (even after()) are not safe outside mainloop."""
+        spec = promptify.engine_spec(self.cfg)
+        self._clear_body()
+        self.draft_cancel = threading.Event()
+        cancel = self.draft_cancel
+        self.b_cancel.f.pack(side="right")
+        t0 = time.monotonic()
+        self._status(f"Drafting with {spec['label']}…")
+        res = {}
+
+        def work():
+            try:
+                res["ok"] = promptify.draft(self.cfg, it["text"], self.p_target[0], prompts, questions,
+                                            answers, cancel=cancel, workdir=self.history.path.parent)
+            except promptify.Cancelled:
+                res["cancelled"] = True
+            except promptify.PromptifyError as e:
+                res["err"] = str(e)
+            except Exception as e:                       # a bug must not take the app down
+                res["err"] = f"Promptify failed: {e}"
+
+        def tick():
+            if not (self.win and self.win.winfo_exists()):
+                return
+            if thread.is_alive():
+                s = int(time.monotonic() - t0)
+                if self.panel_open:
+                    self._status(f"Drafting with {spec['label']} · {s} s" + (" · still working" if s >= 45 else ""))
+                self.jobs["tick"] = self.win.after(200, tick)
+            elif "ok" in res:
+                self._draft_done(it, res["ok"])
+            elif "err" in res:
+                self._draft_failed(res["err"])
+            else:
+                self._cancel_draft()
+        thread = self.draft_thread = threading.Thread(target=work, daemon=True)
+        thread.start()
+        tick()
+
+    def _cancel_draft(self) -> None:
+        if self.draft_cancel is not None:
+            self.draft_cancel.set()
+        self.b_cancel.f.pack_forget()
+        job = self.jobs.pop("tick", None)
+        if job:
+            self.win.after_cancel(job)
+        if self.panel_open:
+            self._status("")
+
+    def _draft_failed(self, msg) -> None:
+        if not (self.win and self.win.winfo_exists()):
+            return
+        self._cancel_draft()
+        self._status(msg, danger=True)
+
+    def _draft_done(self, it, res) -> None:
+        if not (self.win and self.win.winfo_exists()):
+            return
+        self._cancel_draft()
+        it["draft"] = res
+        self.history.save()
+        if self.panel_open and self.draft_item is it:
+            self._fill_panel(res)
+            self._status(self._by_line(res))
+
+    def _clear_body(self) -> None:
+        for w in self.p_inner.winfo_children():
+            w.destroy()
+        self.p_fields = {"prompts": [], "questions": [], "answers": [], "cur": 0, "text": None}
+        self.pc.yview_moveto(0)
+
+    def _fill_panel(self, d) -> None:
+        """The draft: the prompt in an editable field (a '1 of 2' switch when the dictation split
+        into independent asks), the heard/wrote notes, one card per question with its chips and
+        an answer field, and the actions. Copy is the primary action here; the transcript's own
+        Copy is off screen while the panel is open, so there is still one primary on screen."""
+        p, pad, cp = self.pal, self.px(SP[4]), self.cpad
+        self._clear_body()
+        F = self.p_fields
+        F["prompts"] = list(d.get("prompts") or [""])
+        F["questions"] = list(d.get("questions") or [])
+        inner = self.p_inner
+        top = tk.Frame(inner, bg=p["bg"])
+        top.pack(fill="x", padx=pad)
+        tk.Label(top, text="Prompt", font=self.F["body6"], fg=p["ink"], bg=p["bg"]).pack(side="left")
+        if len(F["prompts"]) > 1:
+            self._segment(top, "which", [(f"{i + 1} of {len(F['prompts'])}", i) for i in range(len(F["prompts"]))],
+                          0, self._switch_prompt)
+        card = self._card(inner)
+        card.pack(fill="x", padx=self.px(SP[1]), pady=(self.px(SP[1]), 0))
+        # the field shows the whole prompt: the panel is the one thing that scrolls (a Text that
+        # scrolls inside a canvas that scrolls fights the wheel)
+        F["text"] = self._textbox(card.body, F["prompts"][0], (4, 200))
+        if d.get("notes"):
+            n = tk.Label(inner, text=d["notes"], font=self.F["meta"], fg=p["muted"], bg=p["bg"],
+                         anchor="w", justify="left")
+            n.pack(fill="x", padx=pad, pady=(self.px(SP[1]), 0))
+            self._wrap(n, 2 * pad)
+        qs = F["questions"]
+        tk.Label(inner, text="Questions" if qs else "No questions: the dictation was specific enough.",
+                 font=self.F["body6"] if qs else self.F["body"], fg=p["ink"] if qs else p["muted"],
+                 bg=p["bg"]).pack(anchor="w", padx=pad, pady=(self.px(SP[4]), self.px(SP[1])))
+        for q in qs:
+            c = self._card(inner)
+            c.pack(fill="x", padx=self.px(SP[1]), pady=(0, self.px(SP[1])))
+            b = c.body
+            l = tk.Label(b, text=q["q"], font=self.F["body"], fg=p["ink"], bg=b["bg"], anchor="w", justify="left")
+            l.pack(fill="x", padx=cp, pady=(cp, 0))
+            self._wrap(l, 2 * cp)
+            if q.get("why"):
+                w = tk.Label(b, text=q["why"], font=self.F["meta"], fg=p["muted"], bg=b["bg"], anchor="w",
+                             justify="left")
+                w.pack(fill="x", padx=cp, pady=(self.px(SP[0]), 0))
+                self._wrap(w, 2 * cp)
+            a = self._textbox(b, "", (1, 3), boxed=True)
+            F["answers"].append(a)
+            if q.get("options"):
+                row = tk.Frame(b, bg=b["bg"])
+                row.pack(fill="x", padx=cp, pady=(self.px(SP[1]), 0), before=a.master.master)
+                for o in q["options"]:
+                    _Btn(self, row, o, lambda o=o, a=a: self._pick(a, o), font=self.F["meta"],
+                         h=24, pad=8).f.pack(side="left", padx=(0, self.px(SP[1])))
+        act = tk.Frame(inner, bg=p["bg"])
+        act.pack(fill="x", padx=pad, pady=(self.px(SP[2]), self.px(SP[4])))
+        _Btn(self, act, "Copy prompt", self._copy_prompt, kind="primary").f.pack(side="left")
+        _Btn(self, act, "Update prompt" if qs else "Regenerate", self._update).f.pack(
+            side="left", padx=(self.px(SP[1]), 0))
+        _Btn(self, act, "Close", self._close_panel).f.pack(side="left", padx=(self.px(SP[1]), 0))
+        self.p_flash = tk.Label(act, text="", font=self.F["body"], fg=p["muted"], bg=p["bg"])
+        self.p_flash.pack(side="right")
+
+    def _textbox(self, parent, text, lines, boxed=False) -> tk.Text:
+        """An editable Text that grows with its content between `lines` (min, max). `boxed` puts
+        it in its own rounded, hairlined field inside a card - the answer fields. Tab moves on
+        instead of inserting a tab: these are form fields, not editors."""
+        p = self.pal
+        host = parent
+        if boxed:
+            c = self._card(parent, R_CTL)
+            c.pack(fill="x", padx=self.cpad, pady=(self.px(SP[1]), self.cpad))
+            host = c.body
+        t = tk.Text(host, height=lines[0], wrap="word", relief="flat", bd=0, highlightthickness=0,
+                    bg=host["bg"], fg=p["ink"], font=self.mf["body"], insertbackground=p["ink"],
+                    selectbackground=p["selected"], selectforeground=p["ink"], undo=True)
+        t.insert("1.0", text)
+        t.pack(fill="x", padx=self.px(SP[1]) if boxed else self.cpad,
+               pady=self.px(SP[0]) if boxed else self.cpad)
+
+        def fit(e=None):
+            n = t.count("1.0", "end", "displaylines") or (1,)
+            h = max(lines[0], min(lines[1], n[0]))
+            if int(t.cget("height")) != h:
+                t.configure(height=h)
+        t.fit = fit
+        t.bind("<KeyRelease>", fit)
+        t.bind("<Configure>", fit)
+        t.bind("<Tab>", lambda e: (t.tk_focusNext().focus_set(), "break")[1])
+        t.bind("<Shift-Tab>", lambda e: (t.tk_focusPrev().focus_set(), "break")[1])
+        t.bind("<Control-Return>", lambda e: (self._update(), "break")[1])
+        self.win.after_idle(fit)
+        return t
+
+    def _pick(self, field, option) -> None:
+        field.delete("1.0", "end")
+        field.insert("1.0", option)
+        field.fit()
+        field.focus_set()
+
+    def _switch_prompt(self, i) -> None:
+        F = self.p_fields
+        self._save_edits()
+        F["cur"] = i
+        F["text"].delete("1.0", "end")
+        F["text"].insert("1.0", F["prompts"][i])
+        F["text"].fit()
+
+    def _save_edits(self) -> None:
+        """The prompt field is the truth: whatever the user typed rides into pass 2 and into
+        the copy, and is kept on the entry."""
+        F = self.p_fields
+        if not F.get("text") or not F["text"].winfo_exists():
+            return
+        F["prompts"][F["cur"]] = F["text"].get("1.0", "end").strip()
+        d = (self.draft_item or {}).get("draft")
+        if d is not None and d.get("prompts") != F["prompts"]:
+            d["prompts"] = list(F["prompts"])
+            self.history.save()
+
+    def _copy_prompt(self) -> None:
+        self._save_edits()
+        F = self.p_fields
+        if not F.get("prompts"):
+            return
+        import pyperclip
+        pyperclip.copy(F["prompts"][F["cur"]])
+        self.flash(self.p_flash, "Copied")
+
+    def _update(self) -> None:
+        """Pass 2 with the answers as they stand; with none given, pass 1 again."""
+        if self.draft_thread is not None and self.draft_thread.is_alive():
+            return
+        self._save_edits()
+        F = self.p_fields
+        answers = [a.get("1.0", "end").strip() for a in F["answers"] if a.winfo_exists()]
+        if any(answers):
+            self._run_draft(self.draft_item, list(F["prompts"]), list(F["questions"]), answers)
+        else:
+            self._run_draft(self.draft_item)
+
+    def receive(self, text: str) -> bool:
+        """A take that arrived while this window was in front: into the focused answer or prompt
+        field at the caret. Anything else on screen is not ours to type into."""
+        if not (self.panel_open and self._visible()):
+            return False
+        f = self.win.focus_get()
+        if not isinstance(f, tk.Text) or not str(f).startswith(str(self.p_inner)):
+            return False
+        before = f.get("1.0", "insert")
+        f.insert("insert", ("" if not before or before.endswith((" ", "\n")) else " ") + text)
+        getattr(f, "fit", lambda: None)()
+        f.see("insert")
+        return True
+
+    # --- promptify settings ------------------------------------------------------------------
+    def _promptify_group(self, parent) -> None:
+        g = self._group(parent, "Promptify")
+        labels = [promptify.ENGINES[k]["label"] for k in promptify.ORDER]
+        cur = promptify.engine_spec(self.cfg)["key"]
+        self.r_eng = _Row(self, g, "Engine", "Who writes the prompt, on its own login or your key")
+        self.v_engine = tk.StringVar(value=promptify.ENGINES[cur]["label"])
+        self._combo(self.r_eng, self.v_engine, labels, self._set_engine, restart=False)
+        self.r_pmodel = _Row(self, g, "Model", "")
+        self.e_pmodel = self._entry(self.r_pmodel.right, self.cfg.get("prompt_model") or "", 24,
+                                    self.F["mono9"], self._set_pmodel)
+        self.e_pmodel.master.pack(side="right")
+        self.r_pkey = _Row(self, g, "API key", "Kept in config.json in your profile folder")
+        self.e_pkey = self._entry(self.r_pkey.right, self.cfg.get("prompt_key") or "", 24,
+                                  self.F["mono9"], self._set_pkey)
+        self.e_pkey.configure(show="•")
+        self.e_pkey.master.pack(side="right")
+        self.r_purl = _Row(self, g, "Base URL", "An OpenAI-compatible endpoint, e.g. http://localhost:11434/v1")
+        self.e_purl = self._entry(self.r_purl.right, self.cfg.get("prompt_url") or "", 24,
+                                  self.F["mono9"], self._set_purl)
+        self.e_purl.master.pack(side="right")
+        self._engine_rows()
+
+    def _engine_rows(self) -> None:
+        """The model hint follows the engine; the key and URL rows exist only for the engines
+        that need them."""
+        spec = promptify.engine_spec(self.cfg)
+        self.r_pmodel.desc.configure(text=spec["models"])
+        self.r_pmodel.desc.pack(anchor="w", pady=(self.px(SP[0]), 0))
+        self.r_pkey.show(spec["kind"] != "cli", after=self.r_pmodel)
+        self.r_purl.show(spec["key"] == "custom", after=self.r_pkey if spec["kind"] != "cli" else self.r_pmodel)
+
+    def _set_engine(self) -> None:
+        name = self.v_engine.get()
+        self.cfg["prompt_engine"] = next((k for k in promptify.ORDER if promptify.ENGINES[k]["label"] == name), "claude")
+        self._engine_rows()
+        self.save()
+
+    def _set_pmodel(self) -> None:
+        self.cfg["prompt_model"] = self.e_pmodel.get().strip()
+        self.save()
+
+    def _set_pkey(self) -> None:
+        self.cfg["prompt_key"] = self.e_pkey.get().strip()
+        self.save()
+
+    def _set_purl(self) -> None:
+        self.cfg["prompt_url"] = self.e_purl.get().strip()
+        self.save()
+
     # --- refresh -----------------------------------------------------------------------------
     def refresh(self) -> None:
         if self.win is None or not self.win.winfo_exists():
@@ -1608,6 +2060,6 @@ class AppWindow:
         self.count.configure(text=f"{n} dictation{'s' if n != 1 else ''} · {kept}")
         self._clear_cancel()
         self.b_clear.f.pack(side="right") if n else self.b_clear.f.pack_forget()
-        self.card.grid() if n else self.card.grid_remove()
+        self.card.grid() if n and not self.panel_open else self.card.grid_remove()
         self._draw_rows()
         self._select(self.sel)
