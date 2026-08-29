@@ -246,6 +246,13 @@ Decisions
   bordered cards inside a panel, the answer field a third nested box, the primary at the
   bottom, a status sentence in the body flow. Lesson: a feature dropped into an existing
   window still needs its own brief and a mockup pass - "it fits the tokens" is not a design.
+  The build: two sequential agents on window.py (no worktrees - one file), then an independent
+  reviewer who re-rendered every state by HWND and drove the view by script (3 musts: Tk
+  Labels' default 3 px chrome breaking the left edge, the list pane's empty state wrapping at
+  W_COL, the one-row header rule measured on a stale width; 8 shoulds), a fix pass, a re-check
+  that passed with two cosmetic residuals (the 600-wide empty pane's key line overruns the
+  right padding by 5 px; a stale probe). `tests/test_ui_rules.py` now asserts the contrasts,
+  the spacing scale, one primary per state, the measure and the focus colours.
 - Rising, not level (2026-08-28). The user saw the shipped mark and said it was not the one they
   picked: "the murmur with the left peak lower". The brief had two Ripple m builds and I shipped
   the level one on my own reading of "the ripple m". Now the rising build: both arches spring
