@@ -379,21 +379,6 @@ assert settle(lambda: "not logged in" in win.p_status.cget("text"))
 assert win.panel_open and not win.b_cancel.f.winfo_ismapped()
 win._close_panel()
 PF.draft = fake_draft
-# settings: the key and URL rows come and go with the engine; model/key/url autosave
-win.go("settings")
-assert cfg.get("prompt_engine", "claude") == "claude" and not win.r_pkey.shown and not win.r_purl.shown
-win.v_engine.set("OpenRouter"); win._set_engine(); root.update()
-assert cfg["prompt_engine"] == "openrouter" and win.r_pkey.shown and not win.r_purl.shown
-assert "openrouter" in win.r_pmodel.desc.cget("text").lower() or "claude-sonnet" in win.r_pmodel.desc.cget("text")
-win.v_engine.set("Custom (OpenAI-compatible)"); win._set_engine(); root.update()
-assert win.r_pkey.shown and win.r_purl.shown
-win.v_engine.set("Claude Code"); win._set_engine(); root.update()
-assert not win.r_pkey.shown and not win.r_purl.shown and cfg["prompt_engine"] == "claude"
-win.e_pmodel.delete(0, "end"); win.e_pmodel.insert(0, " opus "); win._set_pmodel()
-win.e_pkey.delete(0, "end"); win.e_pkey.insert(0, "sk-test"); win._set_pkey()
-win.e_purl.delete(0, "end"); win.e_purl.insert(0, "http://localhost:11434/v1"); win._set_purl()
-assert cfg["prompt_model"] == "opus" and cfg["prompt_key"] == "sk-test" and cfg["prompt_url"] == "http://localhost:11434/v1"
-assert win.e_pkey.cget("show") == "•"
 print("promptify panel ok")
 print("settings ok")
 

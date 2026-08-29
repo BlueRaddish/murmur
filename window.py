@@ -1155,7 +1155,6 @@ class AppWindow:
         self._indicator(body)
         self._listening(body)
         self._history_group(body)
-        self._promptify_group(body)
 
     def _settings_scrolled(self, lo, hi) -> None:
         self.ssb.set(lo, hi)

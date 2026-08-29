@@ -6,9 +6,10 @@ next to vocab.txt) and the dictation, and must answer with ONE JSON object:
 {prompt, questions: [{q, why, options?}], notes?, more_prompts?}. Pass 2 sends the prompt(s) as
 they stand in the panel plus the user's answers and gets the folded prompt back.
 
-Engines: three CLIs that carry their own login (Claude Code, Codex, Gemini CLI) and key-based
-HTTP APIs (OpenAI, OpenRouter, Anthropic, any OpenAI-compatible base URL). The CLI invocations
-were measured on 2026-08-28 (NOTES.md); the flags that looked optional are not:
+Engines are login-only (connect.py holds the sign-in and the connection state): three CLIs
+that carry their own login - Claude Code, Codex, Gemini CLI - and OpenRouter, whose OAuth
+Connect flow hands murmur a key that reaches the OpenAI/Google/Anthropic models too. The CLI
+invocations were measured on 2026-08-28 (NOTES.md); the flags that looked optional are not:
 `--safe-mode` keeps claude from loading CLAUDE.md, hooks, memory and MCP servers (56k tokens
 and 89 s per call without it), `--bare` would drop the OAuth login, an inherited open stdin
 costs 3 s, and without `--model` the call runs on the user's settings model.
@@ -43,28 +44,24 @@ SCHEMA_JSON = json.dumps(SCHEMA, separators=(",", ":"))
 TARGETS = (("Claude Code", "code"), ("claude.ai", "chat"))
 TIMEOUT = 150            # s; the slowest measured pass was 17 s on this laptop's busy CPU
 
-# key -> how the engine is reached. `model` is the default when Settings leaves the model blank.
+# key -> how the engine is reached. `model` is the default when the model field is blank;
+# `login` is the one line the engines sheet shows under the name.
 ENGINES = {
     "claude": {"label": "Claude Code", "kind": "cli", "exe": "claude", "model": "sonnet",
-               "models": "sonnet · opus · haiku · fable · or a full id such as claude-sonnet-5"},
+               "models": "sonnet · opus · haiku · fable · or a full id such as claude-sonnet-5",
+               "login": "Your claude.ai subscription, through the Claude Code app"},
     "codex": {"label": "Codex", "kind": "cli", "exe": "codex", "model": "",
-              "models": "blank = Codex's own default · gpt-5.6-luna (lighter) · gpt-5.5"},
+              "models": "blank = Codex's own default · gpt-5.6-luna (lighter) · gpt-5.5",
+              "login": "Your ChatGPT plan, through the Codex app"},
     "gemini": {"label": "Gemini CLI", "kind": "cli", "exe": "gemini", "model": "",
-               "models": "blank = the CLI's default · gemini-2.5-flash · gemini-2.5-pro"},
-    "gemini_api": {"label": "Gemini API", "kind": "openai",
-                   "url": "https://generativelanguage.googleapis.com/v1beta/openai",
-                   "model": "gemini-2.5-flash", "models": "gemini-2.5-flash · gemini-2.5-flash-lite · gemini-2.5-pro"},
-    "openai": {"label": "OpenAI", "kind": "openai", "url": "https://api.openai.com/v1",
-               "model": "gpt-5-mini", "models": "gpt-5-mini · gpt-4.1-mini · gpt-5-nano"},
+               "models": "blank = the CLI's default · gemini-2.5-flash · gemini-2.5-pro",
+               "login": "Your Google account, through the Gemini CLI (npm install -g @google/gemini-cli)"},
     "openrouter": {"label": "OpenRouter", "kind": "openai", "url": "https://openrouter.ai/api/v1",
                    "model": "anthropic/claude-sonnet-5",
-                   "models": "anthropic/claude-sonnet-5 · openai/gpt-5-mini · google/gemini-2.5-flash · openrouter/free"},
-    "anthropic": {"label": "Anthropic API", "kind": "anthropic", "url": "https://api.anthropic.com",
-                  "model": "claude-sonnet-5", "models": "claude-sonnet-5 · claude-haiku-4-5 · claude-opus-5"},
-    "custom": {"label": "Custom (OpenAI-compatible)", "kind": "openai", "url": "", "model": "",
-               "models": "whatever the endpoint serves - Ollama, LM Studio, Groq..."},
+                   "models": "anthropic/claude-sonnet-5 · openai/gpt-5-mini · google/gemini-2.5-flash · openrouter/free",
+                   "login": "One sign-in that reaches Claude, GPT and Gemini models; free models included"},
 }
-ORDER = ("claude", "codex", "gemini", "openai", "openrouter", "anthropic", "gemini_api", "custom")
+ORDER = ("claude", "codex", "gemini", "openrouter")
 
 log = print          # murmur.py points this at its own log(); the tests leave it on print
 
@@ -172,28 +169,26 @@ def node_script(shim: str):
     return str(js) if js.exists() else None
 
 
-def engine_spec(cfg: dict) -> dict:
-    key = cfg.get("prompt_engine") or "claude"
+def engine_spec(cfg: dict, key=None) -> dict:
+    key = key or cfg.get("prompt_engine") or "claude"
     spec = dict(ENGINES.get(key) or ENGINES["claude"])
     spec["key"] = key if key in ENGINES else "claude"
-    spec["model"] = (cfg.get("prompt_model") or "").strip() or spec["model"]
-    if spec["key"] == "custom":
-        spec["url"] = (cfg.get("prompt_url") or "").strip()
+    models = cfg.get("prompt_models") or {}
+    spec["model"] = ((models.get(spec["key"]) if isinstance(models, dict) else "") or "").strip() or spec["model"]
     return spec
 
 
-def available(cfg: dict):
-    """(True, "") when the chosen engine can run now; else (False, what to do about it)."""
+def available(cfg: dict, appdir=None):
+    """(True, "") when the chosen engine can run now; else (False, what to do about it) -
+    from the connection state, no process and no network."""
+    import connect
     spec = engine_spec(cfg)
-    if spec["kind"] == "cli":
-        if not find_exe(spec["exe"]):
-            return False, f"{spec['label']} CLI not found - install it, or pick another engine in Settings."
+    state, detail = connect.status(spec["key"], appdir=appdir)
+    if state == "connected":
         return True, ""
-    if spec["key"] == "custom" and not spec["url"]:
-        return False, "Custom engine: set the base URL in Settings."
-    if spec["key"] != "custom" and not (cfg.get("prompt_key") or "").strip():
-        return False, f"{spec['label']}: paste an API key in Settings."
-    return True, ""
+    if state == "missing":
+        return False, f"{detail} - install it, or pick another engine in Promptify > Engines."
+    return False, f"{spec['label']} is not connected - press Connect in Promptify > Engines."
 
 
 def kill_tree(p) -> None:
@@ -206,12 +201,15 @@ def kill_tree(p) -> None:
         p.kill()
 
 
-def run_cli(argv, stdin_text, env, timeout, cancel, cwd):
-    """(rc, stdout, stderr). The prompt goes in on stdin and the pipe is closed at once - an
-    inherited open stdin costs a fixed 3 s in claude. A frozen --noconsole app has no console:
-    every handle is explicit and the child gets no window. Cancel and timeout kill the tree."""
-    kw = dict(stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-              encoding="utf-8", errors="replace", env=env, cwd=cwd)
+def run_cli(argv, stdin_text, env, timeout, cancel, cwd, watch=None):
+    """(rc, stdout, stderr). With `stdin_text` the prompt goes in on stdin and the pipe is closed
+    at once (an inherited open stdin costs a fixed 3 s in claude); with None the pipe stays open
+    and empty, which gemini needs (it hangs on EOF before its consent prompt). `watch` =
+    (text, reply bytes): when `text` shows up on stdout the reply is written - how a dead
+    gemini login is refused instead of opening a browser mid-dictation. A frozen --noconsole app
+    has no console: every handle is explicit and the child gets no window. Cancel and timeout
+    kill the tree."""
+    kw = dict(stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=cwd)
     if os.name == "nt":
         kw["creationflags"] = subprocess.CREATE_NO_WINDOW
         try:
@@ -223,41 +221,70 @@ def run_cli(argv, stdin_text, env, timeout, cancel, cwd):
         p = subprocess.Popen(argv, **kw)
     except OSError as e:
         raise PromptifyError(f"Could not start {Path(argv[0]).name}: {e}")
-    res = {}
+    bufs, done = {"out": bytearray(), "err": bytearray()}, {"watch": watch is None}
 
-    def pump():
+    def feed():
         try:
-            res["out"], res["err"] = p.communicate(input=stdin_text)
-        except Exception as e:                # pragma: no cover - a broken pipe on kill
-            res["exc"] = e
-    t = threading.Thread(target=pump, daemon=True)
-    t.start()
+            if stdin_text is not None:
+                p.stdin.write(stdin_text.encode("utf-8"))
+                p.stdin.close()
+        except OSError:
+            pass
+
+    def read(stream, name):
+        while True:
+            chunk = stream.read1(4096) if hasattr(stream, "read1") else stream.read(1)
+            if not chunk:
+                return
+            bufs[name] += chunk
+            if name == "out" and not done["watch"] and watch[0] in bufs["out"].decode("utf-8", "replace"):
+                done["watch"] = True
+                try:
+                    p.stdin.write(watch[1])
+                    p.stdin.flush()
+                except OSError:
+                    pass
+    ts = [threading.Thread(target=feed, daemon=True),
+          threading.Thread(target=read, args=(p.stdout, "out"), daemon=True),
+          threading.Thread(target=read, args=(p.stderr, "err"), daemon=True)]
+    for t in ts:
+        t.start()
     t0 = time.monotonic()
-    while t.is_alive():
+    while p.poll() is None:
         if cancel is not None and cancel.is_set():
             kill_tree(p)
-            t.join(5)
             raise Cancelled()
         if time.monotonic() - t0 > timeout:
             kill_tree(p)
-            t.join(5)
             raise PromptifyError(f"Timed out after {timeout:.0f} s.")
-        t.join(0.2)
-    return p.returncode, res.get("out") or "", res.get("err") or ""
+        time.sleep(0.2)
+    for t in ts:
+        t.join(2)
+    try:
+        p.stdin.close()
+    except OSError:
+        pass
+    return p.returncode, bufs["out"].decode("utf-8", "replace"), bufs["err"].decode("utf-8", "replace")
 
 
-def cli_argv(spec: dict, sysfile: Path, workdir: Path):
-    """The command line per CLI. Each one: no tools, no project context, no session files,
-    JSON out; the system prompt travels as a file, the dictation arrives on stdin."""
+def cli_head(spec: dict) -> list:
+    """[exe] or [node, script] for a CLI, so a login and an exec run the same binary."""
     exe = find_exe(spec["exe"])
     if not exe:
-        raise PromptifyError(f"{spec['label']} CLI not found - install it, or pick another engine in Settings.")
-    head = [exe]
+        raise PromptifyError(f"{spec['label']} is not installed - install it, or pick another engine.")
     if exe.lower().endswith((".cmd", ".bat")):
         js, node = node_script(exe), shutil.which("node")
         if not js or not node:
             raise PromptifyError(f"{spec['label']} is an npm shim I cannot run directly - install the native build.")
-        head = [node, js]
+        return [node, js]
+    return [exe]
+
+
+def cli_argv(spec: dict, sysfile: Path, workdir: Path, msg: str = ""):
+    """The command line per CLI. Each one: no tools, no project context, no session files,
+    JSON out; the system prompt travels as a file; the dictation arrives on stdin (claude,
+    codex) or as the -p argument (gemini, whose stdin is its consent prompt's)."""
+    head = cli_head(spec)
     k, model = spec["key"], spec["model"]
     if k == "claude":
         return head + ["-p", "--safe-mode", "--strict-mcp-config", "--tools", "", "--no-session-persistence",
@@ -279,16 +306,17 @@ def cli_argv(spec: dict, sysfile: Path, workdir: Path):
              "-c", 'approval_policy="never"', "-c", 'web_search="disabled"',
              "--output-schema", str(schema), "-o", str(last)]
     if k == "gemini":
-        # headless whenever stdin is not a TTY: the message goes in there; the system prompt via
-        # GEMINI_SYSTEM_MD (see cli_env); -e none = no extensions; the cwd's own settings file
-        # turns the tools and the context files off (docs-only: the CLI is not installed here)
+        # headless whenever stdin is not a TTY; the message is the -p argument (stdin's first
+        # line would be read as the consent answer); the system prompt via GEMINI_SYSTEM_MD (see
+        # cli_env); -e none = no extensions; the cwd's own settings file turns the tools and the
+        # context files off (docs + a local install of 0.57.0; no login here to run it against)
         gs = workdir / "empty" / ".gemini"
         gs.mkdir(parents=True, exist_ok=True)
         (gs / "settings.json").write_text(json.dumps(
             {"tools": {"core": []}, "context": {"fileName": "NONE.md", "includeDirectoryTree": False},
              "privacy": {"usageStatisticsEnabled": False},
              "general": {"enableAutoUpdate": False, "enableAutoUpdateNotification": False}}), encoding="utf-8")
-        return head + ["--output-format", "json", "-e", "none"] + (["-m", model] if model else [])
+        return head + ["-p", msg, "--skip-trust", "-o", "json", "-e", "none"] + (["-m", model] if model else [])
     raise PromptifyError(f"Unknown engine {k!r}.")
 
 
@@ -310,15 +338,17 @@ def login_check(spec: dict, argv: list) -> None:
 
 
 def cli_env(spec: dict, sysfile: Path) -> dict:
+    """The child's environment: anything that would outrank the login the user made is
+    dropped (a key in the environment silently switches claude/codex to API billing)."""
     k = spec["key"]
-    drop = {"claude": lambda n: n.startswith("CLAUDE"),          # a nested-session marker
-            "codex": lambda n: n in ("OPENAI_API_KEY", "CODEX_API_KEY"),   # would override the login
+    drop = {"claude": lambda n: n.startswith("CLAUDE") or n in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
+            "codex": lambda n: n in ("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"),
             "gemini": lambda n: False}[k]
     env = {n: v for n, v in os.environ.items() if not drop(n)}
     if k == "claude":
         env["MAX_THINKING_TOKENS"] = "0"      # thinking on turns a 10 s call into 75 s
     if k == "gemini":
-        env.update({"GEMINI_SYSTEM_MD": str(sysfile), "NO_BROWSER": "true", "NO_COLOR": "1",
+        env.update({"GEMINI_SYSTEM_MD": str(sysfile), "NO_COLOR": "1", "GOOGLE_GENAI_USE_GCA": "true",
                     "GEMINI_CLI_NO_RELAUNCH": "1", "GEMINI_CLI_TRUST_WORKSPACE": "true"})
     env["PYTHONIOENCODING"] = "utf-8"
     return env
@@ -342,11 +372,15 @@ def run_cli_engine(spec: dict, msg: str, cancel, workdir: Path) -> tuple:
         sysfile.write_text(text, encoding="utf-8")
     empty = workdir / "empty"                 # the child's cwd: nothing to read, nowhere to write
     empty.mkdir(parents=True, exist_ok=True)
-    argv = cli_argv(spec, sysfile, workdir)
+    argv = cli_argv(spec, sysfile, workdir, msg)
     k = spec["key"]
     login_check(spec, argv)
     t0 = time.monotonic()
-    rc, out, err = run_cli(argv, msg, cli_env(spec, sysfile), TIMEOUT, cancel, str(empty))
+    if k == "gemini":     # stdin open and empty; a consent prompt means the login is dead: refuse it
+        rc, out, err = run_cli(argv, None, cli_env(spec, sysfile), TIMEOUT, cancel, str(empty),
+                               watch=("[Y/n]:", b"n\n"))
+    else:
+        rc, out, err = run_cli(argv, msg, cli_env(spec, sysfile), TIMEOUT, cancel, str(empty))
     wall = time.monotonic() - t0
     tail = (err.strip().splitlines() or [""])[-1][:160]
     log(f"  promptify {k}: rc {rc}, {wall:.1f}s{(', stderr: ' + tail) if tail else ''}")
@@ -389,14 +423,16 @@ def run_cli_engine(spec: dict, msg: str, cancel, workdir: Path) -> tuple:
             raise PromptifyError(_friendly(spec, last or err or out))
         return parse_result(reply), meta
     if k == "gemini":
+        if "[Y/n]:" in out or "Authentication cancelled" in err or "Please set an Auth method" in err:
+            raise PromptifyError("Gemini CLI is not connected - press Connect in Promptify > Engines.")
         try:
-            j = json.loads(out)
+            j = json.loads(out[out.index("{"):]) if "{" in out else {}
             reply = j.get("response") if isinstance(j, dict) else out
             if isinstance(j, dict) and j.get("error"):
-                raise PromptifyError(_friendly(spec, str(j["error"])))
+                raise PromptifyError(_friendly(spec, str((j["error"] or {}).get("message") or j["error"])))
         except ValueError:
             reply = out
-        if rc != 0 and not reply:
+        if not (reply or "").strip():
             raise PromptifyError(_friendly(spec, err or out))
         return parse_result(reply or ""), meta
     raise PromptifyError(f"Unknown engine {k!r}.")
@@ -452,43 +488,34 @@ def post_degrading(url: str, body: dict, headers: dict) -> dict:
     raise PromptifyError("The endpoint rejected every request shape.")
 
 
-def run_api_engine(spec: dict, cfg: dict, msg: str) -> tuple:
-    key, model, sysp = (cfg.get("prompt_key") or "").strip(), spec["model"], system_prompt()
+def run_api_engine(spec: dict, cfg: dict, msg: str, appdir=None) -> tuple:
+    """OpenRouter: the key its Connect flow handed back, on the OpenAI-compatible endpoint."""
+    import connect
+    key, model, sysp = connect.openrouter_key(appdir), spec["model"], system_prompt()
+    if not key:
+        raise PromptifyError("OpenRouter is not connected - press Connect in Promptify > Engines.")
     if not model:
-        raise PromptifyError(f"{spec['label']}: set a model in Settings.")
+        raise PromptifyError(f"{spec['label']}: set a model.")
     t0 = time.monotonic()
-    if spec["kind"] == "anthropic":
-        # no sampling params (a 400 on the current models); thinking off as in the CLI engine,
-        # except for Fable, which refuses an explicit "disabled"
-        body = {"model": model, "max_tokens": 4096, "system": sysp,
-                "messages": [{"role": "user", "content": msg}]}
-        if "fable" not in model:
-            body["thinking"] = {"type": "disabled"}
-        j = post_degrading(spec["url"].rstrip("/") + "/v1/messages", body,
-                           {"x-api-key": key, "anthropic-version": "2023-06-01"})
-        text = "".join(b.get("text", "") for b in j.get("content", []) if b.get("type") == "text")
-    else:
-        url = spec["url"].rstrip("/")
-        if not url:
-            raise PromptifyError("Custom engine: set the base URL in Settings.")
-        # a local server (Ollama) wants some bearer token and ignores its value
-        headers = {"Authorization": f"Bearer {key or 'local'}"}
-        if spec["key"] == "openrouter":
-            headers.update({"HTTP-Referer": "https://github.com/BlueRaddish/murmur", "X-Title": "murmur"})
-        body = {"model": model, "stream": False,
-                "messages": [{"role": "system", "content": sysp}, {"role": "user", "content": msg}],
-                "response_format": {"type": "json_object"}}
-        # api.openai.com deprecated max_tokens and its reasoning models reject temperature
-        body["max_completion_tokens" if spec["key"] == "openai" else "max_tokens"] = 4096
-        if spec["key"] == "openrouter":
-            body["provider"] = {"require_parameters": True}   # only routes that honour response_format
+    url = spec["url"].rstrip("/")
+    headers = {"Authorization": f"Bearer {key}", "HTTP-Referer": "https://github.com/BlueRaddish/murmur",
+               "X-Title": "murmur"}
+    body = {"model": model, "stream": False, "max_tokens": 4096,
+            "messages": [{"role": "system", "content": sysp}, {"role": "user", "content": msg}],
+            "response_format": {"type": "json_object"},
+            "provider": {"require_parameters": True}}   # only routes that honour response_format
+    try:
         j = post_degrading(url + "/chat/completions", body, headers)
-        try:
-            text = j["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError):
-            raise PromptifyError(f"{spec['label']}: unexpected reply shape.")
-        if isinstance(text, list):             # some endpoints return content parts
-            text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
+    except PromptifyError as e:
+        if "key was rejected" in str(e):
+            raise PromptifyError("OpenRouter no longer accepts murmur's key - press Connect again.")
+        raise
+    try:
+        text = j["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        raise PromptifyError(f"{spec['label']}: unexpected reply shape.")
+    if isinstance(text, list):             # some endpoints return content parts
+        text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
     wall = time.monotonic() - t0
     log(f"  promptify {spec['key']}: {wall:.1f}s")
     return parse_result(text), {"model": model, "wall": round(wall, 1)}
@@ -505,7 +532,7 @@ def draft(cfg: dict, dictation: str, target="code", prompts=None, questions=None
     if spec["kind"] == "cli":
         obj, meta = run_cli_engine(spec, msg, cancel, workdir)
     else:
-        obj, meta = run_api_engine(spec, cfg, msg)
+        obj, meta = run_api_engine(spec, cfg, msg, appdir=workdir.parent)
     out = normalize(obj)
     out.update(engine=spec["key"], model=meta.get("model") or spec["model"], target=target,
                wall=meta.get("wall", 0.0), t=time.time())

@@ -74,8 +74,7 @@ DEFAULTS = {"model": "small.en", "device": "cpu", "language": None, "mic": None,
             # Promptify: which engine writes the prompt, its model (blank = the engine's default),
             # a key for the API engines, a base URL for the custom one, the target the prompt is
             # written for, and whether the "this leaves the machine" line has been acknowledged
-            "prompt_engine": "claude", "prompt_model": "", "prompt_key": "", "prompt_url": "",
-            "prompt_target": "code", "prompt_ack": False}
+            "prompt_engine": "claude", "prompt_models": {}, "prompt_target": "code", "prompt_ack": False}
 
 
 def since_launch() -> str:
@@ -661,6 +660,7 @@ def run_app(factory, cfg: dict, cfg_path: Path) -> None:
     from overlay import Overlay, set_dpi_aware
     from window import AppWindow, History
     import promptify
+    import connect                    # bundled with the app: the engines' sign-in and state
     promptify.log = log               # engine diagnostics (never its text) into murmur.log
 
     scale = set_dpi_aware()           # before Tk() so tkinter gets real pixels too

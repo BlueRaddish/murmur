@@ -39,19 +39,17 @@ assert n == {"prompts": ["P", "Q"], "questions": [{"q": "A?", "why": "b", "optio
 print("parsing ok")
 
 # --- engine spec / availability --------------------------------------------------------------
-cfg = {"prompt_engine": "claude", "prompt_model": "", "prompt_key": ""}
+cfg = {"prompt_engine": "claude", "prompt_models": {}}
 assert P.engine_spec(cfg)["model"] == "sonnet" and P.engine_spec({"prompt_engine": "nope"})["key"] == "claude"
-assert P.engine_spec({"prompt_engine": "openai", "prompt_model": " gpt-5 "})["model"] == "gpt-5"
-assert P.engine_spec({"prompt_engine": "custom", "prompt_url": "http://localhost:11434/v1/"})["url"] == "http://localhost:11434/v1/"
+assert P.engine_spec({"prompt_engine": "codex", "prompt_models": {"codex": " gpt-5.5 "}})["model"] == "gpt-5.5"
+assert P.engine_spec({"prompt_engine": "claude", "prompt_models": {"codex": "x"}})["model"] == "sonnet"
+assert P.engine_spec(cfg, "openrouter")["key"] == "openrouter" and P.ORDER == ("claude", "codex", "gemini", "openrouter")
+assert all(P.ENGINES[k]["login"] for k in P.ORDER)
 _which = P.find_exe                 # the real lookup would find this machine's claude.exe
 P.find_exe = lambda name: None
-assert P.available(cfg)[0] is False and "not found" in P.available(cfg)[1]
-assert P.available({"prompt_engine": "openai"})[0] is False and "API key" in P.available({"prompt_engine": "openai"})[1]
-assert P.available({"prompt_engine": "openai", "prompt_key": "sk-x"}) == (True, "")
-assert P.available({"prompt_engine": "custom"})[1].startswith("Custom engine")
-assert P.available({"prompt_engine": "custom", "prompt_url": "http://x/v1"}) == (True, "")
-assert P.available({"prompt_engine": "gemini_api", "prompt_key": "k"}) == (True, "")
+assert P.available(cfg)[0] is False and "install" in P.available(cfg)[1]
 P.find_exe = _which
+assert P.available({"prompt_engine": "openrouter"}, appdir=tempfile.mkdtemp())[1].endswith("press Connect in Promptify > Engines.")
 print("availability ok")
 
 # --- argv per CLI (with a fake exe) ----------------------------------------------------------
@@ -67,26 +65,29 @@ a = P.cli_argv(P.engine_spec({"prompt_engine": "claude"}), sysfile, wd)
 assert a[:2] == [str(fake), "-p"] and "--safe-mode" in a and "--bare" not in a
 assert a[a.index("--model") + 1] == "sonnet" and a[a.index("--json-schema") + 1] == P.SCHEMA_JSON
 assert a[a.index("--tools") + 1] == "" and a[a.index("--system-prompt-file") + 1] == str(sysfile)
-a = P.cli_argv(P.engine_spec({"prompt_engine": "claude", "prompt_model": "opus"}), sysfile, wd)
+a = P.cli_argv(P.engine_spec({"prompt_engine": "claude", "prompt_models": {"claude": "opus"}}), sysfile, wd)
 assert a[a.index("--model") + 1] == "opus"
 a = P.cli_argv(P.engine_spec({"prompt_engine": "codex"}), sysfile, wd)
 assert a[1:4] == ["exec", "-", "--json"] and "--ephemeral" in a and "-m" not in a
 assert a[a.index("-C") + 1] == str(wd / "empty") and a[a.index("--output-schema") + 1] == str(wd / "schema.json")
 assert 'approval_policy="never"' in a and 'web_search="disabled"' in a
 assert f"model_instructions_file='{sysfile.as_posix()}'" in a and json.loads((wd / "schema.json").read_text()) == P.SCHEMA
-a = P.cli_argv(P.engine_spec({"prompt_engine": "codex", "prompt_model": "gpt-5-codex"}), sysfile, wd)
+a = P.cli_argv(P.engine_spec({"prompt_engine": "codex", "prompt_models": {"codex": "gpt-5-codex"}}), sysfile, wd)
 assert a[a.index("-m") + 1] == "gpt-5-codex"
-a = P.cli_argv(P.engine_spec({"prompt_engine": "gemini", "prompt_model": "gemini-2.5-flash"}), sysfile, wd)
-assert a[1:] == ["--output-format", "json", "-e", "none", "-m", "gemini-2.5-flash"]
+a = P.cli_argv(P.engine_spec({"prompt_engine": "gemini", "prompt_models": {"gemini": "gemini-2.5-flash"}}), sysfile, wd, "MSG")
+assert a[1:] == ["-p", "MSG", "--skip-trust", "-o", "json", "-e", "none", "-m", "gemini-2.5-flash"]
 assert json.loads((wd / "empty" / ".gemini" / "settings.json").read_text())["tools"] == {"core": []}
+os.environ["ANTHROPIC_API_KEY"] = "x"
 env = P.cli_env(P.engine_spec({"prompt_engine": "claude"}), sysfile)
-assert env["MAX_THINKING_TOKENS"] == "0" and not any(k.startswith("CLAUDE") for k in env)
+assert env["MAX_THINKING_TOKENS"] == "0" and not any(k.startswith("CLAUDE") for k in env) and "ANTHROPIC_API_KEY" not in env
+del os.environ["ANTHROPIC_API_KEY"]
 os.environ["CODEX_API_KEY"] = "x"
 env = P.cli_env(P.engine_spec({"prompt_engine": "codex"}), sysfile)
-assert "CODEX_API_KEY" not in env and "OPENAI_API_KEY" not in env
+assert "CODEX_API_KEY" not in env and "OPENAI_API_KEY" not in env and "CODEX_ACCESS_TOKEN" not in env
 del os.environ["CODEX_API_KEY"]
 env = P.cli_env(P.engine_spec({"prompt_engine": "gemini"}), sysfile)
-assert env["GEMINI_SYSTEM_MD"] == str(sysfile) and env["NO_BROWSER"] == "true"
+assert env["GEMINI_SYSTEM_MD"] == str(sysfile) and env["GOOGLE_GENAI_USE_GCA"] == "true" and "NO_BROWSER" not in env
+assert P.cli_head(P.engine_spec({"prompt_engine": "claude"})) == [str(fake)]
 # an npm .cmd shim is run through node on the script it points at, never through cmd.exe
 shim = tmp / "codex.cmd"
 shim.write_text('@ECHO off\r\n"%dp0%\\node_modules\\codex\\bin\\codex.js" %*\r\n')
@@ -127,9 +128,9 @@ P.log = lambda s: None
 real_argv = P.cli_argv
 
 
-def fake_argv(spec, sysfile, workdir):
+def fake_argv(spec, sysfile, workdir, msg=""):
     script = tmp / {"claude": "fakeclaude.py", "codex": "fakecodex.py", "gemini": "fakegemini.py"}[spec["key"]]
-    return [py, str(script), spec["model"]]
+    return [py, str(script), spec["model"], msg]
 
 
 P.cli_argv = fake_argv
@@ -148,23 +149,37 @@ fake_codex.write_text(
     "print(json.dumps({'type': 'thread.started'}))\n"
     "print(json.dumps({'type': 'item.completed', 'item': {'type': 'agent_message', 'text': 'thinking...'}}))\n"
     f"print(json.dumps({{'type': 'item.completed', 'item': {{'type': 'agent_message', 'text': '```json\\n' + {json.dumps(json.dumps(good))} + '\\n```'}}}}))\n")
-res = P.draft({"prompt_engine": "codex", "prompt_model": "m"}, "d", "chat", workdir=work)
+res = P.draft({"prompt_engine": "codex", "prompt_models": {"codex": "m"}}, "d", "chat", workdir=work)
 assert res["prompts"] == ["Do X"] and res["engine"] == "codex" and res["model"] == "m"
 
-fake_gemini = tmp / "fakegemini.py"      # {"response": ..., "stats": ...}; system prompt via env
-fake_gemini.write_text(
+fake_gemini = tmp / "fakegemini.py"      # {"response": ..., "stats": ...}; system prompt via env; the
+fake_gemini.write_text(                  # dictation is argv, stdin is left alone (it stays open, empty)
     "import sys, json, os\n"
-    "msg = sys.stdin.read(); assert 'PROMPTIFY-SYSTEM' not in msg and os.environ['GEMINI_SYSTEM_MD']\n"
+    "assert os.environ['GEMINI_SYSTEM_MD'] and '<dictation>' in sys.argv[2]\n"
     f"print(json.dumps({{'response': {json.dumps(json.dumps(good))}, 'stats': {{}}}}))\n")
 res = P.draft({"prompt_engine": "gemini"}, "d", "code", workdir=work)
 assert res["prompts"] == ["Do X"] and res["engine"] == "gemini"
+# a dead Google login shows as the consent prompt: murmur answers no and says Connect
+consent = tmp / "consent.py"
+consent.write_text(
+    "import sys\n"
+    "sys.stdout.write('\\nOpening authentication page in your browser. Do you want to continue? [Y/n]: '); sys.stdout.flush()\n"
+    "line = sys.stdin.readline(); assert line.strip() == 'n', repr(line)\n"
+    "sys.stderr.write('Error authenticating: FatalCancellationError: Authentication cancelled by user.\\n'); sys.exit(130)\n")
+P.cli_argv = lambda spec, sysfile, workdir, msg="": [py, str(consent)]
+try:
+    P.draft({"prompt_engine": "gemini"}, "d", workdir=work)
+    raise AssertionError("consent not refused")
+except P.PromptifyError as e:
+    assert "not connected" in str(e) and "Connect" in str(e), e
+P.cli_argv = fake_argv
 
 # errors: an auth failure envelope, a crash, and a timeout / cancel that must kill the child
 # codex: a usage-limit turn.failed with no message -> the error, not a parse failure
 limit = tmp / "limit.py"
 limit.write_text("import json\nprint(json.dumps({'type': 'turn.failed', 'error': {'message': \"You've hit your usage limit\"}}))\n"
                  "raise SystemExit(1)", encoding="utf-8")
-P.cli_argv = lambda spec, sysfile, workdir: [py, str(limit)]
+P.cli_argv = lambda spec, sysfile, workdir, msg="": [py, str(limit)]
 try:
     P.draft({"prompt_engine": "codex"}, "d", workdir=work)
     raise AssertionError("limit not raised")
@@ -173,7 +188,7 @@ except P.PromptifyError as e:
 fail = tmp / "fail.py"
 fail.write_text("import json; print(json.dumps({'is_error': True, 'result': 'Not logged in · Please run /login'}))",
                 encoding="utf-8")
-P.cli_argv = lambda spec, sysfile, workdir: [py, str(fail)]
+P.cli_argv = lambda spec, sysfile, workdir, msg="": [py, str(fail)]
 try:
     P.draft({"prompt_engine": "claude"}, "d", workdir=work)
     raise AssertionError("auth error not raised")
@@ -181,7 +196,7 @@ except P.PromptifyError as e:
     assert "not logged in" in str(e) and "`claude`" in str(e), e
 crash = tmp / "crash.py"
 crash.write_text("import sys; sys.stderr.write('boom\\n'); sys.exit(3)")
-P.cli_argv = lambda spec, sysfile, workdir: [py, str(crash)]
+P.cli_argv = lambda spec, sysfile, workdir, msg="": [py, str(crash)]
 try:
     P.draft({"prompt_engine": "claude"}, "d", workdir=work)
     raise AssertionError("crash not raised")
@@ -189,7 +204,7 @@ except P.PromptifyError as e:
     assert "boom" in str(e), e
 sleeper = tmp / "sleep.py"
 sleeper.write_text("import sys, time\nsys.stdin.read()\ntime.sleep(30)\nprint('{}')")
-P.cli_argv = lambda spec, sysfile, workdir: [py, str(sleeper)]
+P.cli_argv = lambda spec, sysfile, workdir, msg="": [py, str(sleeper)]
 P.TIMEOUT = 1.0
 t0 = time.monotonic()
 try:
@@ -223,73 +238,51 @@ _login(P.engine_spec({"prompt_engine": "claude"}), ["irrelevant"])     # only co
 P.login_check = lambda spec, argv: None
 print("runner ok: envelopes, JSONL, auth, crash, timeout, cancel, login check")
 
-# --- API engines: request shape and error mapping, against a fake http_json ------------------
+# --- OpenRouter: the Connect-flow key on the OpenAI-compatible endpoint, against a fake http_json ---
+import connect as C
 calls = []
 
 
 def fake_http(url, body, headers, timeout=120):
     calls.append((url, dict(body), headers))
-    if "anthropic" in url:
-        if "thinking" in body and body["model"] == "old-model":
-            raise P.PromptifyError("HTTP 400: thinking: Extra inputs are not permitted")
-        return {"content": [{"type": "text", "text": json.dumps(good)}]}
     if body.get("model") == "bad":
         raise P.PromptifyError("unknown model or URL: bad")
     if body.get("model") == "picky" and "response_format" in body:
         raise P.PromptifyError("HTTP 400: response_format is not supported by this model")
     if body.get("model") == "routed":
         return {"error": {"code": 502, "message": "Provider returned error"}}
+    if body.get("model") == "revoked":
+        raise P.PromptifyError("the API key was rejected: User not found.")
     return {"choices": [{"message": {"content": json.dumps(good)}}]}
 
 
 P.http_json = fake_http
-res = P.draft({"prompt_engine": "openrouter", "prompt_key": "k"}, "d", "code", workdir=work)
+(work / "openrouter.json").write_text(json.dumps({"key": "sk-or-v1-k"}), encoding="utf-8")
+res = P.draft({"prompt_engine": "openrouter"}, "d", "code", workdir=work)
 url, body, headers = calls[-1]
-assert url == "https://openrouter.ai/api/v1/chat/completions" and headers["Authorization"] == "Bearer k"
+assert url == "https://openrouter.ai/api/v1/chat/completions" and headers["Authorization"] == "Bearer sk-or-v1-k"
 assert headers["X-Title"] == "murmur" and body["model"] == "anthropic/claude-sonnet-5"
 assert body["messages"][0] == {"role": "system", "content": "PROMPTIFY-SYSTEM rules\n"}
 assert body["messages"][1]["role"] == "user" and "<dictation>" in body["messages"][1]["content"]
 assert body["response_format"] == {"type": "json_object"} and res["prompts"] == ["Do X"]
 assert "temperature" not in body and body["max_tokens"] == 4096 and body["provider"] == {"require_parameters": True}
-res = P.draft({"prompt_engine": "openai", "prompt_key": "k"}, "d", workdir=work)
-url, body, headers = calls[-1]
-assert body["model"] == "gpt-5-mini" and body["max_completion_tokens"] == 4096 and "max_tokens" not in body
-res = P.draft({"prompt_engine": "anthropic", "prompt_key": "k"}, "d", workdir=work)
-url, body, headers = calls[-1]
-assert url == "https://api.anthropic.com/v1/messages" and headers["x-api-key"] == "k" and body["system"].startswith("PROMPTIFY")
-assert body["max_tokens"] == 4096 and res["prompts"] == ["Do X"] and res["model"] == "claude-sonnet-5"
-assert body["thinking"] == {"type": "disabled"} and "temperature" not in body
-res = P.draft({"prompt_engine": "anthropic", "prompt_key": "k", "prompt_model": "claude-fable-5"}, "d", workdir=work)
-assert "thinking" not in calls[-1][1]                          # Fable refuses an explicit "disabled"
 # the degrade ladder: a parameter the endpoint names in a 400 is dropped and the call retried
 n_before = len(calls)
-res = P.draft({"prompt_engine": "anthropic", "prompt_key": "k", "prompt_model": "old-model"}, "d", workdir=work)
-assert len(calls) == n_before + 2 and "thinking" in calls[-2][1] and "thinking" not in calls[-1][1] and res["prompts"] == ["Do X"]
-n_before = len(calls)
-res = P.draft({"prompt_engine": "openai", "prompt_key": "k", "prompt_model": "picky"}, "d", workdir=work)
+res = P.draft({"prompt_engine": "openrouter", "prompt_models": {"openrouter": "picky"}}, "d", workdir=work)
 assert len(calls) == n_before + 2 and "response_format" not in calls[-1][1] and res["prompts"] == ["Do X"]
+for model, text in (("routed", "Provider returned error"), ("bad", "unknown model"), ("revoked", "Connect again")):
+    try:
+        P.draft({"prompt_engine": "openrouter", "prompt_models": {"openrouter": model}}, "d", workdir=work)
+        raise AssertionError(model)
+    except P.PromptifyError as e:
+        assert text in str(e), (model, e)
+(work / "openrouter.json").unlink()
 try:
-    P.draft({"prompt_engine": "openrouter", "prompt_key": "k", "prompt_model": "routed"}, "d", workdir=work)
+    P.draft({"prompt_engine": "openrouter"}, "d", workdir=work)
     raise AssertionError
 except P.PromptifyError as e:
-    assert "Provider returned error" in str(e)                # a 200 that carries an error object
-res = P.draft({"prompt_engine": "gemini_api", "prompt_key": "k"}, "d", workdir=work)
-url, body, headers = calls[-1]
-assert url == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions" and body["model"] == "gemini-2.5-flash"
-res = P.draft({"prompt_engine": "custom", "prompt_url": "http://localhost:11434/v1/", "prompt_model": "qwen"}, "d", workdir=work)
-url, body, headers = calls[-1]
-assert url == "http://localhost:11434/v1/chat/completions" and headers["Authorization"] == "Bearer local" and body["model"] == "qwen"
-try:
-    P.draft({"prompt_engine": "openai", "prompt_key": "k", "prompt_model": "bad"}, "d", workdir=work)
-    raise AssertionError
-except P.PromptifyError as e:
-    assert "unknown model" in str(e)
-try:
-    P.draft({"prompt_engine": "custom", "prompt_url": "http://x/v1"}, "d", workdir=work)
-    raise AssertionError
-except P.PromptifyError as e:
-    assert "set a model" in str(e)
-print("api engines ok")
+    assert "not connected" in str(e)
+print("openrouter engine ok")
 
 # the shipped system prompt is the real one and the schema is what the engines are told to fill
 real = (Path(__file__).resolve().parents[1] / "promptify.txt").read_text(encoding="utf-8")
