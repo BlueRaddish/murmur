@@ -22,6 +22,9 @@ before it reaches you. murmur has no server side at all:
   0 keeps nothing) or delete. The log next to it (`murmur.log`) records timings and word
   counts, never the words.
 - **Nothing rewrites you.** What Whisper hears is what gets typed, technical terms included.
+- **One opt-in exception:** the Promptify button in History (below) sends *that one dictation*
+  to an LLM you choose, on your own login or key, and only when you press it. The transcript
+  itself is never changed, and the log still records timings, never text.
 
 ## Install
 
@@ -82,6 +85,17 @@ clipboard, delete one (undo offered) or clear all. The retention window is adjus
 Settings (0 keeps nothing). Stored in
 `%APPDATA%\murmur\history.jsonl`, local only.
 
+**Promptify.** Select a dictation in History and press Promptify (or Ctrl+D) to turn a rambling
+take into a prompt for Claude: the goal first, in your words, your terms and decisions kept
+verbatim, musings kept as open points, and at most three questions about the things only you
+can answer (scope, which repo, how many, what "done" looks like). Answer by clicking a chip,
+typing, or holding the chord and talking into the field; Update prompt folds the answers in;
+Copy prompt, paste into Claude Code (or claude.ai - the toggle changes how references to "the
+repo" are handled). The draft stays on the entry. The engine is yours to pick in Settings >
+Promptify: Claude Code, Codex or Gemini CLI on their own logins, or OpenAI, OpenRouter,
+Anthropic or any OpenAI-compatible endpoint (Ollama, LM Studio, Groq...) with a key. Nothing
+runs until you press the button, and the first press says where the words go.
+
 **Extra trigger key.** Settings > Trigger key > Change... binds any single key to toggle
 recording: a wired headset's inline button, a media key, F13 on a macro pad. murmur swallows
 that key so nothing else reacts to it, and it is never turned into a Ctrl+Win keystroke, so
@@ -141,3 +155,7 @@ python tests/test_murmur.py
 
 Drives the hold/double-tap/headset state machine with fake key events, then synthesizes a
 sentence with Windows TTS and checks Whisper gets the technical words back.
+`tests/test_window.py` drives the window, `tests/test_brand.py` pins the mark to Chrome's
+raster of the SVG, and `tests/test_promptify.py` runs the engine layer against fake CLIs
+(envelopes, JSONL, auth errors, timeout, cancel) - no login or network needed. `./test.sh`
+runs them all.

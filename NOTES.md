@@ -156,6 +156,44 @@ Decisions
   SVG path (IoU 0.9987), the 16 px pixel grid, the seven ico frames
   (whole-pixel legs in the 16 and 32 px ones included), every tray tint, and the rule that idle,
   mic-open and transcribing are three different icons at the shipped defaults.
+- Promptify (2026-08-28, v0.8). The user found the "Prompt Master" skill and wanted the idea
+  inside murmur: a History dictation -> a prompt for Claude, with "refining the language" and
+  "asking for more context", as a button (never a chord mode - one trigger key is confusing
+  enough). Research first (11 agents: the skill and its relatives, Anthropic's prompting canon,
+  OpenAI/Google/academic consensus incl. the clarifying-question literature, shipped products,
+  and a hands-on engine test), synthesized into a rubric of 15 sourced rules and 11 question
+  dimensions, critiqued by three reviewers, revised, then demoed on three real dictations. The
+  result is `promptify.txt`, the engine's system prompt: goal line first in the speaker's words,
+  plain labels only for sections the dictation fills, fidelity over everything (terms, numbers
+  and decisions verbatim; musings stay musings; no invented requirements; no longer than the
+  dictation unless a list needs numbering), at most three questions and only where an answer
+  changes the work, unanswered ones carried as "Open:" lines so the pass-1 prompt is already
+  usable. Speech mis-hearings are fixed only when exactly one reading fits and every fix is
+  listed as heard/wrote; the History entry is never touched. Name: the user's own "Promptify"
+  (the brief recommended "Draft prompt"). Engines: the user asked for "any login for Claude Code
+  or Codex or Gemini or OpenRouter" rather than Claude only, so `promptify.py` is an engine
+  layer - three CLIs on their own logins and key-based OpenAI-compatible/Anthropic APIs from
+  urllib (no SDKs in a frozen exe). The Claude path is the measured one: `claude -p --safe-mode
+  --strict-mcp-config --tools "" --no-session-persistence --output-format json --model sonnet
+  --system-prompt-file ... --json-schema ...`, dictation on stdin, MAX_THINKING_TOKENS=0, an
+  empty cwd, CREATE_NO_WINDOW; 9-13 s per pass at 23-61 % CPU. The traps, all measured:
+  `--bare` drops the OAuth login; without `--safe-mode` a call carries 56k tokens and 89 s
+  (CLAUDE.md, hooks, 111 MCP tools); an inherited open stdin costs 3 s; without `--model` it
+  runs on the settings model; thinking on turns 10 s into 75-110 s; Haiku dropped one of two
+  asks in 3/3 runs, so Sonnet is the default and there is no model picker beyond the text
+  field; `Popen.kill()` leaves claude's conhost/cmd children, so cancel is `taskkill /T`;
+  PyInstaller leaks SetDllDirectory into children. Anthropic's support page says `-p` usage
+  draws on the subscription window; `total_cost_usd` is a list estimate ($0.01-0.03), not a
+  charge. Window: the panel takes the list's slot (a 20-30 line prompt cannot live under the
+  5-line card), transcript collapsed to three lines on top, an editable prompt field that fits
+  its content so the panel is the only scroller, one card per question with chips + a rounded
+  answer field, Copy prompt as the panel's primary. Two things learned the hard way:
+  `root.after()` from a worker thread raises "main thread is not in main loop" outside
+  mainloop (the tests), so the worker only fills a dict and the 200 ms status ticker consumes
+  it; and Tk sizes a Text in font lines and ignores spacing1/3, so N spaced lines in a height-N
+  Text clip the last one - the panel's Texts have no spacing. Dictating into an answer field
+  works because Typist already skips the paste when murmur's own window is in front; the take
+  now also lands in the focused panel field (and in History like any take).
 - Rising, not level (2026-08-28). The user saw the shipped mark and said it was not the one they
   picked: "the murmur with the left peak lower". The brief had two Ripple m builds and I shipped
   the level one on my own reading of "the ripple m". Now the rising build: both arches spring

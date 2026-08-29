@@ -48,9 +48,12 @@ ENGINES = {
     "claude": {"label": "Claude Code", "kind": "cli", "exe": "claude", "model": "sonnet",
                "models": "sonnet · opus · haiku · a full model id"},
     "codex": {"label": "Codex", "kind": "cli", "exe": "codex", "model": "",
-              "models": "blank = your Codex default · gpt-5.1-codex · gpt-5.1-codex-mini"},
+              "models": "blank = your Codex default · or any model id `codex` accepts"},
     "gemini": {"label": "Gemini CLI", "kind": "cli", "exe": "gemini", "model": "",
                "models": "blank = the CLI's default · gemini-2.5-pro · gemini-2.5-flash"},
+    "gemini_api": {"label": "Gemini API", "kind": "openai",
+                   "url": "https://generativelanguage.googleapis.com/v1beta/openai",
+                   "model": "gemini-2.5-flash", "models": "gemini-2.5-flash · gemini-2.5-pro"},
     "openai": {"label": "OpenAI", "kind": "openai", "url": "https://api.openai.com/v1",
                "model": "gpt-5-mini", "models": "gpt-5-mini · gpt-5 · gpt-4.1"},
     "openrouter": {"label": "OpenRouter", "kind": "openai", "url": "https://openrouter.ai/api/v1",
@@ -61,7 +64,7 @@ ENGINES = {
     "custom": {"label": "Custom (OpenAI-compatible)", "kind": "openai", "url": "", "model": "",
                "models": "whatever the endpoint serves - Ollama, LM Studio, Groq..."},
 }
-ORDER = ("claude", "codex", "gemini", "openai", "openrouter", "anthropic", "custom")
+ORDER = ("claude", "codex", "gemini", "openai", "openrouter", "anthropic", "gemini_api", "custom")
 
 log = print          # murmur.py points this at its own log(); the tests leave it on print
 
@@ -133,7 +136,10 @@ def normalize(obj: dict) -> dict:
 # --- engines ---------------------------------------------------------------------------------
 def find_exe(name: str):
     """A CLI on this machine, or None. `which` first (a login-launched murmur inherits the user's
-    PATH, and ~/.local/bin is on it here); then the places the installers use."""
+    PATH, and ~/.local/bin is on it here); then the places the installers use. An npm .cmd shim
+    is never returned as such: cmd.exe would re-parse the arguments. Codex keeps a native
+    codex.exe under the shim's node_modules (what the shim spawns anyway), so that is used;
+    otherwise the shim's JS entry runs under node."""
     p = shutil.which(name)
     if p and not p.lower().endswith((".cmd", ".bat")):
         return p
@@ -142,7 +148,13 @@ def find_exe(name: str):
               Path(os.environ.get("LOCALAPPDATA", home)) / "Programs" / name / f"{name}.exe"):
         if c.exists():
             return str(c)
-    return p          # a .cmd shim, if that is all there is: run through node, see cli_argv
+    shim = p or next((str(c) for c in (Path(os.environ.get("APPDATA", home)) / "npm" / f"{name}.cmd",)
+                      if c.exists()), None)
+    if not shim:
+        return None
+    for native in Path(shim).parent.glob(f"node_modules/@*/{name}/node_modules/@*/*/vendor/*/bin/{name}.exe"):
+        return str(native)
+    return shim
 
 
 def node_script(shim: str):
@@ -234,9 +246,9 @@ def run_cli(argv, stdin_text, env, timeout, cancel, cwd):
     return p.returncode, res.get("out") or "", res.get("err") or ""
 
 
-def cli_argv(spec: dict, sysfile: Path):
+def cli_argv(spec: dict, sysfile: Path, workdir: Path):
     """The command line per CLI. Each one: no tools, no project context, no session files,
-    JSON out; the prompt arrives on stdin."""
+    JSON out; the system prompt travels as a file, the dictation arrives on stdin."""
     exe = find_exe(spec["exe"])
     if not exe:
         raise PromptifyError(f"{spec['label']} CLI not found - install it, or pick another engine in Settings.")
@@ -252,18 +264,37 @@ def cli_argv(spec: dict, sysfile: Path):
                        "--output-format", "json", "--model", model or "sonnet",
                        "--system-prompt-file", str(sysfile), "--json-schema", SCHEMA_JSON]
     if k == "codex":
-        return head + ["exec", "--skip-git-repo-check", "--sandbox", "read-only", "--json"] + \
-            (["-m", model] if model else []) + ["-"]
+        # "-" = the prompt from stdin; --json = one event per line; --ephemeral = no session
+        # files; --ignore-user-config = none of the user's MCP servers; the instructions file
+        # replaces Codex's own system prompt; -o keeps the final message where the JSONL cannot
+        # be trusted. TOML values on -c: strings quoted, the path with forward slashes.
+        schema, last = workdir / "schema.json", workdir / "last.txt"
+        if not schema.exists() or schema.read_text(encoding="utf-8") != SCHEMA_JSON:
+            schema.write_text(SCHEMA_JSON, encoding="utf-8")
+        return head + ["exec", "-", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check",
+                       "-s", "read-only", "-C", str(workdir / "empty"), "--color", "never"] + \
+            (["-m", model] if model else []) + \
+            ["-c", 'model_reasoning_effort="low"', "-c", f"model_instructions_file='{sysfile.as_posix()}'",
+             "-c", "hide_agent_reasoning=true", "-c", 'history.persistence="none"',
+             "--output-schema", str(schema), "-o", str(last)]
     if k == "gemini":
-        return head + ["-p", "", "--output-format", "json"] + (["-m", model] if model else [])
+        # headless whenever stdin is not a TTY: the message goes in there; the system prompt via
+        # GEMINI_SYSTEM_MD (see cli_env); -e none = no extensions
+        return head + ["--output-format", "json", "-e", "none"] + (["-m", model] if model else [])
     raise PromptifyError(f"Unknown engine {k!r}.")
 
 
-def cli_env(spec: dict) -> dict:
-    env = {k: v for k, v in os.environ.items()
-           if not (spec["key"] == "claude" and k.startswith("CLAUDE"))}   # a nested-session marker
-    if spec["key"] == "claude":
+def cli_env(spec: dict, sysfile: Path) -> dict:
+    k = spec["key"]
+    drop = {"claude": lambda n: n.startswith("CLAUDE"),          # a nested-session marker
+            "codex": lambda n: n in ("OPENAI_API_KEY", "CODEX_API_KEY"),   # would override the login
+            "gemini": lambda n: False}[k]
+    env = {n: v for n, v in os.environ.items() if not drop(n)}
+    if k == "claude":
         env["MAX_THINKING_TOKENS"] = "0"      # thinking on turns a 10 s call into 75 s
+    if k == "gemini":
+        env.update({"GEMINI_SYSTEM_MD": str(sysfile), "NO_BROWSER": "true", "NO_COLOR": "1",
+                    "GEMINI_CLI_NO_RELAUNCH": "1", "GEMINI_CLI_TRUST_WORKSPACE": "true"})
     env["PYTHONIOENCODING"] = "utf-8"
     return env
 
@@ -286,11 +317,10 @@ def run_cli_engine(spec: dict, msg: str, cancel, workdir: Path) -> tuple:
         sysfile.write_text(text, encoding="utf-8")
     empty = workdir / "empty"                 # the child's cwd: nothing to read, nowhere to write
     empty.mkdir(parents=True, exist_ok=True)
-    argv = cli_argv(spec, sysfile)
+    argv = cli_argv(spec, sysfile, workdir)
     k = spec["key"]
-    stdin = msg if k == "claude" else text + "\n\n" + msg     # only claude takes a system prompt file
     t0 = time.monotonic()
-    rc, out, err = run_cli(argv, stdin, cli_env(spec), TIMEOUT, cancel, str(empty))
+    rc, out, err = run_cli(argv, msg, cli_env(spec, sysfile), TIMEOUT, cancel, str(empty))
     wall = time.monotonic() - t0
     tail = (err.strip().splitlines() or [""])[-1][:160]
     log(f"  promptify {k}: rc {rc}, {wall:.1f}s{(', stderr: ' + tail) if tail else ''}")
@@ -307,7 +337,8 @@ def run_cli_engine(spec: dict, msg: str, cancel, workdir: Path) -> tuple:
         so = j.get("structured_output")
         return (so if isinstance(so, dict) else parse_result(str(j.get("result") or ""))), meta
     if k == "codex":
-        # --json is a JSONL event stream; the last agent message carries the reply
+        # --json is a JSONL event stream; the last agent message carries the reply, and -o wrote
+        # the same text to last.txt
         reply, last = "", ""
         for line in out.splitlines():
             try:
@@ -317,11 +348,20 @@ def run_cli_engine(spec: dict, msg: str, cancel, workdir: Path) -> tuple:
             item = ev.get("item") or {}
             if ev.get("type") == "item.completed" and item.get("type") == "agent_message":
                 reply = item.get("text") or reply
-            if ev.get("type") == "error":
+            elif ev.get("type") == "error":
                 last = str(ev.get("message") or "")
-        if rc != 0 and not reply:
+            elif ev.get("type") == "turn.failed":
+                last = str((ev.get("error") or {}).get("message") or last)
+            elif ev.get("type") == "item.completed" and item.get("type") == "error":
+                last = str(item.get("message") or last)
+        if not reply:
+            try:
+                reply = (workdir / "last.txt").read_text(encoding="utf-8")
+            except OSError:
+                pass
+        if not reply.strip() or (rc != 0 and last):
             raise PromptifyError(_friendly(spec, last or err or out))
-        return parse_result(reply or out), meta
+        return parse_result(reply), meta
     if k == "gemini":
         try:
             j = json.loads(out)
