@@ -28,9 +28,16 @@ for acc in ("#00ff00", "#e63c3c", "#ffffff", "#000000", "#3c8cff"):
         assert span(p["muted"]) <= 0.30 * span(p["primary"]), (acc, dark, "muted", p["muted"])
         assert span(p["ring"]) >= 0.60 * span(p["primary"]), (acc, dark, "ring", p["ring"])
         assert p["bg"] != p["surface"] != p["hover"]           # the surface ladder is visible
-        assert W.rgb(p["surface"]) != (W.rgb(p["surface"])[0],) * 3   # neutrals carry the hue
+        # neutrals are achromatic since 2026-08-28 (a tinted ramp read as pink under a red accent);
+        # the light ground is pure white by the user's word
+        for n in ("bg", "surface", "hover", "active", "selected", "border", "border_strong", "muted", "ink"):
+            assert len(set(W.rgb(p[n]))) == 1, (acc, dark, n, p[n])
+        assert dark or p["bg"] == "#ffffff", (acc, p["bg"])
 assert W.hex_hue("#808080") == 250.0 and W.hex_hue("#000000") == 250.0   # achromatic -> fallback
 assert abs(W.hex_hue("#00ff00") - 142.5) < 1.0
+# the window's accent is the brand green whatever the bar colour says (a red bar made it pink)
+import brand
+assert abs(W.hex_hue(W.palette(brand.GREEN, False)["primary"]) - W.hex_hue(brand.GREEN)) < 1.0
 assert W.norm_hex("ABC") == "#aabbcc" and W.norm_hex("#E63C3C") == "#e63c3c"
 assert W.norm_hex("nope") is None and W.norm_hex(None, "#123456") == "#123456"
 assert W.mix("#000000", "#ffffff", 0.5) == "#808080"

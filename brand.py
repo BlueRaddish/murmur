@@ -1,8 +1,10 @@
 """murmur's mark, drawn from geometry - the app ships no image assets.
 
-The mark is the "Ripple m": two half-annuli standing on one baseline, tops level, the right leg
-of the small arch sitting exactly on the left leg of the big one. The union reads as an m and as
-two ripples going out - a quiet sound made visible, which is the whole product.
+The mark is the "Ripple m", rising build: two half-annuli springing from one line and standing on
+one baseline, the small arch's top four units below the big one's, its right leg sitting exactly
+on the big arch's left leg. The union reads as an m and as two ripples going out - a quiet sound
+made visible, which is the whole product. (The level build, both tops at y=12, shipped for a day
+on 2026-08-27 by my misreading; the rising one is what the user picked from the brief.)
 
 Everything visual comes out of the four numbers in _G64/_G16, so the tray icon, the app icon, the
 window lockup and the README all draw the same shape and there is nothing on disk to keep in sync.
@@ -18,15 +20,15 @@ from PIL import Image, ImageDraw
 
 GREEN = "#1f9a3a"          # brand green: the icon tile's ground, the lockup's mark
 
-MARK_64 = ("M8 52 L8 24 A12 12 0 0 1 32 24 L32 52 L24 52 L24 24 A4 4 0 0 0 16 24 L16 52 Z "
+MARK_64 = ("M8 52 L8 28 A12 12 0 0 1 32 28 L32 52 L24 52 L24 28 A4 4 0 0 0 16 28 L16 52 Z "
            "M24 52 L24 28 A16 16 0 0 1 56 28 L56 52 L48 52 L48 28 A8 8 0 0 0 32 28 L32 52 Z")
-MARK_16 = ("M2 13 L2 6 A3 3 0 0 1 8 6 L8 13 L6 13 L6 6 A1 1 0 0 0 4 6 L4 13 Z "
+MARK_16 = ("M2 13 L2 7 A3 3 0 0 1 8 7 L8 13 L6 13 L6 7 A1 1 0 0 0 4 7 L4 13 Z "
            "M6 13 L6 7 A4 4 0 0 1 14 7 L14 13 L12 13 L12 7 A2 2 0 0 0 8 7 L8 13 Z")
 
 # (centre x, spring-line y, inner radius, outer radius) per arch, plus the shared baseline.
 # The paths above are these numbers written out; keep the two in step.
-_G64 = ((20, 24, 4, 12), (40, 28, 8, 16))
-_G16 = ((5, 6, 1, 3), (10, 7, 2, 4))
+_G64 = ((20, 28, 4, 12), (40, 28, 8, 16))
+_G16 = ((5, 7, 1, 3), (10, 7, 2, 4))
 _BASE64, _BASE16 = 52, 13
 
 

@@ -119,7 +119,7 @@ print("tray_color ok for", ", ".join(murmur.LABELS))
 # --- 4. the SVGs are real SVGs ---------------------------------------------------------------
 for name, text in (("mark", brand.svg_mark()), ("icon", brand.svg_icon()), ("lockup", brand.svg_lockup())):
     ET.fromstring(text)                       # raises on malformed XML
-    assert brand.MARK_64 in text, f"{name} does not carry the level path"
+    assert brand.MARK_64 in text, f"{name} does not carry the rising path"
 assert ">murmur<" in brand.svg_lockup(), "lockup lost its wordmark"
 assert brand.GREEN in brand.svg_lockup() and brand.GREEN in brand.svg_icon()
 # what --assets writes: an <img> cannot inherit a colour or see GitHub's theme toggle, so the

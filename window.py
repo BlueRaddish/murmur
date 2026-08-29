@@ -1,8 +1,10 @@
 """The app window: transcript history plus settings. Hidden until opened from the tray.
 
-One Toplevel, a sidebar and two views. The look is built from ONE hue - the user's accent
-colour - run through an OKLCH 12-step ramp (Radix semantics): neutrals are that same hue at
-2-6 % chroma, so nothing here is a flat grey. Depth language is a surface ladder + hairlines
+One Toplevel, a sidebar and two views. The look is the brand green run through an OKLCH 12-step
+ramp (Radix semantics) for the accent steps - solid fills and the focus ring - over achromatic
+neutrals: a white ground in light, neutral near-black in dark. (Until 2026-08-28 the neutrals
+carried the bar's accent hue at 1-2 % chroma; with a red bar colour the whole window read as
+pink, and the user wants the window white and the brand green.) Depth is a surface ladder + hairlines
 on ROUNDED surfaces: Tk cannot round a widget corner, so every corner in here is PIL-rendered
 and handed to Tk as a PhotoImage - controls carry their shape as their own image (`rr_png`),
 and surfaces that must stretch wear four corner masks (`corner_pngs`) pinned at their corners.
@@ -18,6 +20,8 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import ttk
+
+import brand
 
 # --- tokens ---------------------------------------------------------------------------------
 
@@ -60,14 +64,15 @@ def hex_hue(hx, fallback=250.0) -> float:
     return math.degrees(math.atan2(b2, a)) % 360
 
 
-# L, C per step. Light descends; dark is not a mirror - steps 1-2 are tinted near-black.
-# Chroma budget: 9/10 (the solid accent fills) and 8 (the focus ring, which has to be seen as
-# the accent) carry real chroma; everything else - step 11 included, because it is secondary
-# TEXT here - stays a tinted neutral at 1-5 %, or the whole app reads as one loud green.
-LIGHT = [(0.99, .012), (0.98, .012), (0.955, .012), (0.93, .014), (0.90, .016), (0.85, .018),
-         (0.78, .02), (0.60, .13), (0.55, .17), (0.50, .17), (0.48, .035), (0.25, .05)]
-DARK = [(0.14, .008), (0.17, .008), (0.21, .01), (0.24, .012), (0.27, .014), (0.31, .016),
-        (0.36, .02), (0.55, .13), (0.60, .14), (0.65, .14), (0.70, .03), (0.92, .01)]
+# L, C per step. Light descends from a pure white ground; dark is not a mirror - steps 1-2 are
+# near-black. Chroma budget: 9/10 (the solid accent fills) and 8 (the focus ring, which has to be
+# seen as the accent) carry real chroma; every other step - surfaces, borders, muted and ink text -
+# is achromatic. Tinting them from the hue was the method's rule and the user's "pinkish" verdict
+# overruled it: at 1-2 % chroma a red hue is a visible blush across every surface.
+LIGHT = [(1.0, 0), (0.98, 0), (0.955, 0), (0.93, 0), (0.90, 0), (0.85, 0),
+         (0.78, 0), (0.60, .13), (0.55, .17), (0.50, .17), (0.48, 0), (0.25, 0)]
+DARK = [(0.14, 0), (0.17, 0), (0.21, 0), (0.24, 0), (0.27, 0), (0.31, 0),
+        (0.36, 0), (0.55, .13), (0.60, .14), (0.65, .14), (0.70, 0), (0.92, 0)]
 STEPS = ("bg", "surface", "hover", "active", "selected", "border", "border_strong", "ring",
          "primary", "primary_hover", "muted", "ink")
 DANGER_HUE = 25.0
@@ -524,7 +529,9 @@ class AppWindow:
 
     def _build(self) -> None:
         self.dark = (self.theme == "dark") if self.theme else system_dark()
-        p = self.pal = palette(self.cfg.get("color"), self.dark)
+        # the brand green, not the bar's colour: the bar colour is the user's per-take signal and
+        # can be anything (their red made the whole window pink); the window is the product's
+        p = self.pal = palette(brand.GREEN, self.dark)
         self.F = {"title": ("Segoe UI Semibold", 12),
                   "body6": ("Segoe UI Semibold", 10), "body": ("Segoe UI", 10),
                   "meta": ("Segoe UI", 9), "mono": ("Cascadia Mono", 10),

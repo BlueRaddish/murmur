@@ -156,6 +156,21 @@ Decisions
   SVG path (IoU 0.9987), the 16 px pixel grid, the seven ico frames
   (whole-pixel legs in the 16 and 32 px ones included), every tray tint, and the rule that idle,
   mic-open and transcribing are three different icons at the shipped defaults.
+- Rising, not level (2026-08-28). The user saw the shipped mark and said it was not the one they
+  picked: "the murmur with the left peak lower". The brief had two Ripple m builds and I shipped
+  the level one on my own reading of "the ripple m". Now the rising build: both arches spring
+  from y=28 (arch 1 centre (20,28) r 4/12, arch 2 centre (40,28) r 8/16), so the small arch's top
+  sits at y=16 and the big one's at y=12 - a ripple growing, which is the better story anyway.
+  The 16 px grid follows (arch 1 centre (5,7) r 1/3). Bbox, margins, lockup layout and every
+  ICO frame are unchanged in size; only the geometry constants in brand.py and the two path
+  strings moved, and tests/test_brand.py still pins the PIL render to Chrome's raster of the SVG.
+- White window (2026-08-28). "It has a pinkish hue... I think our main colour is green, which
+  contradicts... just white for the background." The window's neutral ramp was tinted from the
+  bar's accent hue - the method's rule - and their bar colour is red, so every surface carried a
+  1-2 % red blush. Now the neutrals are achromatic (light ground #ffffff, dark near-black) and the
+  accent steps (fills, focus ring) come from the brand green, not the bar colour: the bar colour
+  is the user's per-take signal and can be anything; the window is the product. Lesson for the
+  method: a tinted-neutral ramp is only safe when the tint hue is the brand's, never a user-set one.
 - Mic by name (2026-08-27). The user's first take on 0.7.0 "went green then back to transparent,
   nothing in history": the log showed 6 s takes at a constant rms 0.23 coming back empty in 0.0 s
   (Whisper's VAD dropped everything before the encoder ran). Config said `"mic": 2`, chosen on
