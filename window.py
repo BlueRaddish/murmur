@@ -1089,7 +1089,8 @@ class AppWindow:
         a title Label sits in its 32 px row (line box centred), so the two share a baseline
         across the hairline; `rise` is how far a tall mark pokes above that row."""
         p, f = self.pal, self.mf["title"]
-        m = self.mark(self.px(H_MARK), p["muted"])
+        m = self.mark(self.px(H_MARK), brand.GREEN)      # the mark in the brand green (user's ask
+        # 2026-08-29: "the logo should be green, not just gray"); the word stays muted chrome
         lh, desc, row = f.metrics("linespace"), f.metrics("descent"), self.px(H_CTL)
         base = (row - lh) // 2 + lh - desc                # the baseline's y inside the row
         rise = max(0, m.height() - base)
@@ -1190,6 +1191,9 @@ class AppWindow:
         act.pack(fill="x", padx=self.cpad, pady=(self.px(SP[2]), self.cpad))
         self.b_copy = _Btn(self, act, "Copy", self.copy_selected, kind="primary")
         self.b_copy.f.pack(side="left")
+        # the way into the Promptify view from here: the same row, drafting at once (Ctrl+D)
+        self.b_prompt = _Btn(self, act, "Promptify", self._to_promptify)
+        self.b_prompt.f.pack(side="left", padx=(self.px(SP[1]), 0))
         self.b_del = _Btn(self, act, "Delete", self.delete_selected)
         self.b_del.f.pack(side="left", padx=(self.px(SP[1]), 0))
         # the status ("Copied", "Deleted · Undo") is meta on the SAME row, after the buttons -

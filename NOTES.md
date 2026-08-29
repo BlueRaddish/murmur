@@ -253,6 +253,11 @@ Decisions
   that passed with two cosmetic residuals (the 600-wide empty pane's key line overruns the
   right padding by 5 px; a stale probe). `tests/test_ui_rules.py` now asserts the contrasts,
   the spacing scale, one primary per state, the measure and the focus colours.
+- Two of the user's asks after trying 0.9 (2026-08-29): a Promptify button back in History
+  (it goes to the Promptify section with the same row, drafting at once when there is no
+  draft - the Ctrl+D path), and the sidebar mark in the brand green instead of muted ("the
+  logo should be green, not just gray"); the wordmark stays muted. Pushed and released as
+  0.9.0 on their word - the first publication since 0.2.0.
 - Rising, not level (2026-08-28). The user saw the shipped mark and said it was not the one they
   picked: "the murmur with the left peak lower". The brief had two Ripple m builds and I shipped
   the level one on my own reading of "the ripple m". Now the rising build: both arches spring

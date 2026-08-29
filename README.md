@@ -85,7 +85,7 @@ clipboard, delete one (undo offered) or clear all. The retention window is adjus
 Settings (0 keeps nothing). Stored in
 `%APPDATA%\murmur\history.jsonl`, local only.
 
-**Promptify.** Select a dictation in History and press Promptify (or Ctrl+D) to turn a rambling
+**Promptify.** Open the Promptify section (or press Promptify / Ctrl+D on a History entry) to turn a rambling
 take into a prompt for Claude: the goal first, in your words, your terms and decisions kept
 verbatim, musings kept as open points, and at most three questions about the things only you
 can answer (scope, which repo, how many, what "done" looks like). Answer by clicking a chip,
