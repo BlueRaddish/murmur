@@ -46,21 +46,21 @@ TIMEOUT = 150            # s; the slowest measured pass was 17 s on this laptop'
 # key -> how the engine is reached. `model` is the default when Settings leaves the model blank.
 ENGINES = {
     "claude": {"label": "Claude Code", "kind": "cli", "exe": "claude", "model": "sonnet",
-               "models": "sonnet · opus · haiku · a full model id"},
+               "models": "sonnet · opus · haiku · fable · or a full id such as claude-sonnet-5"},
     "codex": {"label": "Codex", "kind": "cli", "exe": "codex", "model": "",
-              "models": "blank = your Codex default · or any model id `codex` accepts"},
+              "models": "blank = Codex's own default · gpt-5.6-luna (lighter) · gpt-5.5"},
     "gemini": {"label": "Gemini CLI", "kind": "cli", "exe": "gemini", "model": "",
-               "models": "blank = the CLI's default · gemini-2.5-pro · gemini-2.5-flash"},
+               "models": "blank = the CLI's default · gemini-2.5-flash · gemini-2.5-pro"},
     "gemini_api": {"label": "Gemini API", "kind": "openai",
                    "url": "https://generativelanguage.googleapis.com/v1beta/openai",
-                   "model": "gemini-2.5-flash", "models": "gemini-2.5-flash · gemini-2.5-pro"},
+                   "model": "gemini-2.5-flash", "models": "gemini-2.5-flash · gemini-2.5-flash-lite · gemini-2.5-pro"},
     "openai": {"label": "OpenAI", "kind": "openai", "url": "https://api.openai.com/v1",
-               "model": "gpt-5-mini", "models": "gpt-5-mini · gpt-5 · gpt-4.1"},
+               "model": "gpt-5-mini", "models": "gpt-5-mini · gpt-4.1-mini · gpt-5-nano"},
     "openrouter": {"label": "OpenRouter", "kind": "openai", "url": "https://openrouter.ai/api/v1",
-                   "model": "anthropic/claude-sonnet-4.5",
-                   "models": "anthropic/claude-sonnet-4.5 · openai/gpt-5-mini · google/gemini-2.5-flash"},
+                   "model": "anthropic/claude-sonnet-5",
+                   "models": "anthropic/claude-sonnet-5 · openai/gpt-5-mini · google/gemini-2.5-flash · openrouter/free"},
     "anthropic": {"label": "Anthropic API", "kind": "anthropic", "url": "https://api.anthropic.com",
-                  "model": "claude-sonnet-4-5", "models": "claude-sonnet-4-5 · claude-haiku-4-5"},
+                  "model": "claude-sonnet-5", "models": "claude-sonnet-5 · claude-haiku-4-5 · claude-opus-5"},
     "custom": {"label": "Custom (OpenAI-compatible)", "kind": "openai", "url": "", "model": "",
                "models": "whatever the endpoint serves - Ollama, LM Studio, Groq..."},
 }
@@ -276,12 +276,37 @@ def cli_argv(spec: dict, sysfile: Path, workdir: Path):
             (["-m", model] if model else []) + \
             ["-c", 'model_reasoning_effort="low"', "-c", f"model_instructions_file='{sysfile.as_posix()}'",
              "-c", "hide_agent_reasoning=true", "-c", 'history.persistence="none"',
+             "-c", 'approval_policy="never"', "-c", 'web_search="disabled"',
              "--output-schema", str(schema), "-o", str(last)]
     if k == "gemini":
         # headless whenever stdin is not a TTY: the message goes in there; the system prompt via
-        # GEMINI_SYSTEM_MD (see cli_env); -e none = no extensions
+        # GEMINI_SYSTEM_MD (see cli_env); -e none = no extensions; the cwd's own settings file
+        # turns the tools and the context files off (docs-only: the CLI is not installed here)
+        gs = workdir / "empty" / ".gemini"
+        gs.mkdir(parents=True, exist_ok=True)
+        (gs / "settings.json").write_text(json.dumps(
+            {"tools": {"core": []}, "context": {"fileName": "NONE.md", "includeDirectoryTree": False},
+             "privacy": {"usageStatisticsEnabled": False},
+             "general": {"enableAutoUpdate": False, "enableAutoUpdateNotification": False}}), encoding="utf-8")
         return head + ["--output-format", "json", "-e", "none"] + (["-m", model] if model else [])
     raise PromptifyError(f"Unknown engine {k!r}.")
+
+
+def login_check(spec: dict, argv: list) -> None:
+    """Codex's auth failure is a slow chain of retries ('Reconnecting... k/5'); `login status`
+    answers in 50 ms with its exit code (the text goes to stderr), so ask first."""
+    if spec["key"] != "codex":
+        return
+    head = argv[:argv.index("exec")]
+    kw = dict(capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
+    if os.name == "nt":
+        kw["creationflags"] = subprocess.CREATE_NO_WINDOW
+    try:
+        rc = subprocess.run(head + ["login", "status"], **kw).returncode
+    except (OSError, subprocess.TimeoutExpired):
+        return                                    # let exec itself report whatever is wrong
+    if rc != 0:
+        raise PromptifyError("Codex is not logged in: open a terminal, run `codex login`, and try again.")
 
 
 def cli_env(spec: dict, sysfile: Path) -> dict:
@@ -319,6 +344,7 @@ def run_cli_engine(spec: dict, msg: str, cancel, workdir: Path) -> tuple:
     empty.mkdir(parents=True, exist_ok=True)
     argv = cli_argv(spec, sysfile, workdir)
     k = spec["key"]
+    login_check(spec, argv)
     t0 = time.monotonic()
     rc, out, err = run_cli(argv, msg, cli_env(spec, sysfile), TIMEOUT, cancel, str(empty))
     wall = time.monotonic() - t0
@@ -400,34 +426,63 @@ def http_json(url: str, body: dict, headers: dict, timeout=120) -> dict:
         raise PromptifyError(f"Timed out after {timeout} s.")
 
 
+OPTIONAL = ("response_format", "provider", "thinking", "reasoning_effort", "max_completion_tokens", "max_tokens")
+
+
+def post_degrading(url: str, body: dict, headers: dict) -> dict:
+    """POST; when a 400 names one of the optional keys we sent, drop that key and try again
+    (an endpoint without JSON mode, a model that rejects `thinking`, a server that wants
+    max_tokens instead of max_completion_tokens...). The system prompt already asks for bare
+    JSON and the parser forgives fences, so every rung still works."""
+    for _ in range(len(OPTIONAL) + 1):
+        try:
+            j = http_json(url, body, headers)
+        except PromptifyError as e:
+            bad = next((k for k in OPTIONAL if k in body and k in str(e)), None)
+            if bad is None:
+                raise
+            body.pop(bad)
+            if bad == "max_completion_tokens":
+                body["max_tokens"] = 4096
+            continue
+        if isinstance(j, dict) and j.get("error"):      # OpenRouter answers 200 with a route error
+            err = j["error"]
+            raise PromptifyError(str(err.get("message") if isinstance(err, dict) else err)[:200])
+        return j
+    raise PromptifyError("The endpoint rejected every request shape.")
+
+
 def run_api_engine(spec: dict, cfg: dict, msg: str) -> tuple:
     key, model, sysp = (cfg.get("prompt_key") or "").strip(), spec["model"], system_prompt()
     if not model:
         raise PromptifyError(f"{spec['label']}: set a model in Settings.")
     t0 = time.monotonic()
     if spec["kind"] == "anthropic":
-        j = http_json(spec["url"].rstrip("/") + "/v1/messages",
-                      {"model": model, "max_tokens": 4096, "system": sysp,
-                       "messages": [{"role": "user", "content": msg}]},
-                      {"x-api-key": key, "anthropic-version": "2023-06-01"})
+        # no sampling params (a 400 on the current models); thinking off as in the CLI engine,
+        # except for Fable, which refuses an explicit "disabled"
+        body = {"model": model, "max_tokens": 4096, "system": sysp,
+                "messages": [{"role": "user", "content": msg}]}
+        if "fable" not in model:
+            body["thinking"] = {"type": "disabled"}
+        j = post_degrading(spec["url"].rstrip("/") + "/v1/messages", body,
+                           {"x-api-key": key, "anthropic-version": "2023-06-01"})
         text = "".join(b.get("text", "") for b in j.get("content", []) if b.get("type") == "text")
     else:
         url = spec["url"].rstrip("/")
         if not url:
             raise PromptifyError("Custom engine: set the base URL in Settings.")
-        headers = {"Authorization": f"Bearer {key}"} if key else {}
+        # a local server (Ollama) wants some bearer token and ignores its value
+        headers = {"Authorization": f"Bearer {key or 'local'}"}
         if spec["key"] == "openrouter":
             headers.update({"HTTP-Referer": "https://github.com/BlueRaddish/murmur", "X-Title": "murmur"})
-        body = {"model": model, "temperature": 0.2,
+        body = {"model": model, "stream": False,
                 "messages": [{"role": "system", "content": sysp}, {"role": "user", "content": msg}],
                 "response_format": {"type": "json_object"}}
-        try:
-            j = http_json(url + "/chat/completions", body, headers)
-        except PromptifyError as e:
-            if "response_format" not in str(e):
-                raise
-            body.pop("response_format")        # an endpoint without JSON mode: ask, and parse leniently
-            j = http_json(url + "/chat/completions", body, headers)
+        # api.openai.com deprecated max_tokens and its reasoning models reject temperature
+        body["max_completion_tokens" if spec["key"] == "openai" else "max_tokens"] = 4096
+        if spec["key"] == "openrouter":
+            body["provider"] = {"require_parameters": True}   # only routes that honour response_format
+        j = post_degrading(url + "/chat/completions", body, headers)
         try:
             text = j["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError):

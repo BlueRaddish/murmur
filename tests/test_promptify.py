@@ -72,11 +72,13 @@ assert a[a.index("--model") + 1] == "opus"
 a = P.cli_argv(P.engine_spec({"prompt_engine": "codex"}), sysfile, wd)
 assert a[1:4] == ["exec", "-", "--json"] and "--ephemeral" in a and "-m" not in a
 assert a[a.index("-C") + 1] == str(wd / "empty") and a[a.index("--output-schema") + 1] == str(wd / "schema.json")
+assert 'approval_policy="never"' in a and 'web_search="disabled"' in a
 assert f"model_instructions_file='{sysfile.as_posix()}'" in a and json.loads((wd / "schema.json").read_text()) == P.SCHEMA
 a = P.cli_argv(P.engine_spec({"prompt_engine": "codex", "prompt_model": "gpt-5-codex"}), sysfile, wd)
 assert a[a.index("-m") + 1] == "gpt-5-codex"
 a = P.cli_argv(P.engine_spec({"prompt_engine": "gemini", "prompt_model": "gemini-2.5-flash"}), sysfile, wd)
 assert a[1:] == ["--output-format", "json", "-e", "none", "-m", "gemini-2.5-flash"]
+assert json.loads((wd / "empty" / ".gemini" / "settings.json").read_text())["tools"] == {"core": []}
 env = P.cli_env(P.engine_spec({"prompt_engine": "claude"}), sysfile)
 assert env["MAX_THINKING_TOKENS"] == "0" and not any(k.startswith("CLAUDE") for k in env)
 os.environ["CODEX_API_KEY"] = "x"
@@ -131,6 +133,8 @@ def fake_argv(spec, sysfile, workdir):
 
 
 P.cli_argv = fake_argv
+_login = P.login_check
+P.login_check = lambda spec, argv: None
 res = P.draft({"prompt_engine": "claude"}, "make it faster, right", "code", workdir=work)
 assert res["prompts"] == ["Do X"] and res["questions"] == good["questions"] and res["notes"] == "n"
 assert res["engine"] == "claude" and res["model"] == "claude-sonnet-5" and res["target"] == "code" and res["wall"] >= 0
@@ -203,18 +207,38 @@ try:
 except P.Cancelled:
     assert time.monotonic() - t0 < 8, time.monotonic() - t0
 P.cli_argv = real_argv
-print("runner ok: envelopes, JSONL, auth, crash, timeout, cancel")
+# codex: the login check runs `<exe> login status` and keys on the exit code only
+status_ok = tmp / "status_ok.py"
+status_ok.write_text("import sys; sys.stderr.write('Logged in using ChatGPT'); sys.exit(0)")
+status_no = tmp / "status_no.py"
+status_no.write_text("import sys; sys.stderr.write('Not logged in'); sys.exit(1)")
+P.login_check = _login
+_login(P.engine_spec({"prompt_engine": "codex"}), [py, str(status_ok), "exec", "-"])
+try:
+    _login(P.engine_spec({"prompt_engine": "codex"}), [py, str(status_no), "exec", "-"])
+    raise AssertionError("login failure not raised")
+except P.PromptifyError as e:
+    assert "codex login" in str(e), e
+_login(P.engine_spec({"prompt_engine": "claude"}), ["irrelevant"])     # only codex is checked
+P.login_check = lambda spec, argv: None
+print("runner ok: envelopes, JSONL, auth, crash, timeout, cancel, login check")
 
 # --- API engines: request shape and error mapping, against a fake http_json ------------------
 calls = []
 
 
 def fake_http(url, body, headers, timeout=120):
-    calls.append((url, body, headers))
+    calls.append((url, dict(body), headers))
     if "anthropic" in url:
+        if "thinking" in body and body["model"] == "old-model":
+            raise P.PromptifyError("HTTP 400: thinking: Extra inputs are not permitted")
         return {"content": [{"type": "text", "text": json.dumps(good)}]}
     if body.get("model") == "bad":
         raise P.PromptifyError("unknown model or URL: bad")
+    if body.get("model") == "picky" and "response_format" in body:
+        raise P.PromptifyError("HTTP 400: response_format is not supported by this model")
+    if body.get("model") == "routed":
+        return {"error": {"code": 502, "message": "Provider returned error"}}
     return {"choices": [{"message": {"content": json.dumps(good)}}]}
 
 
@@ -222,20 +246,39 @@ P.http_json = fake_http
 res = P.draft({"prompt_engine": "openrouter", "prompt_key": "k"}, "d", "code", workdir=work)
 url, body, headers = calls[-1]
 assert url == "https://openrouter.ai/api/v1/chat/completions" and headers["Authorization"] == "Bearer k"
-assert headers["X-Title"] == "murmur" and body["model"] == "anthropic/claude-sonnet-4.5"
+assert headers["X-Title"] == "murmur" and body["model"] == "anthropic/claude-sonnet-5"
 assert body["messages"][0] == {"role": "system", "content": "PROMPTIFY-SYSTEM rules\n"}
 assert body["messages"][1]["role"] == "user" and "<dictation>" in body["messages"][1]["content"]
 assert body["response_format"] == {"type": "json_object"} and res["prompts"] == ["Do X"]
-res = P.draft({"prompt_engine": "anthropic", "prompt_key": "k", "prompt_model": "claude-sonnet-4-5"}, "d", workdir=work)
+assert "temperature" not in body and body["max_tokens"] == 4096 and body["provider"] == {"require_parameters": True}
+res = P.draft({"prompt_engine": "openai", "prompt_key": "k"}, "d", workdir=work)
+url, body, headers = calls[-1]
+assert body["model"] == "gpt-5-mini" and body["max_completion_tokens"] == 4096 and "max_tokens" not in body
+res = P.draft({"prompt_engine": "anthropic", "prompt_key": "k"}, "d", workdir=work)
 url, body, headers = calls[-1]
 assert url == "https://api.anthropic.com/v1/messages" and headers["x-api-key"] == "k" and body["system"].startswith("PROMPTIFY")
-assert body["max_tokens"] == 4096 and res["prompts"] == ["Do X"] and res["model"] == "claude-sonnet-4-5"
+assert body["max_tokens"] == 4096 and res["prompts"] == ["Do X"] and res["model"] == "claude-sonnet-5"
+assert body["thinking"] == {"type": "disabled"} and "temperature" not in body
+res = P.draft({"prompt_engine": "anthropic", "prompt_key": "k", "prompt_model": "claude-fable-5"}, "d", workdir=work)
+assert "thinking" not in calls[-1][1]                          # Fable refuses an explicit "disabled"
+# the degrade ladder: a parameter the endpoint names in a 400 is dropped and the call retried
+n_before = len(calls)
+res = P.draft({"prompt_engine": "anthropic", "prompt_key": "k", "prompt_model": "old-model"}, "d", workdir=work)
+assert len(calls) == n_before + 2 and "thinking" in calls[-2][1] and "thinking" not in calls[-1][1] and res["prompts"] == ["Do X"]
+n_before = len(calls)
+res = P.draft({"prompt_engine": "openai", "prompt_key": "k", "prompt_model": "picky"}, "d", workdir=work)
+assert len(calls) == n_before + 2 and "response_format" not in calls[-1][1] and res["prompts"] == ["Do X"]
+try:
+    P.draft({"prompt_engine": "openrouter", "prompt_key": "k", "prompt_model": "routed"}, "d", workdir=work)
+    raise AssertionError
+except P.PromptifyError as e:
+    assert "Provider returned error" in str(e)                # a 200 that carries an error object
 res = P.draft({"prompt_engine": "gemini_api", "prompt_key": "k"}, "d", workdir=work)
 url, body, headers = calls[-1]
 assert url == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions" and body["model"] == "gemini-2.5-flash"
 res = P.draft({"prompt_engine": "custom", "prompt_url": "http://localhost:11434/v1/", "prompt_model": "qwen"}, "d", workdir=work)
 url, body, headers = calls[-1]
-assert url == "http://localhost:11434/v1/chat/completions" and "Authorization" not in headers and body["model"] == "qwen"
+assert url == "http://localhost:11434/v1/chat/completions" and headers["Authorization"] == "Bearer local" and body["model"] == "qwen"
 try:
     P.draft({"prompt_engine": "openai", "prompt_key": "k", "prompt_model": "bad"}, "d", workdir=work)
     raise AssertionError

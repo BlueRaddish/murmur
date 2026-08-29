@@ -182,7 +182,21 @@ Decisions
   runs on the settings model; thinking on turns 10 s into 75-110 s; Haiku dropped one of two
   asks in 3/3 runs, so Sonnet is the default and there is no model picker beyond the text
   field; `Popen.kill()` leaves claude's conhost/cmd children, so cancel is `taskkill /T`;
-  PyInstaller leaks SetDllDirectory into children. Anthropic's support page says `-p` usage
+  PyInstaller leaks SetDllDirectory into children. A second Workflow (4 agents) verified the
+  other engines as far as this machine allows: Codex's native codex.exe sits under the npm
+  shim's node_modules and is called directly (`exec - --json --ephemeral --ignore-user-config
+  -s read-only --output-schema ... -c model_instructions_file=...`); its auth failure is a slow
+  retry chain, so `codex login status` (exit code; the text is on stderr, 50 ms) runs first;
+  the ChatGPT usage window was exhausted, so the only real Codex run ends in a clean "usage
+  limit" error in 2.4 s. Gemini CLI is not installed: its argv, env (GEMINI_SYSTEM_MD,
+  NO_BROWSER, GEMINI_CLI_NO_RELAUNCH) and the cwd settings file that turns tools off are
+  docs-only. APIs (no keys here; shapes from docs + unauthenticated probes): api.openai.com
+  wants max_completion_tokens and no temperature; Anthropic's current id is claude-sonnet-5,
+  sampling params 400 on it, `thinking: disabled` is right except for Fable which refuses it;
+  OpenRouter's id is anthropic/claude-sonnet-5 and it can answer 200 with an error object;
+  Ollama wants any bearer token. Hence `post_degrading`: a 400 that names one of the optional
+  keys we sent drops that key and retries. TLS from the frozen exe uses the Windows store - no
+  certifi. Anthropic's support page says `-p` usage
   draws on the subscription window; `total_cost_usd` is a list estimate ($0.01-0.03), not a
   charge. Window: the panel takes the list's slot (a 20-30 line prompt cannot live under the
   5-line card), transcript collapsed to three lines on top, an editable prompt field that fits
