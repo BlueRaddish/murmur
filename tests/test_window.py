@@ -111,6 +111,17 @@ win = W.AppWindow(root, hist, cfg, saves.append, theme="light",
 win.show()
 root.update()
 
+
+def upd(pred=lambda: True, n=50):
+    """Pump Tk until `pred` holds (a resize lands a few idle passes later)."""
+    for _ in range(n):
+        root.update()
+        if pred():
+            return True
+        time.sleep(0.02)
+    return False
+
+
 assert len(hist.items) == 45 and win.sel is hist.items[-1]        # newest selected by default
 assert "45 dictations" in win.count.cget("text") and "7 days" in win.count.cget("text")
 assert len(win.rows) == 45 and win.rows[0][0] is hist.items[-1]   # newest first
@@ -135,6 +146,13 @@ assert tall.win.grid_slaves(row=0, column=0)[0].pack_slaves()[0].rise > 0   # ..
 assert drop(tall) == drop(win)
 tall.win.destroy()
 W.H_MARK = was
+# the nav starts at 64 (16 + a 32 px lockup row + 16), pills 2 apart; the active pill is `selected`
+px_ = win.px
+assert win.nav["history"][0].winfo_y() == px_(W.PAD_TOP) + px_(W.H_CTL) + px_(16)
+assert win.nav["promptify"][0].winfo_y() == win.nav["history"][0].winfo_y() + px_(W.H_CTL) + px_(2)
+pill = lambda fill: str(win.rr(px_(W.W_SIDE - 2 * W.SP[1]), px_(W.H_CTL), px_(W.R_CTL), fill, win.pal["surface"]))
+assert win.nav["history"][0].cget("image") == pill(win.pal["selected"])
+assert win.nav["settings"][0].cget("image") == pill(win.pal["surface"])
 print("lockup ok")
 
 win.go("settings")
@@ -162,6 +180,34 @@ assert any(t.endswith("…") for t in row_text), "no row was ellipsised"
 win._select(next(it for it in hist.items if len(it["text"]) > 1300))
 assert len(win.detail.get("1.0", "end")) > 1300
 
+# one text edge: the card starts 12 before E and its text lands on E, like the rows
+E = lambda w: w.winfo_rootx() - win.views["history"].winfo_rootx()
+assert E(win.card) == px_(4) and E(win.detail) == px_(16), (E(win.card), E(win.detail))
+# the status is meta, on the actions row right after Delete - never at the far edge
+assert (win.status.winfo_x() == win.b_del.f.winfo_x() + win.b_del.f.winfo_width() + px_(12)
+        and W.tkfont.Font(root, font=win.s_text.cget("font")).actual("size") == 9)
+# the height rule: 45 rows cannot fit, so the card shows at most 6 lines and its own thumb; a
+# one-line dictation gets one line and no thumb; a window under 480 tall allows 3
+root.update()
+assert int(win.detail.cget("height")) == 6 and win.dsb.winfo_ismapped() and win.list.sb.winfo_ismapped()
+assert win.detail.winfo_width() <= win.measure
+win._select(next(it for it in hist.items if it["text"] == SHORT))
+root.update()
+assert int(win.detail.cget("height")) == 1 and not win.dsb.winfo_ismapped()
+win.win.geometry(f"{px_(600)}x{px_(400)}")
+win._select(next(it for it in hist.items if len(it["text"]) > 1300))
+assert upd(lambda: int(win.detail.cget("height")) == 3), win.detail.cget("height")
+win.win.geometry(f"{px_(780)}x{px_(560)}")
+assert upd(lambda: int(win.detail.cget("height")) == 6)
+# ... and when the list fits, the card gets the rest of the pane, past 6 lines
+few = W.AppWindow(root, fake_history(4), fresh_cfg(), lambda c: None, theme="light")
+few.show()
+root.update()
+few._select(next(it for it in few.history.items if len(it["text"]) > 1300))
+root.update()
+assert int(few.detail.cget("height")) > 6 and few.dsb.winfo_ismapped() and not few.list.sb.winfo_ismapped()
+few.win.destroy()
+
 # delete + undo puts it back at its index
 victim = win.rows[2][0]
 idx = hist.items.index(victim)
@@ -186,6 +232,41 @@ print("history view ok")
 win.go("settings")
 root.update()
 assert cfg.get("indicator") is None                      # missing key treated as waveform
+
+# the frame: group labels are meta/muted on E over cards that start 12 before it; the row
+# labels land on E; the thumb is 4 px; the rule under the title shows only while scrolled
+glab = win.cards[0].master.pack_slaves()[0]
+assert glab.cget("text") == "Indicator" and glab.cget("fg") == win.pal["muted"]
+assert W.tkfont.Font(root, font=glab.cget("font")).actual("size") == 9
+Es = lambda w: w.winfo_rootx() - win.views["settings"].winfo_rootx()
+assert Es(glab) == px_(16) and Es(win.cards[0]) == px_(4) and Es(win.r_mic.head) == px_(16)
+# the thumb: 4 px painted (clam's 1 px strips either side are clipped by its column), in the
+# pane's right padding; the cards end where it starts, 4 before the pane's edge, thumb or not
+assert win.ssb.winfo_reqwidth() == px_(4) + 2 and win.ssb.winfo_ismapped()
+Es_r = lambda w: w.winfo_rootx() + w.winfo_width() - win.views["settings"].winfo_rootx()
+assert Es_r(win.cards[0]) == win.views["settings"].winfo_width() - px_(4), Es_r(win.cards[0])
+assert Es_r(win.ssb.master) == win.views["settings"].winfo_width() and win.ssb.master.winfo_width() == px_(4)
+srule = win.views["settings"].grid_slaves(row=1)[0]
+assert srule.cget("bg") == win.pal["bg"]
+win.sc.yview_moveto(1.0)
+root.update()
+assert srule.cget("bg") == win.pal["border"]
+win.sc.yview_moveto(0.0)
+root.update()
+assert srule.cget("bg") == win.pal["bg"]
+# field widths: hex and language 96, days 64, combos 200
+assert win.ctl["color"]["entry"].master.winfo_width() == px_(96) == win.e_lang.master.winfo_width()
+assert win.e_days.master.winfo_width() == px_(64)
+assert win.r_mic.right.winfo_children()[0].winfo_width() == px_(200)
+# the segment: a `hover` track with no hairline, the picked cell `selected`
+seg_img = lambda i: win.ctl["style"][i][0].cget("image")
+i_on = next(i for i, (l, v) in enumerate(win.ctl["style"]) if v == "waves")
+i_off = 1 - i_on
+pix = lambda i, x, y: tuple(int(v) for v in root.tk.splitlist(root.tk.call(seg_img(i), "get", x, y)))
+h_seg = win.px(W.H_CTL)
+assert pix(i_on, win.ctl["style"][i_on][0].winfo_width() // 2, h_seg // 2) == W.rgb(win.pal["selected"])
+assert pix(i_off, win.ctl["style"][i_off][0].winfo_width() // 2, h_seg // 2) == W.rgb(win.pal["hover"])
+assert pix(i_off, win.ctl["style"][i_off][0].winfo_width() // 2, 0) == W.rgb(win.pal["hover"])   # no hairline
 
 # one right edge: every control column, the trigger row's button group and the header agree
 edge = lambda w: w.winfo_rootx() + w.winfo_width()
@@ -244,6 +325,8 @@ assert len(saves) == n                                   # dragging does not wri
 sl.event_generate("<ButtonRelease-1>", x=40, y=16)
 root.update()
 assert len(saves) == n + 1 and 0.2 <= cfg["opacity"] < 0.9
+s_lab = next(w for w in sl.master.winfo_children() if isinstance(w, tk.Label))
+assert s_lab.cget("text") == f"{cfg['opacity'] * 100:.0f} %", s_lab.cget("text")   # a percentage, not 0.85
 
 n = len(saves)
 win.e_days.focus_force()
@@ -269,6 +352,9 @@ win.r_model.restart()
 win._set_model()
 root.update()
 assert cfg["model"] == "base.en" and len(saves) == n + 1 and win.r_model.chip is not None
+# "restart to apply" is plain meta text after the label - no pill, no accent
+assert (win.r_model.chip.cget("text") == "restart to apply" and win.r_model.chip.cget("fg") == win.pal["muted"]
+        and not win.r_model.chip.cget("image") and win.r_model.chip.winfo_ismapped())
 
 win._captured(0xB0)
 assert cfg["trigger_vk"] == 0xB0 and win.l_trig.cget("text") == W.MEDIA_KEYS[0xB0]
@@ -277,17 +363,64 @@ assert cfg["trigger_vk"] is None and not win.b_rm.f.winfo_ismapped()
 if win.mics:   # the microphone is saved by name, never by index
     win.v_mic.set(f"{win.mics[0][0]}: {win.mics[0][1]}"); win._set_mic()
     assert cfg["mic"] == win.mics[0][1] and isinstance(cfg["mic"], str)
-    win.v_mic.set("(system default)"); win._set_mic(); assert cfg["mic"] is None
+    win.v_mic.set(W.MIC_DEFAULT); win._set_mic(); assert cfg["mic"] is None
 
-# --- promptify: a fake engine, the panel over the list, chips, voice, update, copy, persist ----
+# language: "auto" is a placeholder, never the value; a code commits on FocusOut, blank clears
+e = win.e_lang
+assert e.get() == "auto" and e.value() == "" and e.cget("fg") == win.pal["muted"]
+e.focus_force()
+root.update()
+assert e.get() == "" and e.cget("fg") == win.pal["ink"]
+e.insert(0, "de")
+win.e_days.focus_force()
+root.update()
+assert cfg["language"] == "de" and e.get() == "de"
+e.focus_force()
+root.update()
+e.delete(0, "end")
+win.e_days.focus_force()
+root.update()
+assert cfg["language"] is None and e.get() == "auto" and e.value() == ""
+
+# --- promptify: the two-pane view - states, chips, receive(), update, copy, persistence, keys -
+# connect.status / Login / forget_openrouter are faked: the real ones read credential files
+# (fine), open browsers and delete a key file (never here).
 import json as _json
 import time as _time
 import promptify as PF
-calls = []
+import connect as C
+calls, logins = [], []
+STATUS = {"claude": ("connected", "Max")}
+C.status = lambda key, home=None, appdir=None: STATUS.get(key, ("none", "Not connected"))
+C.forget_openrouter = lambda appdir=None: STATUS.pop("openrouter", None)
+
+
+class FakeLogin:
+    """connect.Login's shape, firing its events synchronously: a url on start, done on submit,
+    cancelled on cancel. Never a browser, never a credential file."""
+
+    def __init__(self, key, on_event, **kw):
+        self.key, self.on_event = key, on_event
+        logins.append(self)
+
+    def start(self):
+        self.on_event("url", "https://example.invalid/sign-in")
+        return self
+
+    def cancel(self):
+        self.on_event("cancelled", "")
+
+    def submit(self, code):
+        STATUS[self.key] = ("connected", "Max")
+        self.on_event("done", "Max")
+
+
+C.Login = FakeLogin
 
 
 def fake_draft(cfg_, text, target="code", prompts=None, questions=None, answers=None, cancel=None, workdir=None):
     calls.append(dict(text=text, target=target, prompts=prompts, questions=questions, answers=answers))
+    _time.sleep(0.05)                 # long enough for the ticker to see the worker alive once
     if prompts is None:
         return {"prompts": ["Do the thing.", "Second ask."],
                 "questions": [{"q": "How many?", "why": "count", "options": ["3", "5"]},
@@ -296,6 +429,14 @@ def fake_draft(cfg_, text, target="code", prompts=None, questions=None, answers=
                 "wall": 0.1, "t": 0}
     return {"prompts": [p_ + " (updated)" for p_ in prompts], "questions": [], "notes": "",
             "engine": "claude", "model": "sonnet", "target": target, "wall": 0.1, "t": 0}
+
+
+def slow_draft(cfg_, text, target="code", prompts=None, questions=None, answers=None, cancel=None, workdir=None):
+    for _ in range(50):               # a second, unless cancelled - and it records nothing
+        _time.sleep(0.02)
+        if cancel is not None and cancel.is_set():
+            raise PF.Cancelled()
+    return fake_draft(cfg_, text, target, prompts, questions, answers)
 
 
 def settle(pred, n=100):
@@ -307,79 +448,431 @@ def settle(pred, n=100):
     return False
 
 
+def primaries():
+    return [b for b in win.primaries if b.f.winfo_ismapped()]
+
+
 PF.draft, PF.available = fake_draft, lambda c: (True, "")
-win.go("history")
-assert win.sel is not None and not win.panel_open
-# the first use asks once; "Not now" backs out, "Promptify" remembers and runs
+assert len(W.SAMPLE80) == 80 and win.measure == win.mf["body"].measure(W.SAMPLE80)
+for dark_ in (False, True):          # the chips' tint holds ink text
+    pt = W.palette(brand.GREEN, dark_)
+    assert W.contrast(pt["ink"], pt["tint"]) >= 4.5 and W.contrast(pt["ink"], pt["tint_hover"]) >= 4.5
+
+# the view: the same rows, two lines each, at a clamped share of the width; the detail pane
+win.go("promptify")
+root.update()
+assert win.view == "promptify" and win.views["promptify"].winfo_ismapped() and not win.views["history"].winfo_ismapped()
+assert win.plist.rows and win.plist.rows[0][0] is hist.items[-1] and win.plist.H == win.px(W.H_ROW2)
+assert win.pcount.cget("text") == str(len(hist.items)) and len(hist.items) >= 10   # 3-day retention pruned the 45
+lp = win.views["promptify"].grid_slaves(row=0, column=0)[0]
+assert lp.winfo_width() == max(win.px(176), min(win.px(240), int(0.36 * win.views["promptify"].winfo_width()))), lp.winfo_width()
+# one text edge: no Label in this view carries Tk's default border/padding, so its text sits on
+# E like the rows' and the buttons' glyphs (title on E, count 12 after it; the body lines, the
+# drafting line, the meta row and the sheet's labels below)
+Ep = lambda w, pane: w.winfo_rootx() - pane.winfo_rootx()
+bare = lambda l: int(l.cget("bd")) == 0 and int(l.cget("padx")) == 0 and int(l.cget("pady")) == 0
+title, count = lp.grid_slaves(row=0)[0].pack_slaves()[:2]
+assert Ep(title, lp) == px_(16) and bare(title) and bare(count)
+assert Ep(count, lp) == px_(16) + win.mf["title"].measure("Dictations") + px_(12)
+# the newest dictation has no draft: the empty state - one primary, the engine control, the segment
+win._select(hist.items[-1])
+root.update()
+assert win.sel is hist.items[-1] and win.pstate == "empty"
+assert win.b_main.f.cget("text") == "Promptify" and len(primaries()) == 1
+assert win.b_eng.f.cget("text") == "Claude Code" and win.seg_host.winfo_ismapped() and win.head_rows == 2
+# pick: nothing selected, no primary at all
+win._select(None)
+root.update()
+assert win.pstate == "pick" and primaries() == [] and not win.b_main.f.winfo_ismapped()
+lab = win.p_inner.winfo_children()[0]
+assert lab.cget("text") == "Pick a dictation on the left." and Ep(lab, win.dpane) == px_(16) and bare(lab)
+# no engine: hollow dot, "No engine", the segment gone, Connect an engine
+STATUS.pop("claude")
+win._select(hist.items[-1])
+root.update()
+assert win.pstate == "noengine" and win.b_main.f.cget("text") == "Connect an engine" and len(primaries()) == 1
+assert win.b_eng.f.cget("text") == "No engine" and not win.seg_host.winfo_ismapped()
+STATUS["claude"] = ("connected", "Max")
+# first use asks once; "Not now" backs out, "Promptify" remembers and runs
 cfg["prompt_ack"] = False
+win._select(hist.items[-1])
+root.update()
+assert win.pstate == "empty" and win.seg_host.winfo_ismapped()
 win.promptify()
 root.update()
-assert win.panel_open and win.b_ack.f.winfo_ismapped() and not calls and not win.box.winfo_ismapped()
-win._close_panel()
+assert win.pstate == "ack" and not calls and win.b_main.f.cget("text") == "Promptify" and len(primaries()) == 1
+win.b_ack_no.cmd()
 root.update()
-assert not win.panel_open and win.box.winfo_ismapped() and win.card.winfo_ismapped()
+assert win.pstate == "empty"
 win.promptify()
 root.update()
 win._ack_go()
+root.update()
 assert cfg["prompt_ack"] is True and saves[-1]["prompt_ack"] is True
-assert settle(lambda: win.p_fields.get("text") is not None), win.p_status.cget("text")
+assert win.pstate == "drafting" and not win.b_main.on and win.b_cancel.f.winfo_ismapped()
+assert Ep(win.l_draft, win.dpane) == px_(16) and bare(win.l_draft)
+assert settle(lambda: win.pstate == "draft"), win.pstate
 assert calls[-1]["text"] == win.sel["text"] and calls[-1]["prompts"] is None and calls[-1]["target"] == "code"
-assert win.p_fields["text"].get("1.0", "end").strip() == "Do the thing." and len(win.p_fields["answers"]) == 2
-assert win.sel["draft"]["prompts"] == ["Do the thing.", "Second ask."] and "Drafted by Claude Code" in win.p_status.cget("text")
-# a chip fills its answer; a take that lands while an answer field has focus goes in at the caret
-win._pick(win.p_fields["answers"][0], "5")
-assert win.p_fields["answers"][0].get("1.0", "end").strip() == "5"
-win.p_fields["answers"][1].focus_force()
+F = win.p_fields
+assert F["text"].get("1.0", "end").strip() == "Do the thing." and len(F["answers"]) == 2
+assert win.sel["draft"]["prompts"] == ["Do the thing.", "Second ask."]
+assert win.b_main.f.cget("text") == "Copy prompt" and win.b_main.on and len(primaries()) == 1
+meta = [w.cget("text") for w in win.p_inner.winfo_children()[-2].winfo_children()]
+assert meta == ["Drafted by Claude Code · ", "sonnet", " · 0 s"], meta
 root.update()
-assert win.receive("in the repo") and win.receive("under src") \
-    and win.p_fields["answers"][1].get("1.0", "end").strip() == "in the repo under src"
-win.p_src.focus_force()          # the list is unmapped under the panel; the transcript is not a field
+mlabs = win.p_inner.winfo_children()[-2].winfo_children()
+assert Ep(mlabs[0], win.dpane) == px_(16) and all(bare(l) for l in mlabs)
+assert mlabs[1].winfo_x() == mlabs[0].winfo_x() + mlabs[0].winfo_width()   # no holes around the model id
+q_l = F["chips"][0].master.winfo_children()[0]
+assert q_l.cget("text") == "How many?" and Ep(q_l, win.dpane) == px_(16) and bare(q_l)
+# the body's thumb lives in the pane's right padding: the prompt ends where the primary does
+assert edge(F["text"]) == edge(win.b_main.f) == edge(win.dpane) - px_(16), (edge(F["text"]), edge(win.b_main.f), edge(win.dpane))
+assert win.psb.winfo_reqwidth() == px_(4) + 2 and edge(win.psb.master) == edge(win.dpane)
+# the drafted row got its dot (the two highlights + one dot image)
+assert sum(win.plist.type(i) == "image" for i in win.plist.find_all()) == 3
+# the header: two rows at 780 (measured, not hard-coded), one row when the pane is wide enough
+assert win.head_rows == 2 and win.seg_host.grid_info()["row"] == 1
+win.win.geometry(f"{win.px(1000)}x{win.px(640)}")
+assert settle(lambda: win.head_rows == 1)
+assert win.seg_host.grid_info()["row"] == 0
+win.win.geometry(f"{win.px(780)}x{win.px(560)}")
+assert settle(lambda: win.head_rows == 2)
+# ... and re-decided the moment the engine name changes, with no resize to prompt it: a window
+# that holds Codex's header on one row but not Claude Code's (the parts are measured, not the
+# frame's idle-time aggregate)
+need = lambda: (win.eng_dot.winfo_reqwidth() + win.b_eng.w + 2 * px_(12) + win.seg.winfo_reqwidth() + win.b_main.w)
+cfg["prompt_engine"], STATUS["codex"] = "codex", ("connected", "ChatGPT")
+win._refresh_engine()
 root.update()
-assert not win.receive("nowhere")                         # only the panel's own fields take it
-# the second prompt is reachable and edits ride along into pass 2 with the answers
+assert win.b_eng.f.cget("text") == "Codex"
+n_codex = need()
+for W_ in range(px_(700), px_(1200), 2):
+    main_ = W_ - px_(168) - 1
+    detail_ = main_ - max(px_(176), min(px_(240), int(0.36 * main_))) - 1
+    if detail_ - 2 * px_(16) >= n_codex + px_(10):
+        break
+win.win.geometry(f"{W_}x{px_(640)}")
+assert settle(lambda: win.head_rows == 1 and win.dpane.winfo_width() == detail_), (win.head_rows, win.dpane.winfo_width(), detail_)
+win._use("claude")
+root.update()
+assert win.b_eng.f.cget("text") == "Claude Code" and need() > win.dpane.winfo_width() - 2 * px_(16)
+assert win.head_rows == 2 and win.seg_host.grid_info()["row"] == 1
+assert edge(win.b_main.f) == edge(win.dpane) - px_(16), (edge(win.b_main.f), edge(win.dpane))
+STATUS.pop("codex")
+win.win.geometry(f"{win.px(780)}x{win.px(560)}")
+assert settle(lambda: win.head_rows == 2)
+# chips: a chip fills its answer and is the chosen one; typing something else un-chooses it;
+# the strip is ONE tab stop with a cursor
+strip, a0 = F["chips"][0], F["answers"][0]
+assert F["chips"][1] is None and [c.label for c in strip.chips] == ["3", "5"]
+assert a0.value() == "" and a0.get("1.0", "end-1c") == "Type an answer, or leave it blank to skip"
+strip.chips[1].cmd()
+root.update()
+assert a0.value() == "5" and strip.chips[1].is_chosen and not strip.chips[0].is_chosen
+assert strip.chips[1].w == strip.chips[1].pad * 2 + win.mf["body"].measure("5") + win.px(12)
+a0.set("6")
+assert not strip.chips[1].is_chosen and a0.value() == "6"
+strip.focus_force()
+root.update()
+strip.event_generate("<Right>")
+strip.event_generate("<space>")
+root.update()
+assert strip.kb[0] == 1 and a0.value() == "5" and strip.chips[1].is_chosen and win.win.focus_get() is a0
+strip.focus_force()
+root.update()
+win._escape()
+root.update()
+assert win.win.focus_get() is win.plist            # Esc from the strip (a Frame, not a field) -> the list
+# a take that lands while an answer field has focus goes in at the caret; the placeholder is gone
+a1 = F["answers"][1]
+a1.focus_force()
+root.update()
+assert a1.get("1.0", "end-1c") == "" and a1.value() == ""
+assert win.receive("in the repo") and win.receive("under src") and a1.value() == "in the repo under src"
+win.plist.focus_force()
+root.update()
+assert not win.receive("nowhere") and a1.get("1.0", "end-1c") == "in the repo under src"
+# the second prompt is reachable; a take into the prompt; edits ride along into pass 2
 win._switch_prompt(1)
-assert win.p_fields["text"].get("1.0", "end").strip() == "Second ask."
+assert F["text"].get("1.0", "end").strip() == "Second ask."
 win._switch_prompt(0)
-win.p_fields["text"].insert("end", " Edited.")
+# the prompt's keyboard focus is a 2 px ring bar on its left edge, in the padding before E -
+# ground until then; nothing moves and the text stays on E
+t_ = F["text"]
+assert t_.ring.cget("bg") == win.pal["bg"] and Ep(t_, win.dpane) == px_(16) and t_.ring.winfo_width() == px_(2)
+xy0 = (t_.winfo_rootx(), t_.winfo_rooty(), t_.winfo_width())
+F["text"].focus_force()
+F["text"].mark_set("insert", "end-1c")
+root.update()
+assert t_.ring.cget("bg") == win.pal["ring"] and (t_.winfo_rootx(), t_.winfo_rooty(), t_.winfo_width()) == xy0
+assert win.receive("Edited.") and F["text"].get("1.0", "end").strip() == "Do the thing. Edited."
 win._update()
-assert settle(lambda: calls[-1]["prompts"] is not None and win.p_fields.get("text") is not None
-              and "updated" in win.p_fields["text"].get("1.0", "end"))
+root.update()
+assert win.pstate == "drafting" and not win.b_main.on and win.b_main.f.cget("text") == "Copy prompt"
+assert settle(lambda: win.pstate == "draft" and calls[-1]["prompts"] is not None)
 assert calls[-1]["prompts"] == ["Do the thing. Edited.", "Second ask."] and calls[-1]["answers"] == ["5", "in the repo under src"]
 assert calls[-1]["questions"][0]["q"] == "How many?"
 assert win.sel["draft"]["prompts"][0] == "Do the thing. Edited. (updated)" and not win.p_fields["answers"]
+labels = [w.cget("text") for w in win.p_inner.winfo_children() if isinstance(w, tk.Label)]
+assert "No questions · the dictation was specific enough." in labels
+# Copy prompt: the clipboard, and the button says Copied at its held width
+w0 = win.b_main.w
 win._copy_prompt()
-assert clip[-1] == "Do the thing. Edited. (updated)"
+assert clip[-1] == "Do the thing. Edited. (updated)" and win.b_main.f.cget("text") == "Copied" and win.b_main.w == w0
 saved = next(l for l in (_json.loads(x) for x in hist.path.read_text(encoding="utf-8").splitlines())
              if l["text"] == win.sel["text"])
 assert saved["draft"]["prompts"][0].endswith("(updated)")          # the draft lives on the entry, on disk
-# Esc closes; reopening shows the kept draft without another call; the list is back
+# Original: closed per draft, the whole dictation when open
+assert not win.l_orig.winfo_ismapped() and win.b_orig.f.cget("text") == "Original ›"
+win._toggle_orig()
+root.update()
+assert win.l_orig.winfo_ismapped() and win.b_orig.f.cget("text") == "Original ▾" and win.l_orig.cget("text") == win.sel["text"]
+# Esc: a field hands focus to the list; the list's Return copies a drafted row's prompt
+win.p_fields["text"].focus_force()
+root.update()
 win._escape()
 root.update()
-assert not win.panel_open and win.box.winfo_ismapped()
+assert win.win.focus_get() is win.plist
+win.b_main.f.focus_force()                          # ... and from the header's primary
+root.update()
+win._escape()
+root.update()
+assert win.win.focus_get() is win.plist
+n_clip = len(clip)
+win._plist_go()
+assert len(clip) == n_clip + 1
+# leaving and coming back re-shows the kept draft without another call
 n_calls = len(calls)
+win.go("settings")
+win.go("promptify")
+root.update()
+assert len(calls) == n_calls and win.pstate == "draft" and win.p_fields["text"].get("1.0", "end").strip().endswith("(updated)")
+# Ctrl+D in History: the Promptify view with the row selected, drafting at once when it has none
+win.go("history")
+win._select(hist.items[-2])
+n_calls = len(calls)
+win._to_promptify()
+assert win.view == "promptify" and win.sel is hist.items[-2]
+assert settle(lambda: win.pstate == "draft" and len(calls) == n_calls + 1)
+win.go("history")
+win._select(hist.items[-1])
+n_calls = len(calls)
+win._to_promptify()
+root.update()
+assert win.pstate == "draft" and len(calls) == n_calls     # with a draft it only shows it
+# drafting: the primary stays, faded; the counter line; Cancel / Esc go back; nothing else moves
+PF.draft = slow_draft
+it = hist.items[-3]
+win._select(it)
+root.update()
+assert win.pstate == "empty"
 win.promptify()
 root.update()
-assert len(calls) == n_calls and win.p_fields["text"].get("1.0", "end").strip() == "Do the thing. Edited. (updated)"
-win._close_panel()
-# an engine that cannot run: no panel, the reason in the status line; a failing engine: in the panel
-PF.available = lambda c: (False, "Claude Code CLI not found - install it")
+assert win.pstate == "drafting" and not win.b_main.on and win.b_main.f.cget("text") == "Promptify"
+assert win.l_draft.cget("text").startswith("Drafting with Claude Code · ") and win.b_cancel.f.winfo_ismapped()
+win._escape()
+root.update()
+assert win.pstate == "empty" and win.b_main.on and win.drafting is None and "tick" not in win.jobs
+assert settle(lambda: not win.draft_thread.is_alive())      # the worker saw the flag and left
+# an engine that cannot run: the no-engine state, no call
+PF.available = lambda c: (False, "Claude Code is not connected")
+n_calls = len(calls)
 win.promptify()
-assert not win.panel_open and "not found" in win.s_text.cget("text")
+assert win.pstate == "noengine" and len(calls) == n_calls
 PF.available = lambda c: (True, "")
 
 
 def failing(*a, **k):
-    raise PF.PromptifyError("Claude Code is not logged in: run `claude`")
+    raise PF.PromptifyError("Codex hit its usage limit (resets 14:00)")
 
 
+# a failing engine: the error state - danger on the dot only - and Try again re-runs the same call
 PF.draft = failing
-del win.sel["draft"]
 win.promptify()
-assert settle(lambda: "not logged in" in win.p_status.cget("text"))
-assert win.panel_open and not win.b_cancel.f.winfo_ismapped()
-win._close_panel()
+assert settle(lambda: win.pstate == "error"), win.pstate
+assert win.b_main.f.cget("text") == "Try again" and win.eng_err["claude"].startswith("Codex hit")
+assert win.b_eng.f.cget("text") == "Claude Code" and win.eng_dot.cget("image") == str(win.dot(8, 6, win.pal["danger"]))
+labels = [w.cget("text") for w in win.p_inner.winfo_children() if isinstance(w, tk.Label)]
+assert labels[0] == "Couldn’t draft — Codex hit its usage limit (resets 14:00)" and labels[1].startswith("Pick another engine")
 PF.draft = fake_draft
-print("promptify panel ok")
+win._retry()
+assert win.pstate == "drafting" and not win.b_main.on and win.b_main.f.cget("text") == "Try again"   # stays, faded
+assert "claude" not in win.eng_err                     # the marker goes with the retry, not its result
+assert settle(lambda: win.pstate == "draft") and "claude" not in win.eng_err
+assert win.eng_dot.cget("image") == str(win.dot(8, 6, win.pal["primary"]))
+# the tab order: list → engine → segment → primary → Original › → 1 of 2 → prompt → chip strip →
+# answer → answer → Update prompt → (round to the list): nothing hidden, nothing twice
+F = win.p_fields
+want = [win.plist, win.b_eng.f, win.seg, win.b_main.f, win.b_orig.f, win.ctl["which"][0][0].master,
+        F["text"], F["chips"][0], F["answers"][0], F["answers"][1], win.b_update.f, win.plist]
+stop, seen = win.plist, []
+for _ in range(len(want) - 1):
+    stop = stop.tk_focusNext()
+    seen.append(stop)
+assert seen == want[1:], [str(s) for s in seen]
+# Return on an undrafted row drafts it
+win._select(hist.items[-4])
+root.update()
+assert win.pstate == "empty"
+win._plist_go()
+assert win.pstate == "drafting" and settle(lambda: win.pstate == "draft")
+
+# the button register: kinds, disabled, the held width, the solid button's inner ring
+fr = tk.Frame(win.views["promptify"], bg=win.pal["bg"])
+fr.place(x=0, y=0)
+hits = []
+b = W._Btn(win, fr, "Copy prompt", lambda: hits.append(1), kind="primary")
+b.f.pack()
+b.f.focus_force()                                           # a generated key needs the focus
+root.update()
+b._ring(False)
+img0 = b.f.cget("image")
+b._ring(True)
+assert b.f.cget("image") != img0                            # the inner ring, in on_primary
+b._ring(False)
+b.enable(False)
+b.f.event_generate("<Return>")
+assert not hits and int(b.f.cget("takefocus")) == 0
+b.enable(True)
+b.f.event_generate("<Return>")
+assert hits == [1]
+w0 = b.w
+b.text("Copied")
+assert b.w == w0
+b.text("Try again", hold=False)
+assert b.w < w0
+for kind in ("secondary", "text", "chip", "danger"):
+    W._Btn(win, fr, "x", lambda: None, kind=kind)
+c = W._Chip(win, fr, "an option", lambda: None)
+w1 = c.w
+c.chosen(True)
+assert c.w == w1 + win.px(12) and c.f.itemcget(c.i_dot, "state") == "normal"
+c.chosen(False)
+assert c.w == w1 and c.f.itemcget(c.i_dot, "state") == "hidden"
+win.primaries.remove(b)
+fr.destroy()
+print("promptify view ok")
+
+# --- the engines sheet: statuses, a fake Login, Use, the model field, Disconnect -------------
+win._open_sheet()
+root.update()
+assert win.sheet_open and win.sheet.winfo_ismapped() and not win.draft_f.winfo_ismapped()
+R = win.e_rows
+assert [R[k]["action"] for k in PF.ORDER] == ["active", "connect", "connect", "connect"]
+assert R["claude"]["status"].cget("text") == "Connected · " + PF.ENGINES["claude"]["login"]
+assert R["codex"]["status"].cget("text").startswith("Not connected · ") and R["claude"]["btn"] is None
+assert primaries() == []                                   # the sheet has no primary
+# its text edge: ‹ Draft's glyph on E, "Engines" 12 after it, the intro and the names on E, the
+# status 16 after E (the 8 px dot + 8), the action ending 16 before the pane's edge, thumb or not
+b_back, tl = win.sheet.grid_slaves(row=0)[0].pack_slaves()[:2]
+assert Ep(b_back, win.dpane) + win.b_back.pad == px_(16) and bare(tl)
+assert Ep(tl, win.dpane) == Ep(b_back, win.dpane) + b_back.winfo_width() - win.b_back.pad + px_(12)
+intro = win.e_inner.winfo_children()[0]
+name_l = R["claude"]["status"].master.master.winfo_children()[0]
+assert name_l.cget("text") == "Claude Code" and Ep(intro, win.dpane) == px_(16) == Ep(name_l, win.dpane)
+assert bare(intro) and bare(name_l) and bare(R["claude"]["status"])
+assert Ep(R["claude"]["status"], win.dpane) == px_(32)
+assert edge(R["codex"]["btn"].f) == edge(win.dpane) - px_(16), (edge(R["codex"]["btn"].f), edge(win.dpane))
+assert win.esb.winfo_reqwidth() == px_(4) + 2
+# the model field writes cfg["prompt_models"] on commit; blank shows "default" and means it
+m = R["claude"]["model"]
+assert m is win.e_model and m.value() == "" and m.get("1.0", "end-1c") == "default"
+m.focus_force()
+root.update()
+assert m.get("1.0", "end-1c") == ""
+m.set("opus")
+n = len(saves)
+win.b_back.f.focus_force()                                  # FocusOut commits
+root.update()
+assert cfg["prompt_models"]["claude"] == "opus" and len(saves) == n + 1 and PF.engine_spec(cfg)["model"] == "opus"
+# Connect: the row goes to connecting with Cancel (and no paste-code field: that is claude's)
+R["codex"]["btn"].cmd()
+root.update()
+assert logins[-1].key == "codex" and "codex" in win.logins
+R = win.e_rows
+assert R["codex"]["action"] == "cancel" and R["codex"]["status"].cget("text").startswith("Connecting · ") and "code" not in R["codex"]
+R["codex"]["btn"].cmd()                                     # Cancel
+root.update()
+assert "codex" not in win.logins and win.e_rows["codex"]["action"] == "connect"
+# claude, login expired: Connect, the url arrives, the paste-code fallback, done: connected, still active
+STATUS["claude"] = ("expired", "Login expired")
+win._engine_rows()
+R = win.e_rows
+assert R["claude"]["action"] == "connect" and R["claude"]["status"].cget("text").startswith("Login expired · ")
+R["claude"]["btn"].cmd()
+root.update()
+R = win.e_rows
+assert R["claude"]["action"] == "cancel" and "code" in R["claude"] and "model" not in R["claude"]
+R["claude"]["code"].focus_force()
+root.update()
+R["claude"]["code"].set("the-code")
+R["claude"]["code"].event_generate("<Return>")             # submits
+root.update()
+win._login_tick()
+assert STATUS["claude"][0] == "connected" and "claude" not in win.logins and win.e_rows["claude"]["action"] == "active"
+assert cfg.get("prompt_engine", "claude") == "claude"       # it was the engine: nothing to write
+
+
+class FailingLogin(FakeLogin):
+    def start(self):
+        self.on_event("error", "No browser could be opened.")
+        return self
+
+
+# a sign-in that fails: the reason in the row, Connect again
+C.Login = FailingLogin
+win.e_rows["gemini"]["btn"].cmd()
+root.update()
+assert win.e_rows["gemini"]["action"] == "connect" and win.e_rows["gemini"]["status"].cget("text") == "Error · No browser could be opened."
+C.Login = FakeLogin
+# a failure of a signed-in engine (a timeout, a limit) is said on its row, danger dot, but the
+# engine stays usable: Active/Use and the Model line, never Connect (a sign-in is not the remedy)
+win.eng_err["claude"] = "Timed out after 150 s."
+win._engine_rows()
+R = win.e_rows
+assert R["claude"]["action"] == "active" and "model" in R["claude"] and R["claude"]["btn"] is None
+assert R["claude"]["status"].cget("text") == "Error · Timed out after 150 s. · " + PF.ENGINES["claude"]["login"]
+win.eng_err["claude"] = "Claude Code: usage limit reached."
+win._engine_rows()
+assert win.e_rows["claude"]["status"].cget("text").startswith("Usage limit · Claude Code: usage limit")
+win.eng_err.clear()
+win._engine_rows()
+# Use: the engine becomes active, the header follows; Disconnect (OpenRouter only) forgets its key
+STATUS["openrouter"] = ("connected", "OpenRouter")
+win._engine_rows()
+R = win.e_rows
+assert R["openrouter"]["action"] == "use" and "disconnect" in R["openrouter"] and "disconnect" not in R["claude"]
+R["openrouter"]["btn"].cmd()
+root.update()
+assert cfg["prompt_engine"] == "openrouter" and saves[-1]["prompt_engine"] == "openrouter"
+assert win.e_rows["openrouter"]["action"] == "active" and win.e_rows["claude"]["action"] == "use"
+assert win.b_eng.f.cget("text") == "OpenRouter"
+win.e_rows["openrouter"]["disconnect"].cmd()
+root.update()
+assert "openrouter" not in STATUS and win.e_rows["openrouter"]["action"] == "connect" and win.b_eng.f.cget("text") == "No engine"
+# ... and with no engine connected, the first one to sign in becomes the active one
+win.e_rows["codex"]["btn"].cmd()
+root.update()
+logins[-1].submit("x")
+root.update()
+win._login_tick()
+assert cfg["prompt_engine"] == "codex" and win.e_rows["codex"]["action"] == "active" and win.b_eng.f.cget("text") == "Codex"
+# the sheet's tab order: ‹ Draft → each row's button → the Model field; Esc closes it
+root.update()                                               # the rebuilt rows get mapped
+R = win.e_rows
+want = [win.b_back.f, R["claude"]["btn"].f, R["codex"]["model"], R["gemini"]["btn"].f, R["openrouter"]["btn"].f]
+stop, seen = win.b_back.f, []
+for _ in range(len(want) - 1):
+    stop = stop.tk_focusNext()
+    seen.append(stop)
+assert seen == want[1:], [str(s) for s in seen]
+win._escape()
+root.update()
+assert not win.sheet_open and win.draft_f.winfo_ismapped() and win.pstate == "draft"
+cfg["prompt_engine"] = "claude"
+win._show(win._state_for(win.sel))
+assert win.b_eng.f.cget("text") == "Claude Code"
+print("engines sheet ok")
 print("settings ok")
 
 # clear-all really clears, and the empty state draws
@@ -389,6 +882,17 @@ win._clear_do()
 root.update()
 assert hist.items == [] and not win.act.winfo_ismapped() and not win.b_clear.f.winfo_ismapped()
 assert any("No dictations yet" == win.list.itemcget(i, "text") for i in win.list.find_all())
+assert win.count.cget("text").startswith("no dictations · "), win.count.cget("text")
+# ... and in the Promptify pane the empty state is two lines, wrapped inside the pane (never
+# clipped at its hairline), and the detail pane says to dictate first
+win.go("promptify")
+root.update()
+texts = [i for i in win.plist.find_all() if win.plist.type(i) == "text"]
+assert [win.plist.itemcget(i, "text") for i in texts] == ["No dictations yet", "Hold ", "Ctrl+Win", " and talk."]
+assert all(win.plist.bbox(i)[2] <= win.plist.winfo_width() - px_(16) for i in texts), [win.plist.bbox(i) for i in texts]
+assert win.pstate == "pick" and win.p_inner.winfo_children()[0].cget("text") == "Dictate something first."
+win.go("history")
+root.update()
 
 # the wheel handler is installed on the root's "all" tag - a withdrawn window gets no <Leave>,
 # so hide() has to take it down itself or it scrolls a canvas nobody can see

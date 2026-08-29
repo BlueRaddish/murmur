@@ -91,10 +91,13 @@ verbatim, musings kept as open points, and at most three questions about the thi
 can answer (scope, which repo, how many, what "done" looks like). Answer by clicking a chip,
 typing, or holding the chord and talking into the field; Update prompt folds the answers in;
 Copy prompt, paste into Claude Code (or claude.ai - the toggle changes how references to "the
-repo" are handled). The draft stays on the entry. The engine is yours to pick in Settings >
-Promptify: Claude Code, Codex or Gemini CLI on their own logins, or OpenAI, OpenRouter,
-Anthropic or any OpenAI-compatible endpoint (Ollama, LM Studio, Groq...) with a key. Nothing
-runs until you press the button, and the first press says where the words go.
+repo" are handled). The draft stays on the entry. The engine that writes the prompt signs in
+on its own, in your browser - Promptify > Engines > Connect: Claude Code (your claude.ai
+subscription), Codex (your ChatGPT plan), Gemini CLI (your Google account) or OpenRouter (one
+sign-in that reaches Claude, GPT and Gemini models, free ones included). murmur keeps no keys:
+the three CLIs hold their own logins and murmur only runs the binary you signed into; the
+OpenRouter key its connect flow hands back is the one thing stored, in `%APPDATA%\murmur`.
+Nothing runs until you press the button, and the first press says where the words go.
 
 **Extra trigger key.** Settings > Trigger key > Change... binds any single key to toggle
 recording: a wired headset's inline button, a media key, F13 on a macro pad. murmur swallows

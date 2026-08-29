@@ -208,6 +208,44 @@ Decisions
   Text clip the last one - the panel's Texts have no spacing. Dictating into an answer field
   works because Typist already skips the paste when murmur's own window is in front; the take
   now also lands in the focused panel field (and in History like any take).
+- Login-only engines, a Promptify section, the window redone (2026-08-29, v0.9). The user's
+  verdict on the first Promptify build, in three parts. (1) "These engines should be linked
+  through login on web, not like directly taking [keys]": the key-based engines went (OpenAI,
+  Anthropic, Gemini API, custom URL) and `connect.py` holds what is left - the CLIs' own
+  browser sign-ins and OpenRouter's OAuth. A 5-agent hands-on pass established the mechanics
+  without completing any login: `claude auth login` prints its URL on stdout wrapped in OSC-8
+  escapes, opens the browser itself (rundll32, or env BROWSER), listens on a random loopback
+  port, and offers "Paste code here if prompted >" on stdin for the manual page; `codex login`
+  prints everything on stderr, opens the browser in a way that cannot be suppressed, uses port
+  1455 (1457 fallback, GET /cancel evicts a stuck one); `gemini` has no login command - the
+  first headless run asks "[Y/n]:" on stdout and hangs forever if stdin is closed before it
+  does, so the sign-in answers "y" and every exec keeps stdin open and answers "n" (a dead
+  login must never open a browser mid-dictation), and the dictation travels as -p, not stdin;
+  OpenRouter is the one provider with first-party OAuth for desktop apps (PKCE, loopback
+  callback, code -> key at /api/v1/auth/keys; never fetch its /auth page from Python -
+  Cloudflare 403s non-browsers). None of the four times out on its own: the timeout is
+  murmur's (5 min, kill the tree). Status dots come from the credential files alone
+  (presence and claude's refreshTokenExpiresAt; exit codes are presence-only and gemini's can
+  be a libuv crash) - values are never read, logged or shown. Anthropic's policy: sign in to
+  the unmodified claude.exe with your own subscription is allowed; routing its tokens elsewhere
+  is not, so murmur only ever runs the binary. Exec-time env scrubs: ANTHROPIC_API_KEY,
+  ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN (claude), OPENAI_API_KEY, CODEX_API_KEY,
+  CODEX_ACCESS_TOKEN (codex) - a key in the environment silently switches the CLI to API
+  billing. Residue of the verification (no credentials): %LOCALAPPDATA%\murmur-test, deleted.
+  (2) "A separate section on the left that deals with promptify": a third sidebar item, two
+  panes (their popup choice), the engines sheet lives there and the Settings group is gone.
+  (3) "I don't like the ui within the promptify. Reference our memories of ui to refactor all
+  our ui": the method, properly this time - a written §1.1 brief (ui/BRIEF2.md; reference
+  Raycast Settings, their choice), three mockup directions rendered by headless Chrome, a
+  three-lens judge panel (craft §11 · the user's own words · Tk implementability: raycast
+  24.5, airy 21, dense 20.5), the winner refined with the grafts (two-line list rows, tinted
+  chips with a chosen dot instead of a second solid green, the target segment on one header
+  row only when it fits, "Dictations · N" instead of a second view title, the state word
+  inside the engine row's status line), then a 31 KB build spec with every number. What the
+  first panel got wrong, named: five hierarchy levels, chips as bordered buttons inside
+  bordered cards inside a panel, the answer field a third nested box, the primary at the
+  bottom, a status sentence in the body flow. Lesson: a feature dropped into an existing
+  window still needs its own brief and a mockup pass - "it fits the tokens" is not a design.
 - Rising, not level (2026-08-28). The user saw the shipped mark and said it was not the one they
   picked: "the murmur with the left peak lower". The brief had two Ripple m builds and I shipped
   the level one on my own reading of "the ripple m". Now the rising build: both arches spring
