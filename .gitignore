@@ -8,3 +8,4 @@ dist/
 murmur.ico
 run.log
 build.log
+.coverage
