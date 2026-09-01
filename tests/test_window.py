@@ -418,8 +418,10 @@ class FakeLogin:
 C.Login = FakeLogin
 
 
-def fake_draft(cfg_, text, target="code", prompts=None, questions=None, answers=None, cancel=None, workdir=None):
-    calls.append(dict(text=text, target=target, prompts=prompts, questions=questions, answers=answers))
+def fake_draft(cfg_, text, target="code", prompts=None, questions=None, answers=None, cancel=None,
+               workdir=None, vault_ctx=None):
+    calls.append(dict(text=text, target=target, prompts=prompts, questions=questions, answers=answers,
+                      vault_ctx=vault_ctx))
     _time.sleep(0.05)                 # long enough for the ticker to see the worker alive once
     if prompts is None:
         return {"prompts": ["Do the thing.", "Second ask."],
@@ -431,7 +433,7 @@ def fake_draft(cfg_, text, target="code", prompts=None, questions=None, answers=
             "engine": "claude", "model": "sonnet", "target": target, "wall": 0.1, "t": 0}
 
 
-def slow_draft(cfg_, text, target="code", prompts=None, questions=None, answers=None, cancel=None, workdir=None):
+def slow_draft(cfg_, text, target="code", prompts=None, questions=None, answers=None, cancel=None, workdir=None, vault_ctx=None):
     for _ in range(50):               # a second, unless cancelled - and it records nothing
         _time.sleep(0.02)
         if cancel is not None and cancel.is_set():
@@ -872,6 +874,55 @@ assert not win.sheet_open and win.draft_f.winfo_ismapped() and win.pstate == "dr
 cfg["prompt_engine"] = "claude"
 win._show(win._state_for(win.sel))
 assert win.b_eng.f.cget("text") == "Claude Code"
+# the Obsidian vault block: off by default with Use/Choose, on with Refresh/Off; picking a
+# vault clears its acknowledgement so the next Promptify discloses what now travels
+import vault as VLT
+_kv, _ris = VLT.known_vaults, VLT.refresh_if_stale
+VLT.known_vaults = lambda: [r"C:\fake\para"]
+VLT.refresh_if_stale = lambda c, a: None
+assert not (cfg.get("vault_path") or "")
+win._engine_rows()
+root.update()
+win._pick_vault(r"C:\fake\para")
+root.update()
+assert cfg["vault_path"] == r"C:\fake\para" and cfg["vault_ack"] is False and saves[-1]["vault_path"]
+win._pick_vault(None)
+root.update()
+assert cfg["vault_path"] is None
+# with a vault on and unacknowledged, the ack state shows once even though prompt_ack is set
+cfg.update(vault_path=r"C:\fake\para", vault_ack=False, prompt_ack=True)
+PF.draft, PF.available = fake_draft, lambda c: (True, "")
+win.sel.pop("draft", None)
+win.p_err = None
+win.promptify()
+root.update()
+assert win.pstate == "ack"
+win._ack_go()
+for _ in range(100):
+    root.update()
+    if win.pstate == "draft":
+        break
+    _time.sleep(0.02)
+assert cfg["vault_ack"] is True and win.pstate == "draft"
+# the Context line renders from vault_notes, and pass 2 reuses pass 1's vault block verbatim
+d_ = win.sel["draft"]
+d_["vault_notes"] = [{"path": "1-Projects/x/README.md", "title": "x"}]
+d_["vault_ctx"] = "<vault_context>ctx</vault_context>"
+win._show("draft")
+root.update()
+labels = [w2 for w in win.p_inner.winfo_children() for w2 in ([w] + list(w.winfo_children()))]
+assert any(isinstance(w, tk.Label) and w.cget("text") == "Context ·" for w in labels)
+win.p_fields["answers"][0].set("five")
+win._update()
+for _ in range(100):
+    root.update()
+    if calls[-1]["prompts"] is not None:
+        break
+    _time.sleep(0.02)
+assert calls[-1]["vault_ctx"] == "<vault_context>ctx</vault_context>"
+cfg.update(vault_path=None)
+VLT.known_vaults, VLT.refresh_if_stale = _kv, _ris
+print("vault ui ok")
 print("engines sheet ok")
 print("settings ok")
 

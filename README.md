@@ -99,6 +99,14 @@ the three CLIs hold their own logins and murmur only runs the binary you signed 
 OpenRouter key its connect flow hands back is the one thing stored, in `%APPDATA%\murmur`.
 Nothing runs until you press the button, and the first press says where the words go.
 
+**Promptify + your Obsidian vault.** Turn the vault on in Promptify > Engines and murmur looks a
+dictation's referents up in your own notes before drafting: say "like how we set up second-brain"
+and the engine gets a short excerpt from that note instead of asking you where it lives. Matching
+is by note names against your spoken words, all local, from a small cached index; the excerpts
+travel only with that one dictation, only to the engine you chose, and the draft lists which
+notes were used (click one to open it in Obsidian). Private-looking folders (journal, diary,
+private, people) are never indexed, and you can exclude more. Off by default.
+
 **Extra trigger key.** Settings > Trigger key > Change... binds any single key to toggle
 recording: a wired headset's inline button, a media key, F13 on a macro pad. murmur swallows
 that key so nothing else reacts to it, and it is never turned into a Ctrl+Win keystroke, so

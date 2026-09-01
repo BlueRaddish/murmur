@@ -74,7 +74,10 @@ DEFAULTS = {"model": "small.en", "device": "cpu", "language": None, "mic": None,
             # Promptify: which engine writes the prompt, its model (blank = the engine's default),
             # a key for the API engines, a base URL for the custom one, the target the prompt is
             # written for, and whether the "this leaves the machine" line has been acknowledged
-            "prompt_engine": "claude", "prompt_models": {}, "prompt_target": "code", "prompt_ack": False}
+            "prompt_engine": "claude", "prompt_models": {}, "prompt_target": "code", "prompt_ack": False,
+            # the Obsidian bridge: a vault path (None = off), folders kept out of its index, and
+            # whether the with-vault disclosure has been acknowledged
+            "vault_path": None, "vault_exclude": [], "vault_ack": False}
 
 
 def since_launch() -> str:
@@ -661,7 +664,9 @@ def run_app(factory, cfg: dict, cfg_path: Path) -> None:
     from window import AppWindow, History
     import promptify
     import connect                    # bundled with the app: the engines' sign-in and state
+    import vault
     promptify.log = log               # engine diagnostics (never its text) into murmur.log
+    vault.log = log
 
     scale = set_dpi_aware()           # before Tk() so tkinter gets real pixels too
     root = tk.Tk()
@@ -671,6 +676,8 @@ def run_app(factory, cfg: dict, cfg_path: Path) -> None:
     history = History(APPDIR / "history.jsonl", cfg["retention_days"])
     overlay = Overlay(lambda: holder["app"].recorder.samples() if holder["app"] else None, scale)
     overlay.configure(cfg)
+    # the vault index refreshes itself on a daemon thread, well after startup is done
+    root.after(60000, lambda: vault.refresh_if_stale(cfg, APPDIR))
 
     def on_save(c: dict) -> None:
         save_config(cfg_path, c)

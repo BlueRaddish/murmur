@@ -22,7 +22,8 @@ assert "1. Q: How many?\n   A: four" in m2 and "2. Q: Which repo?\n   A: (skippe
 print("messages ok")
 
 # --- parsing ---------------------------------------------------------------------------------
-good = {"prompt": "Do X", "questions": [{"q": "A?", "why": "b", "options": ["1", "2"]}], "notes": "n"}
+good = {"analysis": "one decision, no gaps", "prompt": "Do X",
+        "questions": [{"q": "A?", "why": "b", "options": ["1", "2"]}], "notes": "n"}
 assert P.parse_result(json.dumps(good)) == good
 assert P.parse_result("```json\n" + json.dumps(good) + "\n```") == good
 assert P.parse_result("Sure, here it is:\n" + json.dumps(good) + "\nHope that helps") == good
@@ -32,6 +33,7 @@ for bad in ("", "no json here", '{"questions": []}', "[1, 2]"):
         raise AssertionError(bad)
     except P.PromptifyError:
         pass
+assert P.SCHEMA["required"][0] == "analysis" and list(P.SCHEMA["properties"])[0] == "analysis"
 n = P.normalize({"prompt": " P ", "questions": [{"q": "A?", "why": "b", "options": ["x", "y", "z", "w"]},
                                                  {"q": "", "why": "skip me"}, "junk"],
                  "more_prompts": ["Q", " "], "notes": None})
@@ -68,7 +70,8 @@ assert a[a.index("--tools") + 1] == "" and a[a.index("--system-prompt-file") + 1
 a = P.cli_argv(P.engine_spec({"prompt_engine": "claude", "prompt_models": {"claude": "opus"}}), sysfile, wd)
 assert a[a.index("--model") + 1] == "opus"
 a = P.cli_argv(P.engine_spec({"prompt_engine": "codex"}), sysfile, wd)
-assert a[1:4] == ["exec", "-", "--json"] and "--ephemeral" in a and "-m" not in a
+assert a[1:4] == ["exec", "-", "--json"] and "--ephemeral" in a
+assert a[a.index("-m") + 1] == "gpt-5.6-luna"      # the GPT default is luna (user's routing, 2026-09-01)
 assert a[a.index("-C") + 1] == str(wd / "empty") and a[a.index("--output-schema") + 1] == str(wd / "schema.json")
 assert 'approval_policy="never"' in a and 'web_search="disabled"' in a
 assert f"model_instructions_file='{sysfile.as_posix()}'" in a and json.loads((wd / "schema.json").read_text()) == P.SCHEMA
@@ -253,6 +256,8 @@ def fake_http(url, body, headers, timeout=120):
         return {"error": {"code": 502, "message": "Provider returned error"}}
     if body.get("model") == "revoked":
         raise P.PromptifyError("the API key was rejected: User not found.")
+    if body.get("model") == "cutoff":
+        return {"choices": [{"message": {"content": '{"analysis": "trunc'}, "finish_reason": "length"}]}
     return {"choices": [{"message": {"content": json.dumps(good)}}]}
 
 
@@ -261,7 +266,7 @@ P.http_json = fake_http
 res = P.draft({"prompt_engine": "openrouter"}, "d", "code", workdir=work)
 url, body, headers = calls[-1]
 assert url == "https://openrouter.ai/api/v1/chat/completions" and headers["Authorization"] == "Bearer sk-or-v1-k"
-assert headers["X-Title"] == "murmur" and body["model"] == "anthropic/claude-sonnet-5"
+assert headers["X-Title"] == "murmur" and body["model"] == "openai/gpt-5.6-luna"    # luna default (2026-09-01)
 assert body["messages"][0] == {"role": "system", "content": "PROMPTIFY-SYSTEM rules\n"}
 assert body["messages"][1]["role"] == "user" and "<dictation>" in body["messages"][1]["content"]
 assert body["response_format"] == {"type": "json_object"} and res["prompts"] == ["Do X"]
@@ -270,7 +275,8 @@ assert "temperature" not in body and body["max_tokens"] == 4096 and body["provid
 n_before = len(calls)
 res = P.draft({"prompt_engine": "openrouter", "prompt_models": {"openrouter": "picky"}}, "d", workdir=work)
 assert len(calls) == n_before + 2 and "response_format" not in calls[-1][1] and res["prompts"] == ["Do X"]
-for model, text in (("routed", "Provider returned error"), ("bad", "unknown model"), ("revoked", "Connect again")):
+for model, text in (("routed", "Provider returned error"), ("bad", "unknown model"), ("revoked", "Connect again"),
+                    ("cutoff", "cut off")):
     try:
         P.draft({"prompt_engine": "openrouter", "prompt_models": {"openrouter": model}}, "d", workdir=work)
         raise AssertionError(model)
@@ -287,5 +293,5 @@ print("openrouter engine ok")
 # the shipped system prompt is the real one and the schema is what the engines are told to fill
 real = (Path(__file__).resolve().parents[1] / "promptify.txt").read_text(encoding="utf-8")
 assert "<dictation>" in real and "Fidelity" in real and len(real) > 5000
-assert P.SCHEMA["required"] == ["prompt", "questions"] and json.loads(P.SCHEMA_JSON) == P.SCHEMA
+assert P.SCHEMA["required"] == ["analysis", "prompt", "questions"] and json.loads(P.SCHEMA_JSON) == P.SCHEMA
 print("all promptify tests passed")

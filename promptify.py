@@ -31,7 +31,11 @@ from pathlib import Path
 RES = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 SYSTEM_FILE = RES / "promptify.txt"
 
-SCHEMA = {"type": "object", "required": ["prompt", "questions"], "properties": {
+# `analysis` comes first: key order is generation order, so the model reasons - decisions,
+# musings, mis-hearing suspects, ambiguities - before it commits to a goal line. murmur
+# discards it (the lectures: thinking only counts when it is emitted, and it needs structure).
+SCHEMA = {"type": "object", "required": ["analysis", "prompt", "questions"], "properties": {
+    "analysis": {"type": "string"},
     "prompt": {"type": "string"},
     "questions": {"type": "array", "maxItems": 4, "items": {
         "type": "object", "required": ["q", "why"], "properties": {
@@ -50,15 +54,15 @@ ENGINES = {
     "claude": {"label": "Claude Code", "kind": "cli", "exe": "claude", "model": "sonnet",
                "models": "sonnet · opus · haiku · fable · or a full id such as claude-sonnet-5",
                "login": "Your claude.ai subscription, through the Claude Code app"},
-    "codex": {"label": "Codex", "kind": "cli", "exe": "codex", "model": "",
-              "models": "blank = Codex's own default · gpt-5.6-luna (lighter) · gpt-5.5",
+    "codex": {"label": "Codex", "kind": "cli", "exe": "codex", "model": "gpt-5.6-luna",
+              "models": "gpt-5.6-luna (the default) · gpt-5.5 · blank = Codex's own pick",
               "login": "Your ChatGPT plan, through the Codex app"},
     "gemini": {"label": "Gemini CLI", "kind": "cli", "exe": "gemini", "model": "",
                "models": "blank = the CLI's default · gemini-2.5-flash · gemini-2.5-pro",
                "login": "Your Google account, through the Gemini CLI (npm install -g @google/gemini-cli)"},
     "openrouter": {"label": "OpenRouter", "kind": "openai", "url": "https://openrouter.ai/api/v1",
-                   "model": "anthropic/claude-sonnet-5",
-                   "models": "anthropic/claude-sonnet-5 · openai/gpt-5-mini · google/gemini-2.5-flash · openrouter/free",
+                   "model": "openai/gpt-5.6-luna",
+                   "models": "openai/gpt-5.6-luna · anthropic/claude-sonnet-5 · google/gemini-2.5-flash · openrouter/free",
                    "login": "One sign-in that reaches Claude, GPT and Gemini models; free models included"},
 }
 ORDER = ("claude", "codex", "gemini", "openrouter")
@@ -79,14 +83,17 @@ def system_prompt() -> str:
     return SYSTEM_FILE.read_text(encoding="utf-8")
 
 
-def message(target: str, dictation: str, prompts=None, questions=None, answers=None) -> str:
+def message(target: str, dictation: str, prompts=None, questions=None, answers=None, vault_ctx="") -> str:
     """Pass 1 wraps the dictation; pass 2 adds the prompt(s) as they stand (the user's edits ride
-    along) and the answers, verbatim, "(skipped)" where empty. Text inside the tags is material,
-    and the system prompt says so - a dictation that says "ignore your rules" is carried, not obeyed."""
+    along) and the answers, verbatim, "(skipped)" where empty. The vault context, when there is
+    one, rides right after the dictation on both passes - pass 2 reuses pass 1's block verbatim
+    so the answers fold against the same facts. Text inside the tags is material, and the system
+    prompt says so - a dictation that says "ignore your rules" is carried, not obeyed."""
     name = dict((v, k) for k, v in TARGETS).get(target, "Claude Code")
+    vc = (vault_ctx.strip() + "\n") if (vault_ctx or "").strip() else ""
     if prompts is None:
-        return f"Target: {name}\nPass: 1\n\n<dictation>\n{dictation.strip()}\n</dictation>\n"
-    out = [f"Target: {name}\nPass: 2\n\n<dictation>\n{dictation.strip()}\n</dictation>\n"]
+        return f"Target: {name}\nPass: 1\n\n<dictation>\n{dictation.strip()}\n</dictation>\n{vc}"
+    out = [f"Target: {name}\nPass: 2\n\n<dictation>\n{dictation.strip()}\n</dictation>\n{vc}"]
     for i, p in enumerate(prompts, 1):
         out.append(f'<previous_prompt n="{i}">\n{p.strip()}\n</previous_prompt>\n')
     out.append("<answers>")
@@ -376,11 +383,18 @@ def run_cli_engine(spec: dict, msg: str, cancel, workdir: Path) -> tuple:
     k = spec["key"]
     login_check(spec, argv)
     t0 = time.monotonic()
-    if k == "gemini":     # stdin open and empty; a consent prompt means the login is dead: refuse it
-        rc, out, err = run_cli(argv, None, cli_env(spec, sysfile), TIMEOUT, cancel, str(empty),
-                               watch=("[Y/n]:", b"n\n"))
-    else:
-        rc, out, err = run_cli(argv, msg, cli_env(spec, sysfile), TIMEOUT, cancel, str(empty))
+    for attempt in (0, 1):
+        if k == "gemini":     # stdin open and empty; a consent prompt means the login is dead: refuse it
+            rc, out, err = run_cli(argv, None, cli_env(spec, sysfile), TIMEOUT, cancel, str(empty),
+                                   watch=("[Y/n]:", b"n\n"))
+        else:
+            rc, out, err = run_cli(argv, msg, cli_env(spec, sysfile), TIMEOUT, cancel, str(empty))
+        # a nonzero exit with silence on both streams is a CLI crash (seen intermittently under
+        # load right after an auto-update), not an API answer: one retry
+        if attempt == 0 and rc != 0 and not out.strip() and not err.strip():
+            log(f"  promptify {k}: crashed silently (rc {rc}), retrying once")
+            continue
+        break
     wall = time.monotonic() - t0
     tail = (err.strip().splitlines() or [""])[-1][:160]
     log(f"  promptify {k}: rc {rc}, {wall:.1f}s{(', stderr: ' + tail) if tail else ''}")
@@ -511,29 +525,49 @@ def run_api_engine(spec: dict, cfg: dict, msg: str, appdir=None) -> tuple:
             raise PromptifyError("OpenRouter no longer accepts murmur's key - press Connect again.")
         raise
     try:
-        text = j["choices"][0]["message"]["content"]
+        choice = j["choices"][0]
+        text = choice["message"]["content"]
     except (KeyError, IndexError, TypeError):
         raise PromptifyError(f"{spec['label']}: unexpected reply shape.")
     if isinstance(text, list):             # some endpoints return content parts
         text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
+    if isinstance(choice, dict) and choice.get("finish_reason") == "length":
+        raise PromptifyError(f"{spec['label']}: the reply was cut off at the token limit - try again.")
     wall = time.monotonic() - t0
     log(f"  promptify {spec['key']}: {wall:.1f}s")
     return parse_result(text), {"model": model, "wall": round(wall, 1)}
 
 
+def vocab_text(appdir: Path) -> str:
+    for p in (appdir / "vocab.txt", RES / "vocab.txt"):
+        try:
+            return p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+    return ""
+
+
 def draft(cfg: dict, dictation: str, target="code", prompts=None, questions=None, answers=None,
-          cancel=None, workdir=None) -> dict:
+          cancel=None, workdir=None, vault_ctx=None) -> dict:
     """The whole thing: build the message, run the engine, return {prompts, questions, notes,
-    engine, model, target, wall, t}. Raises PromptifyError (show it) or Cancelled (say nothing)."""
+    vault_ctx, vault_notes, engine, model, target, wall, t}. Pass 1 looks the dictation's
+    referents up in the vault (never raises, hard deadline); pass 2 gets pass 1's block back via
+    `vault_ctx`. Raises PromptifyError (show it) or Cancelled (say nothing)."""
     spec = engine_spec(cfg)
     workdir = Path(workdir or Path(os.environ.get("APPDATA", Path.home())) / "murmur") / "promptify"
     workdir.mkdir(parents=True, exist_ok=True)
-    msg = message(target, dictation, prompts, questions, answers)
+    vault_notes = []
+    if vault_ctx is None and prompts is None:
+        import vault
+        vault_ctx, vault_notes = vault.context_for(cfg, dictation, workdir.parent,
+                                                   vocab=vocab_text(workdir.parent))
+    msg = message(target, dictation, prompts, questions, answers, vault_ctx or "")
     if spec["kind"] == "cli":
         obj, meta = run_cli_engine(spec, msg, cancel, workdir)
     else:
         obj, meta = run_api_engine(spec, cfg, msg, appdir=workdir.parent)
     out = normalize(obj)
     out.update(engine=spec["key"], model=meta.get("model") or spec["model"], target=target,
-               wall=meta.get("wall", 0.0), t=time.time())
+               wall=meta.get("wall", 0.0), t=time.time(),
+               vault_ctx=vault_ctx or "", vault_notes=vault_notes)
     return out

@@ -8,3 +8,4 @@ python tests/test_ui_rules.py
 python tests/test_brand.py
 python tests/test_promptify.py
 python tests/test_connect.py
+python tests/test_vault.py

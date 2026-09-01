@@ -208,6 +208,50 @@ Decisions
   Text clip the last one - the panel's Texts have no spacing. Dictating into an answer field
   works because Typist already skips the paste when murmur's own window is in front; the take
   now also lands in the focused panel field (and in History like any take).
+- Promptify v2, the vault bridge, luna routing (2026-09-01, v0.10). Three asks. (1) "In depth
+  research about prompt engineering" from the Anthropic lectures et al: two research agents mined
+  the deep-dive roundtable (Albert/Askell/Witten/Hershey), Prompting 101, the interactive
+  tutorial and Academy courses, plus the non-Anthropic canon (OpenAI's meta-prompt and optimizer
+  cookbooks, DLAI, Boonstra's whitepaper, Schulhoff, DSPy/OPRO). The convergent levers landed in
+  promptify.txt v2 (10.7k -> 18k chars): a required "analysis" field FIRST in the schema (key
+  order is generation order - structured reasoning space: decisions verbatim, musings,
+  mis-hearing suspects, ambiguities with their readings, then the <=3 blocking questions, then a
+  fidelity self-check), two worked dictation->JSON examples with deliberately off-domain content
+  (a community garden; a rename) so the model copies the moves and not the vocabulary - one
+  showing questions [], or a mini model asks three every time; a whole-dictation out (a memo is
+  returned cleaned, never given an invented goal); explicit precedence lines for the three rule
+  tensions the optimizer taxonomy found (length vs labels, never-add vs the delegation sentence,
+  splitting vs the path question); a processing-order line; pass 2 may not reorder sections; an
+  end-of-prompt reminder block (the lectures: repeat what matters at the end); and the hedged-ask
+  rule ("I feel like the layout needs to be smoother" is an ask, not a musing) added after the
+  golden A/B caught v2 demoting a real request. A/B on 5 frozen real dictations (kept local,
+  never in this repo), old vs new through claude/sonnet: key-phrase retention >= old on every
+  sample (2/2, 13-14/17, 41/49...), better splits (independent asks -> more_prompts), sharper
+  questions (it caught "Codex vs codecs"); one transient "Test prompt." output and intermittent
+  silent CLI crashes (rc!=0, both streams empty, right after claude.exe auto-updated) -> the
+  claude engine retries once on a silent crash. (2) The Obsidian bridge (vault.py): the user's
+  vault is an rclone mount where a cold walk took 198 s and a full content scan never finished,
+  so the hot path reads ONLY a cached head-index (%APPDATA%\murmur\vault_index.json: title,
+  lookup names incl. the parent folder for README hubs, tags, a 300-char description from the
+  first 4 KB), built on a daemon thread, TTL 6 h, exclusion changes delete the index first.
+  Matching inverts: the index's name dictionary is matched against the spoken token stream
+  ("second brain" finds second-brain.md); >=1 real name hit required, folder weights (Archives
+  0.25), recency; 3 notes x 1200 chars <= 3000 total; live reads deadline-guarded at 2 s total
+  (a read of a hung mount is abandoned on its daemon thread - it cannot be interrupted).
+  <vault_context><note path title modified> after the dictation on both passes (pass 2 reuses
+  pass 1's block verbatim); the system prompt treats it as background the speaker never said,
+  dictation wins on conflict, used notes cited in notes and shown as clickable Context links
+  (obsidian://open). journal/diary/private/people are never indexed; off by default; enabling
+  the vault re-shows the disclosure once (vault_ack). (3) "Route our default model to gpt luna,
+  as luna is free now": on the routes murmur has it is NOT free - OpenRouter lists
+  openai/gpt-5.6-luna at $0.20/$1.20 per M (~$0.002/call, no :free variant), and this machine's
+  Codex now answers "Upgrade to Plus ... try again at Sep 28" (the free-tier message; the plan
+  appears lapsed), so luna became the default MODEL on both GPT routes (codex -m gpt-5.6-luna,
+  openrouter openai/gpt-5.6-luna) while claude stays the default ENGINE - switching the active
+  engine to a blocked route would fail every press. Luna is reasoning-class (codex sets
+  model_reasoning_effort on it), so v2 keeps structure + examples and no CoT scaffolding; its
+  fidelity on the golden set is untested until a GPT route opens. Also: OpenRouter replies cut
+  at the token limit (finish_reason length) now say so instead of failing JSON parse.
 - Login-only engines, a Promptify section, the window redone (2026-08-29, v0.9). The user's
   verdict on the first Promptify build, in three parts. (1) "These engines should be linked
   through login on web, not like directly taking [keys]": the key-based engines went (OpenAI,

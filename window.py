@@ -16,6 +16,7 @@ import datetime
 import io
 import json
 import math
+import os
 import threading
 import time
 import tkinter as tk
@@ -26,6 +27,7 @@ from tkinter import ttk
 import brand
 import connect
 import promptify
+import vault
 
 # --- tokens ---------------------------------------------------------------------------------
 
@@ -2122,6 +2124,9 @@ class AppWindow:
         self._line(self.p_inner, f"Promptify sends this dictation to {label}.", "body")
         self._line(self.p_inner, "Only the dictation you pick, only when you press Promptify. Engines "
                    "sign in on their own; murmur keeps no keys.", "meta", pady=(self.px(SP[0]), 0))
+        if (self.cfg.get("vault_path") or "").strip():
+            self._line(self.p_inner, "With your vault turned on, short excerpts from matching notes "
+                       "travel with that one dictation too.", "meta", pady=(self.px(SP[0]), 0))
         self.b_ack_no = _Btn(self, self.p_inner, "Not now",
                              lambda: self._show(self._state_for(self.sel)), kind="text")
         self.b_ack_no.f.pack(anchor="w", padx=(self.px(SP[3]) - self.px(SP[1]), 0),
@@ -2178,6 +2183,17 @@ class AppWindow:
         t.host.pack(fill="x", padx=(pad - px(2), pad), pady=(px(SP[1]), 0))   # the ring bar before E
         if d.get("notes"):
             self._line(inner, "Notes · " + d["notes"], "meta", pady=(px(SP[2]), 0))
+        vn = d.get("vault_notes") or []
+        if vn:
+            # the notes the engine saw, clickable into Obsidian
+            crow = tk.Frame(inner, bg=p["bg"])
+            crow.pack(anchor="w", padx=pad, pady=(px(SP[0]), 0))
+            tk.Label(crow, text="Context ·", font=self.F["meta"], fg=p["muted"], bg=p["bg"],
+                     bd=0, padx=0, pady=0).pack(side="left")
+            for n in vn[:3]:
+                self.link(crow, n.get("title") or n.get("path", ""),
+                          lambda path=n.get("path", ""): self._open_note(path)).pack(
+                    side="left", padx=(self.px(SP[1]), 0))
         qs = F["questions"]
         self.hairline(inner).pack(fill="x", padx=pad, pady=(px(SP[4]), 0))
         self._line(inner, f"Questions · {len(qs)}" if qs else
@@ -2391,13 +2407,16 @@ class AppWindow:
         if not ok:
             self._show("noengine")
             return
-        if not self.cfg.get("prompt_ack"):
+        if not self.cfg.get("prompt_ack") or (
+                (self.cfg.get("vault_path") or "").strip() and not self.cfg.get("vault_ack")):
             self._show("ack")
         else:
             self._run_draft(it)
 
     def _ack_go(self) -> None:
         self.cfg["prompt_ack"] = True
+        if (self.cfg.get("vault_path") or "").strip():
+            self.cfg["vault_ack"] = True
         self.save()
         self._run_draft(self.sel)
 
@@ -2420,8 +2439,11 @@ class AppWindow:
 
         def work():
             try:
+                # pass 2 folds against the same vault facts pass 1 saw; pass 1 searches anew
+                vc = (it.get("draft") or {}).get("vault_ctx") if prompts is not None else None
                 res["ok"] = promptify.draft(self.cfg, it["text"], self.p_target[0], prompts, questions,
-                                            answers, cancel=cancel, workdir=self.history.path.parent)
+                                            answers, cancel=cancel, workdir=self.history.path.parent,
+                                            vault_ctx=vc)
             except promptify.Cancelled:
                 res["cancelled"] = True
             except promptify.PromptifyError as e:
@@ -2709,9 +2731,82 @@ class AppWindow:
                 row["code"] = self._paste_code(blk, login["login"])
             if action == "active":
                 row["model"] = self._model_line(blk, key)
+        self._vault_block(inner)
         self._line(inner, "Connect opens the engine’s own sign-in in your browser. A dictation is "
-                   "sent only to the engine you pick, only when you press Promptify.", "meta",
-                   pady=(px(SP[4]), 0))
+                   "sent only to the engine you pick, only when you press Promptify. With a vault "
+                   "turned on, short excerpts from matching notes travel with it.", "meta",
+                   pady=(px(SP[2]), 0))
+
+    def _vault_block(self, inner) -> None:
+        """The Obsidian bridge, under the engine rows: one row - name, state line, actions.
+        Off by default; turning it on re-shows the disclosure once (vault_ack)."""
+        p, px, pad = self.pal, self.px, self.px(SP[3])
+        self.hairline(inner).pack(fill="x", padx=pad, pady=(px(SP[4]), 0))
+        blk = tk.Frame(inner, bg=p["bg"])
+        blk.pack(fill="x", padx=pad, pady=(px(SP[2]), 0))
+        left = tk.Frame(blk, bg=p["bg"])
+        left.pack(side="left", fill="x", expand=True)
+        tk.Label(left, text="Obsidian vault", font=self.F["body"], fg=p["ink"], bg=p["bg"],
+                 bd=0, padx=0, pady=0).pack(anchor="w")
+        vp = (self.cfg.get("vault_path") or "").strip()
+        if not vp:
+            status = "Off · lets Promptify look referents up in your own notes"
+        else:
+            idx = vault.load_index(self.history.path.parent)
+            if idx and idx.get("vault") == vp:
+                ago = max(0, time.time() - idx.get("built", 0))
+                ago_s = f"{ago / 3600:.0f} h ago" if ago >= 3600 else f"{ago / 60:.0f} min ago"
+                status = f"{Path(vp).name} · indexed {len(idx.get('notes') or [])} notes · {ago_s}"
+            else:
+                status = f"{Path(vp).name} · indexing…"
+        l = tk.Label(left, text=status, font=self.F["meta"], fg=p["muted"], bg=p["bg"],
+                     anchor="w", justify="left", bd=0, padx=0, pady=0)
+        l.pack(anchor="w", pady=(px(SP[0]), 0))
+        self._wrap(l, px(120))
+        col = tk.Frame(blk, bg=p["bg"])
+        col.pack(side="right")
+        if not vp:
+            found = vault.known_vaults()
+            if found:
+                _Btn(self, col, f"Use {Path(found[0]).name}",
+                     lambda f=found[0]: self._pick_vault(f), kind="secondary").f.pack(anchor="e")
+            _Btn(self, col, "Choose…", self._choose_vault, kind="text").f.pack(
+                anchor="e", pady=(px(SP[0]) if found else 0, 0))
+        else:
+            _Btn(self, col, "Refresh", self._vault_refresh, kind="text").f.pack(anchor="e")
+            _Btn(self, col, "Off", lambda: self._pick_vault(None), kind="text").f.pack(
+                anchor="e", pady=(px(SP[0]), 0))
+
+    def _pick_vault(self, path) -> None:
+        self.cfg["vault_path"] = str(path) if path else None
+        if path:
+            self.cfg["vault_ack"] = False        # the next Promptify says what now travels
+            vault.refresh_if_stale(self.cfg, self.history.path.parent)
+        self.save()
+        self._engine_rows()
+
+    def _choose_vault(self) -> None:
+        from tkinter import filedialog
+        d = filedialog.askdirectory(parent=self.win, title="Choose an Obsidian vault")
+        if d:
+            self._pick_vault(d)
+
+    def _vault_refresh(self) -> None:
+        try:
+            vault.index_path(self.history.path.parent).unlink()
+        except OSError:
+            pass
+        vault.refresh_if_stale(self.cfg, self.history.path.parent)
+        self._engine_rows()
+
+    def _open_note(self, rel_path) -> None:
+        vp = (self.cfg.get("vault_path") or "").strip()
+        if not vp or not rel_path:
+            return
+        try:
+            os.startfile(vault.obsidian_uri(vp, rel_path))
+        except OSError:
+            pass
 
     def _model_line(self, blk, key) -> tk.Text:
         """Model (active engine only): an underlined mono field, 240 wide or what is left,
