@@ -29,6 +29,7 @@ def fresh():
     m = murmur.Murmur.__new__(murmur.Murmur)
     m.cfg = {"trigger_vk": None}; m.recorder = FakeRec(); m.on_state = lambda s: None; m.capture = None
     m.state = "idle"; m.held = set(); m.recording = m.persistent = m.chord_was_down = False
+    m.trigger_down = False; m.taps = 0; m.on_open = lambda: None
     m.last_chord_release = 0.0; m.lock = __import__("threading").Lock(); m.ctl = __import__("threading").Lock(); m.pending = 0
     m.handle = lambda audio, take=None: None  # never touch the model here
     m.take = None
@@ -51,28 +52,52 @@ assert m.recorder.calls == ["start", "stop"]
 import time as _t
 m = fresh(); chord(m); chord(m, False); m.last_chord_release = _t.monotonic()
 chord(m); assert m.persistent and m.recording; chord(m, False); assert m.recording
+m.last_chord_release -= 1                       # a slow later press: stop, not a tap run
 chord(m); assert not m.recording; chord(m, False); assert not m.recording
 assert m.recorder.calls == ["start", "stop", "start", "stop"]
 # slow second tap is just another hold
 m = fresh(); chord(m); chord(m, False); m.last_chord_release = _t.monotonic() - 1.0
 chord(m); assert m.recording and not m.persistent; chord(m, False); assert not m.recording
-# trigger key: ignored when unbound, toggles persistent when bound, always suppressed when bound
+# trigger key: ignored when unbound; bound, it follows the chord grammar and is swallowed
 class D: vkCode = murmur.VK_MEDIA_PLAY_PAUSE
 class L:
     def __init__(self): self.suppressed = 0
     def suppress_event(self): self.suppressed += 1
 m = fresh(); m.listener = L()
 m.win32_event_filter(0x100, D()); assert not m.recording and m.listener.suppressed == 0
-# capture: the next key-down is reported once and swallowed, and does not toggle
+# capture: the next key-down is reported once and swallowed, and does not record
 got = []; m.capture = got.append
 m.win32_event_filter(0x100, D()); m.win32_event_filter(0x101, D())
 assert got == [murmur.VK_MEDIA_PLAY_PAUSE] and m.capture is None and not m.recording and m.listener.suppressed == 1
 m.listener.suppressed = 0
 m.cfg["trigger_vk"] = murmur.VK_MEDIA_PLAY_PAUSE
-m.win32_event_filter(0x100, D()); assert m.recording and m.persistent
-m.win32_event_filter(0x101, D()); assert m.recording            # key-up does nothing but is swallowed
-m.win32_event_filter(0x100, D()); assert not m.recording
+# hold: down records (auto-repeat downs while held are ignored), up stops
+m.win32_event_filter(0x100, D()); assert m.recording and not m.persistent
+m.win32_event_filter(0x100, D()); assert m.recorder.calls == ["start"]
+m.win32_event_filter(0x101, D()); assert not m.recording
 assert m.listener.suppressed == 3
+m.last_chord_release -= 1                       # break the tap run the hold test started
+# double-tap: persistent until a later press
+m.win32_event_filter(0x100, D()); m.win32_event_filter(0x101, D())
+m.win32_event_filter(0x100, D()); assert m.recording and m.persistent
+m.win32_event_filter(0x101, D()); assert m.recording
+m.last_chord_release -= 1
+m.win32_event_filter(0x100, D()); assert not m.recording
+m.win32_event_filter(0x101, D())
+# triple-tap: the window opens, the second tap's take is discarded, nothing new transcribes
+opened = []; m = fresh(); m.listener = L(); m.cfg["trigger_vk"] = murmur.VK_MEDIA_PLAY_PAUSE
+m.on_open = lambda: opened.append(1)
+for _ in range(2): m.win32_event_filter(0x100, D()); m.win32_event_filter(0x101, D())
+assert m.recording and m.persistent
+pend = m.pending
+m.win32_event_filter(0x100, D())
+assert opened == [1] and not m.recording and m.state == "idle" and m.pending == pend
+m.win32_event_filter(0x101, D())
+# triple-tap on the chord too
+opened = []; m = fresh(); m.on_open = lambda: opened.append(1)
+chord(m); chord(m, False); chord(m); chord(m, False); chord(m)
+assert opened == [1] and not m.recording
+chord(m, False); assert not m.recording
 # headset start then chord stops it too
 m = fresh(); m.toggle(); assert m.persistent; chord(m); assert not m.recording
 # streaming off in config: the take is transcribed whole at release, handle() never waits
@@ -90,7 +115,6 @@ m = fresh(); m.on_state = states.append
 real_handle = murmur.Murmur.handle
 chord(m); chord(m, False); m.last_chord_release -= 1; chord(m); chord(m, False)
 assert m.pending == 2 and states == ["recording", "busy", "recording", "busy"], states
-import threading as _th
 m.transcribe = lambda a, prev="": ""; m.typist = None
 logged = []; _log = murmur.log; murmur.log = logged.append
 real_handle(m, np.zeros(0)); assert "idle" not in states

@@ -201,7 +201,7 @@ calls = []
 P.http_json = lambda url, body, headers, timeout=120: (calls.append((url, body, headers)) or {"choices": [{"message": {"content": json.dumps({"prompt": "P", "questions": []})}}]})
 P.log = lambda s: None
 res = P.draft({"prompt_engine": "openrouter"}, "d", "code", workdir=app)
-assert res["prompts"] == ["P"] and calls[-1][2]["Authorization"] == "Bearer sk-or-v1-newkey" and calls[-1][1]["model"] == "openai/gpt-5.6-luna"
+assert res["prompts"] == ["P"] and calls[-1][2]["Authorization"] == "Bearer sk-or-v1-newkey" and calls[-1][1]["model"] == "anthropic/claude-sonnet-5"
 C.forget_openrouter(app)
 try:
     P.draft({"prompt_engine": "openrouter"}, "d", "code", workdir=app)

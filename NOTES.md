@@ -208,6 +208,42 @@ Decisions
   Text clip the last one - the panel's Texts have no spacing. Dictating into an answer field
   works because Typist already skips the paste when murmur's own window is in front; the take
   now also lands in the focused panel field (and in History like any take).
+- 1.0.0: the compaction pass, the tap grammar, the README (2026-09-01). (1) First run of the
+  major-version cleanup procedure (reference copy: PARA vault,
+  3-Resources/programming/major-release-cleanup.md). Baseline: 7 suites green, source 5824
+  lines. Static evidence: pyflakes 6 finds; vulture 60%-confidence gave 29 candidates, most
+  of them dynamic-dispatch false positives (_body_* reached via _show, the HTTP handler's
+  do_GET/log_message, ctypes struct fields, pystray callback params) - each candidate got a
+  repo-wide grep before a verdict. Deleted with evidence: connect.OpenRouterConnect.key_status
+  + KEY_URL (written for a usage read-out that was never wired; 0 callers, 0% coverage),
+  overlay's nested profile() (superseded by lobes(); only comments still said "profile"),
+  brand.MARK_16 (the written-out 16 px path; _G16 generates the real geometry - MARK_64 stays,
+  it draws the SVGs), window._move (app-side 0 callers, kept alive by its own test; tests
+  rewired to _nav_key + the list's own move), the clear_all back-compat alias (0 consumers),
+  murmur.py's duplicate `import connect` (window.py imports it at top level; PyInstaller
+  follows either), two unused locals, four unused test imports, and the stale "a key for the
+  API engines, a base URL for the custom one" DEFAULTS comment (pre-login-only remnant).
+  Dynamic evidence: coverage.py across all 7 suites = 87% total; every uncovered block >= 8
+  lines answers "what real event executes you?" (first-run vocab seed, ctypes DPI/boot paths,
+  real-network http_json, dynamic settings rows) - no dead code beyond the static finds. No
+  profile-driven efficiency work: startup is already instrumented (since_launch) and dominated
+  by the model load; nothing else showed. (2) luna routing reverted - the user: luna is free
+  on web chat only; codex default model back to blank (Codex's own pick), openrouter back to
+  anthropic/claude-sonnet-5; claude stays the default engine. (3) The tap grammar: the bound
+  trigger key now follows the chord exactly (hold = record while held, double-tap =
+  persistent, a later press stops) instead of one-press toggle, guarded against WM_KEYDOWN
+  auto-repeat; triple-tap - three fast presses, chord or trigger key - opens the window
+  (run_app hands Murmur.on_open = open_window, marshalled via root.after). The second tap of
+  a triple starts a fraction-of-a-second take; discard() stops it without transcribing (the
+  first tap's tiny take still transcribes to nothing, same as a double-tap always did). Tap
+  runs are counted against DOUBLE_TAP_S from the last release; a run broken by time resets to
+  1. (4) README rebuilt for 1.0: an honest comparison table (Win+H, cloud AI dictation, raw
+  Whisper), "the first five minutes" onboarding, screenshots in docs/ (PrintWindow by HWND at
+  the real DPI scale, light+dark via <picture>, staged history + a real-shaped Promptify
+  draft with a Context link; overlay strip grabbed over a clean fullscreen ground), the
+  lockup in the header, the mark + one quiet star line in the footer. Screenshot harness kept
+  in the session scratchpad (readme_shots.py), not the repo. Source after the pass: 5826
+  lines (deletions minus the ~50 the tap grammar added).
 - Promptify v2, the vault bridge, luna routing (2026-09-01, v0.10). Three asks. (1) "In depth
   research about prompt engineering" from the Anthropic lectures et al: two research agents mined
   the deep-dive roundtable (Albert/Askell/Witten/Hershey), Prompting 101, the interactive

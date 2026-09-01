@@ -164,9 +164,9 @@ root.update()
 # selecting, keyboard, copy
 win._select(win.rows[3][0])
 assert win.detail.get("1.0", "end").strip() == win.rows[3][0]["text"].strip()
-win._move(1)
+win._nav_key(1)                     # reaches the list, focuses it, moves
 assert win.sel is win.rows[4][0]
-win._move(-1)
+win._list().move(-1)                # once focused, Up/Down are the list's own binding
 assert win.sel is win.rows[3][0]
 win.b_copy.f.event_generate("<Button-1>")
 win.b_copy.f.event_generate("<ButtonRelease-1>")

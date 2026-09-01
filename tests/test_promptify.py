@@ -71,7 +71,7 @@ a = P.cli_argv(P.engine_spec({"prompt_engine": "claude", "prompt_models": {"clau
 assert a[a.index("--model") + 1] == "opus"
 a = P.cli_argv(P.engine_spec({"prompt_engine": "codex"}), sysfile, wd)
 assert a[1:4] == ["exec", "-", "--json"] and "--ephemeral" in a
-assert a[a.index("-m") + 1] == "gpt-5.6-luna"      # the GPT default is luna (user's routing, 2026-09-01)
+assert "-m" not in a                               # blank default: Codex's own model pick
 assert a[a.index("-C") + 1] == str(wd / "empty") and a[a.index("--output-schema") + 1] == str(wd / "schema.json")
 assert 'approval_policy="never"' in a and 'web_search="disabled"' in a
 assert f"model_instructions_file='{sysfile.as_posix()}'" in a and json.loads((wd / "schema.json").read_text()) == P.SCHEMA
@@ -242,7 +242,6 @@ P.login_check = lambda spec, argv: None
 print("runner ok: envelopes, JSONL, auth, crash, timeout, cancel, login check")
 
 # --- OpenRouter: the Connect-flow key on the OpenAI-compatible endpoint, against a fake http_json ---
-import connect as C
 calls = []
 
 
@@ -266,7 +265,7 @@ P.http_json = fake_http
 res = P.draft({"prompt_engine": "openrouter"}, "d", "code", workdir=work)
 url, body, headers = calls[-1]
 assert url == "https://openrouter.ai/api/v1/chat/completions" and headers["Authorization"] == "Bearer sk-or-v1-k"
-assert headers["X-Title"] == "murmur" and body["model"] == "openai/gpt-5.6-luna"    # luna default (2026-09-01)
+assert headers["X-Title"] == "murmur" and body["model"] == "anthropic/claude-sonnet-5"
 assert body["messages"][0] == {"role": "system", "content": "PROMPTIFY-SYSTEM rules\n"}
 assert body["messages"][1]["role"] == "user" and "<dictation>" in body["messages"][1]["content"]
 assert body["response_format"] == {"type": "json_object"} and res["prompts"] == ["Do X"]

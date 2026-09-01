@@ -1279,11 +1279,6 @@ class AppWindow:
         if self.view == "promptify":
             self._show(self._state_for(it))
 
-    def _move(self, step) -> None:
-        lst = self._list()
-        if lst is not None:
-            lst.move(step)
-
     def _nav_key(self, step) -> None:
         """Up/Down reach the view's list before it has focus - but never while a field has it."""
         f, lst = self.win.focus_get(), self._list()
@@ -1362,8 +1357,6 @@ class AppWindow:
         self._clear_cancel()
         self.refresh()
 
-    clear_all = _clear_do          # kept: the old public name
-
     # --- settings view -----------------------------------------------------------------------
     def _build_settings(self, f) -> None:
         """Title row, the scroll-only rule at 56, the groups in a body canvas from 64 (the
@@ -1437,7 +1430,7 @@ class AppWindow:
     def _listening(self, parent) -> None:
         p = self.pal
         g = self._group(parent, "Listening")
-        r = _Row(self, g, "Trigger key", "A headset button, media key or F13 toggles recording")
+        r = _Row(self, g, "Trigger key", "A headset button, media key or F13; hold, double- and triple-tap like the chord")
         # three widgets in one right-aligned group: packed straight into r.right they hugged the
         # LEFT edge of the control column and broke the one right edge every other row shares
         ground = r.right["bg"]
@@ -1715,7 +1708,7 @@ class AppWindow:
                       highlightthickness=ring, highlightbackground=ground, highlightcolor=p["ring"])
         c.pack(side="right", padx=(0, self.px(SP[2])))
         r = self.px(14) / 2
-        track = c.create_line(r, H / 2, W - r, H / 2, fill=p["border_strong"], width=self.px(2))
+        c.create_line(r, H / 2, W - r, H / 2, fill=p["border_strong"], width=self.px(2))
         fill = c.create_line(r, H / 2, r, H / 2, fill=p["primary"], width=self.px(2))
         face = self.up(ground)          # the knob is a step above whatever it slides on
         knob = c.create_image(r, H / 2, image=self.img(
@@ -2403,7 +2396,7 @@ class AppWindow:
         if it.get("draft"):
             self._show("draft")
             return
-        ok, why = promptify.available(self.cfg)
+        ok, _ = promptify.available(self.cfg)
         if not ok:
             self._show("noengine")
             return
@@ -2554,7 +2547,7 @@ class AppWindow:
         """Pass 2 with the answers as they stand; with none given, pass 1 again."""
         if self.drafting is not None or self.pstate != "draft":
             return
-        ok, why = promptify.available(self.cfg)
+        ok, _ = promptify.available(self.cfg)
         if not ok:
             self._show("noengine")
             return

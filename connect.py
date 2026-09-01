@@ -285,7 +285,6 @@ class OpenRouterConnect:
     Never fetch the auth URL from Python - Cloudflare answers 403 to anything but a browser."""
     AUTH_URL = "https://openrouter.ai/auth"
     EXCHANGE_URL = "https://openrouter.ai/api/v1/auth/keys"
-    KEY_URL = "https://openrouter.ai/api/v1/key"
     PATH = "/callback"
     DONE = (b"<!doctype html><meta charset=utf-8><title>murmur</title><body style='font:16px system-ui;"
             b"padding:3em;text-align:center'><h2>murmur is connected to OpenRouter</h2><p>You can close this tab.</p>")
@@ -374,19 +373,6 @@ class OpenRouterConnect:
         if not isinstance(key, str) or not key.startswith("sk-or-"):
             raise cls.Error("OpenRouter answered without a key.")
         return key
-
-    @classmethod
-    def key_status(cls, key: str, timeout=10.0) -> dict:
-        """Online: GET /api/v1/key -> {label, limit, limit_remaining, usage, is_free_tier...};
-        a 401 means the user deleted the key on openrouter.ai."""
-        req = urllib.request.Request(cls.KEY_URL, headers={"Authorization": f"Bearer {key}", "User-Agent": "murmur"})
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return json.load(r)["data"]
-        except urllib.error.HTTPError as e:
-            raise cls.Error(cls._errmsg(e)) from None
-        except (urllib.error.URLError, OSError) as e:
-            raise cls.Error(f"No connection: {getattr(e, 'reason', e)}") from None
 
     @staticmethod
     def _errmsg(e: urllib.error.HTTPError) -> str:

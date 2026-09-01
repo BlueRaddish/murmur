@@ -269,11 +269,6 @@ class Overlay:
         k = np.exp(-0.5 * (np.arange(-8, 9) / 3.0) ** 2); k /= k.sum()
         taper = np.sin(np.linspace(0, np.pi, N)) ** 0.35     # still meets the tips
 
-        def profile(b):
-            pr = np.interp(np.linspace(0, len(b) - 1, N), np.arange(len(b)), b)
-            pr = np.convolve(np.pad(pr, 8, mode="edge"), k, mode="valid")
-            return pr * taper
-
         # organic asymmetry: the mirrored spectrum (lows centre) is modulated by a smooth random
         # field - a few sines with random phases, drifting slowly - different for top and bottom,
         # so the shape is never the same twice and never favours one side

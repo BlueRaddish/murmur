@@ -1,8 +1,6 @@
 """vault: index building over a fake vault, spoken-name matching, scoring, exclusions, the
 deadline-guarded snippet reads, the injected format, and the Obsidian URI.
 Run: python tests/test_vault.py"""
-import json
-import os
 import sys
 import tempfile
 import time

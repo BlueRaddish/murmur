@@ -22,11 +22,8 @@ GREEN = "#1f9a3a"          # brand green: the icon tile's ground, the lockup's m
 
 MARK_64 = ("M8 52 L8 28 A12 12 0 0 1 32 28 L32 52 L24 52 L24 28 A4 4 0 0 0 16 28 L16 52 Z "
            "M24 52 L24 28 A16 16 0 0 1 56 28 L56 52 L48 52 L48 28 A8 8 0 0 0 32 28 L32 52 Z")
-MARK_16 = ("M2 13 L2 7 A3 3 0 0 1 8 7 L8 13 L6 13 L6 7 A1 1 0 0 0 4 7 L4 13 Z "
-           "M6 13 L6 7 A4 4 0 0 1 14 7 L14 13 L12 13 L12 7 A2 2 0 0 0 8 7 L8 13 Z")
-
 # (centre x, spring-line y, inner radius, outer radius) per arch, plus the shared baseline.
-# The paths above are these numbers written out; keep the two in step.
+# MARK_64 is _G64 written out; keep the two in step.
 _G64 = ((20, 28, 4, 12), (40, 28, 8, 16))
 _G16 = ((5, 7, 1, 3), (10, 7, 2, 4))
 _BASE64, _BASE16 = 52, 13

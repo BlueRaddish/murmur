@@ -7,9 +7,11 @@ vocab.txt, which is fed to Whisper as a prompt so it prefers those spellings.
 Modes
   hold        hold Ctrl+Win, speak, release -> typed.
   persistent  double-tap Ctrl+Win -> keeps recording until Ctrl+Win is pressed again.
+  triple-tap  three fast taps -> opens the murmur window instead of recording.
   trigger key (opt-in) any single key - a wired headset's button, a media key, F13 - bound
-              in Settings by pressing it, toggles recording. It is its own trigger, never
-              translated into Ctrl+Win, so no stray modifier keystrokes reach apps.
+              in Settings by pressing it. Same grammar as the chord: hold to record,
+              double-tap for persistent, triple-tap for the window. It is its own trigger,
+              never translated into Ctrl+Win, so no stray modifier keystrokes reach apps.
 
 A glassy disc at the bottom of the screen shows the mode and live mic level, so you can
 see it is actually hearing you. The tray's "Open murmur" window keeps a history of
@@ -61,7 +63,8 @@ HERE = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resol
 RES = Path(getattr(sys, "_MEIPASS", HERE))  # PyInstaller puts --add-data files here (_internal/)
 APPDIR = Path(os.environ.get("APPDATA", HERE)) / "murmur"
 SAMPLE_RATE = 16000
-DOUBLE_TAP_S = 0.4          # second chord press within this window = persistent mode
+DOUBLE_TAP_S = 0.4          # press within this window of the last release continues a tap run:
+                            # two taps = persistent mode, three = open the window
 VK_MEDIA_PLAY_PAUSE = 0xB3  # what a wired headset's inline button sends on Windows
 
 # Hold both of these to record. Key.cmd is the Win key on Windows, Cmd on macOS.
@@ -72,8 +75,8 @@ DEFAULTS = {"model": "small.en", "device": "cpu", "language": None, "mic": None,
             "beam_size": 5, "streaming": True, "retention_days": 7, "color": "#e63c3c",
             "color_busy": "#ffaa32", "opacity": 0.9, "haze": False, "indicator": "waves",
             # Promptify: which engine writes the prompt, its model (blank = the engine's default),
-            # a key for the API engines, a base URL for the custom one, the target the prompt is
-            # written for, and whether the "this leaves the machine" line has been acknowledged
+            # the target the prompt is written for, and whether the "this leaves the machine"
+            # line has been acknowledged
             "prompt_engine": "claude", "prompt_models": {}, "prompt_target": "code", "prompt_ack": False,
             # the Obsidian bridge: a vault path (None = off), folders kept out of its index, and
             # whether the with-vault disclosure has been acknowledged
@@ -354,12 +357,15 @@ class Murmur:
         self.typist = Typist()
         self.on_state = on_state or (lambda s: None)
         self.on_text = on_text or (lambda t: None)   # history hook
+        self.on_open = lambda: None       # triple-tap: run_app points this at the window
         self.state = "idle"
         self.held: set = set()
         self.recording = False
         self.persistent = False
         self.chord_was_down = False
+        self.trigger_down = False
         self.last_chord_release = 0.0
+        self.taps = 0                     # length of the current fast-tap run
         self.lock = threading.Lock()      # one transcription at a time
         self.ctl = threading.Lock()       # start/stop/toggle come from listener, tray and filter threads
         self.pending = 0                  # transcriptions queued or running
@@ -432,21 +438,41 @@ class Murmur:
         threading.Thread(target=self.handle, args=(audio, take), daemon=True).start()
 
     def toggle(self) -> None:
-        """Headset button and tray menu: one press starts persistent, the next stops."""
+        """Tray menu: one click starts persistent, the next stops."""
         if self.recording:
             self.stop()
         else:
             self.start(persistent=True)
+
+    def discard(self) -> None:
+        """Stop without transcribing - the fraction-of-a-second take a triple-tap's second
+        press started."""
+        with self.ctl:
+            if not self.recording:
+                return
+            self.recording = self.persistent = False
+            self.recorder.stop()
+            take, self.take = self.take, None
+            take.active = False
+            log("[discard]")
+            self._set("idle")
 
     # --- hotkey -------------------------------------------------------------
     def _chord_down(self) -> bool:
         return bool(self.held & CTRL_KEYS) and bool(self.held & CMD_KEYS)
 
     def chord_pressed(self, now: float) -> None:
-        if self.persistent:                 # chord again while persistent = stop
+        run = now - self.last_chord_release < DOUBLE_TAP_S
+        self.taps = self.taps + 1 if run else 1
+        if self.taps == 3:                  # triple-tap: the window, not a take
+            self.taps = 0
+            self.discard()
+            self.on_open()
+            return
+        if self.persistent:                 # press while persistent = stop
             self.stop()
             return
-        self.start(persistent=now - self.last_chord_release < DOUBLE_TAP_S)
+        self.start(persistent=run)
 
     def chord_released(self, now: float) -> None:
         self.last_chord_release = now
@@ -469,9 +495,10 @@ class Murmur:
 
     def win32_event_filter(self, msg, data) -> bool:
         """Runs for every key, before pynput's own handling. Two jobs: report the next key to a
-        waiting capture callback (binding the trigger key), and act on the bound trigger key -
-        key-down toggles, both down and up are swallowed so nothing else (a media player, the
-        focused app) sees it. Everything else passes through untouched."""
+        waiting capture callback (binding the trigger key), and act on the bound trigger key
+        with the chord's grammar - hold records, double-tap goes persistent, triple-tap opens
+        the window; both down and up are swallowed so nothing else (a media player, the focused
+        app) sees it. Everything else passes through untouched."""
         vk = data.vkCode
         down = msg in (0x100, 0x104)  # WM_KEYDOWN, WM_SYSKEYDOWN
         if self.capture is not None:
@@ -483,8 +510,12 @@ class Murmur:
             return True
         trig = self.cfg.get("trigger_vk")
         if trig is not None and vk == trig:
-            if down:
-                self.toggle()
+            if down and not self.trigger_down:   # holding a key auto-repeats WM_KEYDOWN
+                self.trigger_down = True
+                self.chord_pressed(time.monotonic())
+            elif not down:
+                self.trigger_down = False
+                self.chord_released(time.monotonic())
             self.listener.suppress_event()
         return True
 
@@ -620,7 +651,7 @@ class Murmur:
                         self._set("idle")
 
     def run(self) -> None:
-        log(f"ready: hold Ctrl+Win and talk; double-tap for persistent mode.  {since_launch()}")
+        log(f"ready: hold Ctrl+Win and talk; double-tap for persistent, triple-tap for the window.  {since_launch()}")
         self._set("idle")
         self.listener = keyboard.Listener(on_press=self.on_press, on_release=self.on_release,
                                           win32_event_filter=self.win32_event_filter)
@@ -663,7 +694,6 @@ def run_app(factory, cfg: dict, cfg_path: Path) -> None:
     from overlay import Overlay, set_dpi_aware
     from window import AppWindow, History
     import promptify
-    import connect                    # bundled with the app: the engines' sign-in and state
     import vault
     promptify.log = log               # engine diagnostics (never its text) into murmur.log
     vault.log = log
@@ -735,6 +765,7 @@ def run_app(factory, cfg: dict, cfg_path: Path) -> None:
             return
         holder["app"].on_state = on_state
         holder["app"].on_text = on_text
+        holder["app"].on_open = open_window
         holder["app"].run()
 
     def tick() -> None:
@@ -760,7 +791,7 @@ def main(argv=None) -> int:
     p.add_argument("--device", choices=["cpu", "cuda"])
     p.add_argument("--language", help="force a language code, e.g. en, ko. default: en for *.en models")
     p.add_argument("--mic", help="input device index or name substring (see --list-devices)")
-    p.add_argument("--trigger-vk", type=lambda v: int(v, 0), help="virtual-key code that toggles recording (e.g. 0xB3 = Play/Pause)")
+    p.add_argument("--trigger-vk", type=lambda v: int(v, 0), help="virtual-key code bound as the trigger key (e.g. 0xB3 = Play/Pause)")
     p.add_argument("--vocab", type=Path, help="terms file fed to Whisper as a prompt")
     p.add_argument("--config", type=Path, default=APPDIR / "config.json")
     p.add_argument("--console", action="store_true", help="no tray/overlay/window; log to the console")
