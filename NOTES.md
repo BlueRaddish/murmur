@@ -208,6 +208,25 @@ Decisions
   Text clip the last one - the panel's Texts have no spacing. Dictating into an answer field
   works because Typist already skips the paste when murmur's own window is in front; the take
   now also lands in the focused panel field (and in History like any take).
+- 1.0.0, the second verdict (2026-09-01, three asks). (1) "A dark mode option inside the
+  settings": a Window > Appearance segment (System / Light / Dark, cfg "theme", default
+  "system"); the palette is baked into every widget, so a change rebuilds the toplevel in place
+  (geometry, view, selection kept; jobs cancelled first; a running draft's ticker lives in the
+  old window, so the rebuild waits for the draft to land). The cfg choice beats the
+  constructor's theme override (tests and screenshots), which beats the Windows setting. (2)
+  "A bit of a cut off in the middle of the haze... we defined the widget size a bit too small":
+  exactly that - the layered window was W+2*PAD by H+2*PAD (92 x 51 logical) and the haze's
+  Gaussian (sigma 11-12 logical, x2.2-2.4 gain) is visible ~3 sigma past the shape, so the
+  window edge sliced through it. Now the window grows by HAZE_PAD = 36 each side while the haze
+  is on; the per-pixel _fill work stays on the small CORE canvas (cw x ch) and only the haze
+  layer is built on the big one (a cheap L-channel blur), the core composited over it; the
+  stick keeps its screen position (_place anchors it, not the window). Rendered check: alpha
+  at the row where the edge used to be = 2 / 20 / 8 (idle / recording / busy), 0 at the new
+  edges - the haze crosses the old line and fades out inside the window. Cached with the
+  static fill so the busy state costs nothing extra per frame. (3) "Just remove the style
+  part... we'll just use waveform": the Light style is gone - Settings row, cfg key
+  "indicator" (old configs drop it silently), _light, _mic_level, phase/lvl/lpeak, the tick
+  branch - and the tests with it (the dissolve test now uses a _fill frame). 
 - 1.0.0, the user's first verdict (2026-09-01, seven asks, all in the same version - it never
   shipped). (1) "Takes a long time to promptify... tried it with the para": murmur.log had the
   real call - ONE claude engine call, rc 0, 93.6 s; the vault index rebuild ran 12 min later in

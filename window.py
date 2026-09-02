@@ -801,7 +801,8 @@ class RowList(tk.Canvas):
 class AppWindow:
     """root: the (withdrawn) Tk root. cfg: the live config dict shared with the app.
     on_save(cfg): persist settings. links: {"vocab": fn, "folder": fn} for the sidebar footer.
-    theme: "light"/"dark" to override the Windows setting (tests and screenshots).
+    theme: "light"/"dark" to override the Windows setting (tests and screenshots); a
+    "theme" of "light"/"dark" in cfg (Settings > Appearance) wins over both.
     icon: path of an .ico for the title bar (else Tk's feather)."""
 
     def __init__(self, root: tk.Tk, history: History, cfg: dict, on_save, scale: float = 1.0,
@@ -855,7 +856,9 @@ class AppWindow:
             self.win.withdraw()
 
     def _build(self) -> None:
-        self.dark = (self.theme == "dark") if self.theme else system_dark()
+        chosen = self.cfg.get("theme")
+        self.dark = (chosen == "dark") if chosen in ("light", "dark") else \
+            (self.theme == "dark") if self.theme else system_dark()
         # the brand green, not the bar's colour: the bar colour is the user's per-take signal and
         # can be anything (their red made the whole window pink); the window is the product's
         p = self.pal = palette(brand.GREEN, self.dark)
@@ -1459,6 +1462,7 @@ class AppWindow:
         # back on E and the controls on the header's right edge
         body = tk.Frame(inner, bg=p["bg"])
         body.pack(fill="x", padx=self.px(SP[0]))
+        self._appearance(body)
         self._indicator(body)
         self._listening(body)
         self._history_group(body)
@@ -1476,15 +1480,53 @@ class AppWindow:
         body.pack(fill="x", pady=self.px(SP[0]))   # 12 (row) + 4 = the card's 16 px top padding
         return body
 
-    def _indicator(self, parent) -> None:
-        g = self._group(parent, "Indicator", first=True)
-        r = _Row(self, g, "Style", "What the bar does while listening")
-        self._segment(r.right, "style", [("Waveform", "waves"), ("Light", "light")],
-                      self.cfg.get("indicator", "waves") or "waves", self._set_style)
+    def _appearance(self, parent) -> None:
+        g = self._group(parent, "Window", first=True)
+        r = _Row(self, g, "Appearance", "System follows the Windows setting")
+        v = self.cfg.get("theme")
+        self._segment(r.right, "theme", [("System", "system"), ("Light", "light"), ("Dark", "dark")],
+                      v if v in ("light", "dark") else "system", self._set_theme)
 
-        self.r_color = _Row(self, g, "Colour", "")
+    def _set_theme(self, v) -> None:
+        self.cfg["theme"] = v
+        self.save()
+        self._rebuild_when_idle()
+
+    def _rebuild_when_idle(self) -> None:
+        """The palette is baked into every widget, so a theme change rebuilds the window in
+        place - after a running draft has landed (its ticker lives in the old window)."""
+        if self.drafting is not None:
+            self.jobs["theme"] = self.win.after(300, self._rebuild_when_idle)
+            return
+        self._rebuild()
+
+    def _rebuild(self) -> None:
+        geo, view, sel = self.win.geometry(), self.view, self.sel
+        for job in list(self.jobs.values()):
+            try:
+                self.win.after_cancel(job)
+            except tk.TclError:
+                pass
+        self.jobs.clear()
+        self.win.unbind_all("<MouseWheel>")
+        self.win.destroy()
+        self.imgs.clear()
+        for lst in (self.cards, self.primaries, self.foot_links):
+            lst.clear()
+        self.ctl.clear()
+        self._build()
+        self.win.geometry(geo)
+        self.show()
+        self.go(view)
+        if sel is not None:
+            self._select(sel)
+        if self.logins:
+            self._login_tick()
+
+    def _indicator(self, parent) -> None:
+        g = self._group(parent, "Indicator")
+        self.r_color = _Row(self, g, "Colour", "Recording and persistent mode")
         self._colors(self.r_color, "color", "#e63c3c")
-        self._style_desc()
         r = _Row(self, g, "Transcribing colour", "The pulse while text is being typed")
         self._colors(r, "color_busy", "#ffaa32")
 
@@ -1492,17 +1534,6 @@ class AppWindow:
         self._slider(r.right, float(self.cfg.get("opacity", 0.9)))
         r = _Row(self, g, "Haze", "A wide soft glow around the bar")
         self._toggle(r.right, bool(self.cfg.get("haze", False)))
-
-    def _style_desc(self) -> None:
-        self.r_color.desc.configure(
-            text="Recording and persistent mode" if self.cfg.get("indicator", "waves") != "light"
-            else "The light while listening")
-        self.r_color.desc.pack(anchor="w", pady=(self.px(SP[0]), 0))
-
-    def _set_style(self, v) -> None:
-        self.cfg["indicator"] = v
-        self._style_desc()
-        self.save()
 
     def _listening(self, parent) -> None:
         p = self.pal

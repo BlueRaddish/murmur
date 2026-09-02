@@ -1,4 +1,4 @@
-"""On-screen indicator: a glassy disc with a soft glow and vertical level bars.
+"""On-screen indicator: a glassy stick with a soft glow that becomes a live spectrum.
 
 Rendered with PIL at physical DPI (supersampled, anti-aliased) into a Win32 layered
 window with per-pixel alpha, so it is crisp on HiDPI and has real shadows and glow
@@ -107,11 +107,14 @@ class Overlay:
     silhouette, mirrored about the centre line, lows in the middle and highs pinching back
     into the stick's tips. Red; amber in persistent mode. An orange-to-yellow pulse runs
     along it while transcribing. Call tick() from the UI thread's timer (~25 fps);
-    post(state) from any thread. With indicator=light the stick keeps its resting look and a
-    single breathing light sits behind it instead of the spectrum."""
+    post(state) from any thread. The haze (a wide soft glow) reaches well past the stick's
+    canvas, so with it on the window grows by HAZE_PAD each side: the expensive per-pixel
+    work stays on the small core canvas, the blurred haze layer is built on the big one and
+    the core is composited over it."""
 
     W, H = 48, 7     # stick size in logical px
     PAD = 22         # headroom for the waveform, glow and shadow
+    HAZE_PAD = 36    # extra margin each side with the haze on: its blur reaches ~3 sigma past the shape
     BANDS = 20       # spectrum bands per half (mirrored -> 40 across)
     NBARS = 14       # fixed-size bars across the container
     SS = 2           # supersampling
@@ -124,7 +127,6 @@ class Overlay:
         self.colors = dict(COLORS)
         self.opacity = 0.9               # 0..1, from config
         self.haze = False
-        self.style = "waves"             # "waves" = spectrum, "light" = one breathing light
         self.busymix = 0.0               # 0 = accent colour, 1 = transcribing colour; eased
         self.pulse_gain = 1.0            # frozen with the colour when the exit starts
         self.rng = np.random.default_rng(7)
@@ -134,8 +136,11 @@ class Overlay:
         self.axes = [[self.rng.uniform(0.2, 0.8, 3), self.rng.uniform(0, 2 * np.pi, 3),
                       self.rng.uniform(0.02, 0.06, 3)] for _ in range(2)]
         self.scale = scale
-        self.w = int((self.W + 2 * self.PAD) * scale)
-        self.h = int((self.H + 2 * self.PAD) * scale)
+        self.cw = int((self.W + 2 * self.PAD) * scale)     # the core canvas: stick, glow, shadow
+        self.ch = int((self.H + 2 * self.PAD) * scale)
+        self.ext = 0                                        # the haze margin, device px
+        self.w, self.h = self.cw, self.ch                   # the window (= core + 2 * ext)
+        self.x = self.y = 0
         self.q: queue.Queue = queue.Queue()
         self.state = "idle"
         self.frame = 0
@@ -147,9 +152,6 @@ class Overlay:
         self.level_from = self.level_to = 0.0
         self.level_t0, self.level_dur = self.t_last, self.EXIT
         self.ctime = 0.0                  # seconds of *active* time: colour/pulse phase
-        self.phase = 0.0                  # breath phase of the light (accumulated, so the
-        #                                   busy period change does not jump)
-        self.lvl = self.lpeak = 0.0       # mic loudness for the light style, auto-gained
         self.last: Image.Image | None = None   # last rendered frame (also when there is no window)
         self.peak = 1.0   # running spectrum reference, so the display fills for any mic gain
         self._cache: dict = {}
@@ -159,7 +161,8 @@ class Overlay:
 
     def configure(self, cfg: dict) -> None:
         """Look from config: 'color' for recording/persistent, 'color_busy' for the
-        transcribing pulse, opacity, haze and the indicator style. Next frame."""
+        transcribing pulse, opacity and haze. Next frame - the haze resizes the window then
+        (UpdateLayeredWindow takes the size with every frame)."""
         rec = hex_rgb(cfg.get("color", ""), COLORS["recording"])
         busy = hex_rgb(cfg.get("color_busy", ""), COLORS["busy"])
         self.colors.update(recording=rec, persistent=rec, busy=busy, loading=busy)
@@ -168,11 +171,17 @@ class Overlay:
         except (TypeError, ValueError):
             self.opacity = 0.9
         self.haze = bool(cfg.get("haze", False))
-        self.style = "light" if cfg.get("indicator") == "light" else "waves"
-        if self.style == "light":
-            self.bands[:] = 0   # light style never calls _analyse: a leftover shape would never
-            #                     decay. Only there: Save mid-take must not flatten a live waveform.
+        self.ext = int(self.HAZE_PAD * self.scale) if self.haze else 0
+        self.w, self.h = self.cw + 2 * self.ext, self.ch + 2 * self.ext
+        self._place()
         self._cache.clear()
+
+    def _place(self) -> None:
+        """Centred, 40 px above the bottom edge - the STICK's position, whatever margin the
+        window carries around it."""
+        sw, sh = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+        self.x = (sw - self.w) // 2
+        self.y = sh - self.ch - int(40 * self.scale) - self.ext
 
     # --- window -------------------------------------------------------------
     def _make_window(self) -> None:
@@ -183,9 +192,7 @@ class Overlay:
         wc.hInstance = ctypes.windll.kernel32.GetModuleHandleW(None)
         wc.lpszClassName = "murmur_overlay"
         user32.RegisterClassW(ctypes.byref(wc))
-        sw, sh = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
-        self.x = (sw - self.w) // 2
-        self.y = sh - self.h - int(40 * self.scale)
+        self._place()
         ex = WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW
         self.hwnd = user32.CreateWindowExW(ex, "murmur_overlay", "murmur", WS_POPUP, self.x, self.y,
                                            self.w, self.h, None, None, wc.hInstance, None)
@@ -219,7 +226,7 @@ class Overlay:
     # --- drawing ------------------------------------------------------------
     def _geom(self):
         S = self.SS * self.scale
-        n_w, n_h = self.w * self.SS, self.h * self.SS
+        n_w, n_h = self.cw * self.SS, self.ch * self.SS      # the core canvas
         x0, y0 = self.PAD * S, self.PAD * S
         x1, y1 = x0 + self.W * S, y0 + self.H * S
         return n_w, n_h, x0, y0, x1, y1, (y1 - y0) / 2
@@ -358,11 +365,6 @@ class Overlay:
         g = Image.new("RGBA", (n_w, n_h), col + (255,))
         g.putalpha(glow)
         img.alpha_composite(g)
-        if self.haze:
-            hz = mask.filter(ImageFilter.GaussianBlur(12 * S)).point(lambda v: min(255, v * 2.4) * 0.45 * self.opacity)
-            h = Image.new("RGBA", (n_w, n_h), col + (255,))
-            h.putalpha(hz)
-            img.alpha_composite(h)
         img.alpha_composite(body)
         edge = np.asarray(mask.filter(ImageFilter.FIND_EDGES), dtype=np.float32)
         rim = Image.new("RGBA", (n_w, n_h), (255, 255, 255, 0))
@@ -371,7 +373,7 @@ class Overlay:
 
     def _glass(self, mask: Image.Image) -> Image.Image:
         """Shadow + frosted glass body for a shape mask. Only the resting look comes through
-        here now: every active state is drawn by _fill (waves) or _light, so the old tinted /
+        here now: every active state is drawn by _fill, so the old tinted /
         glowing half of this (and _base's state argument) is gone."""
         n_w, n_h = mask.size
         S = self.SS * self.scale
@@ -391,11 +393,6 @@ class Overlay:
         frost = Image.new("RGBA", (n_w, n_h), (240, 240, 245, 0))
         frost.putalpha(Image.fromarray((np.asarray(grain, dtype=np.float32) * 0.9 * self.opacity).astype(np.uint8), "L"))
         body.paste(frost, (0, 0), mask)
-        if self.haze:
-            hz = mask.filter(ImageFilter.GaussianBlur(11 * S)).point(lambda v: min(255, v * 2.2) * 0.22 * self.opacity)
-            h = Image.new("RGBA", (n_w, n_h), (245, 245, 250, 255))
-            h.putalpha(hz)
-            img.alpha_composite(h)
         # specular: a blurred bright band across the upper part of the shape
         arr = np.asarray(mask, dtype=np.float32) / 255
         ys = np.arange(n_h, dtype=np.float32)[:, None]
@@ -414,10 +411,37 @@ class Overlay:
         img.alpha_composite(body)
         return img
 
+    def _haze(self, mask: Image.Image, col, blur: float, k: float, gain: float) -> Image.Image:
+        """The wide glow on the BIG canvas: the core mask pasted at the margin, blurred, so
+        nothing of it is clipped by the window edge (it used to cut straight through)."""
+        S = self.SS * self.scale
+        bw, bh, off = self.w * self.SS, self.h * self.SS, self.ext * self.SS
+        m = Image.new("L", (bw, bh), 0)
+        m.paste(mask, (off, off))
+        hz = m.filter(ImageFilter.GaussianBlur(blur * S)).point(lambda v: min(255, v * k) * gain * self.opacity)
+        layer = Image.new("RGBA", (bw, bh), tuple(col) + (255,))
+        layer.putalpha(hz)
+        return layer
+
+    def _frame(self, core: Image.Image, mask: Image.Image, col, blur, k, gain, ckey=None) -> Image.Image:
+        """The window-sized frame: the core alone without the haze, else the haze layer with
+        the core composited over it. `ckey` caches the layer for a static shape."""
+        if not self.haze:
+            return core
+        layer = self._cache.get(ckey) if ckey else None
+        if layer is None:
+            layer = self._haze(mask, col, blur, k, gain)
+            if ckey:
+                self._cache[ckey] = layer
+        big = layer.copy()
+        big.alpha_composite(core, (self.ext * self.SS, self.ext * self.SS))
+        return big
+
     def _base(self) -> Image.Image:
         """The resting stick. Static, so it is built once per configure() and cached."""
         if "idle" not in self._cache:
-            self._cache["idle"] = self._glass(self._stick_mask())
+            mask = self._stick_mask()
+            self._cache["idle"] = self._frame(self._glass(mask), mask, (245, 245, 250), 11, 2.2, 0.22)
         return self._cache["idle"]
 
     def _pulse(self, img, alpha_scale: float = 1.0) -> None:
@@ -441,48 +465,6 @@ class Overlay:
         grad.putalpha(Image.composite(grad.split()[3], Image.new("L", (n_w, n_h), 0), mask))
         img.alpha_composite(grad)
 
-    def _light(self, col) -> Image.Image:
-        """style=light: the resting stick with an LED behind the glass - a small disc at the
-        centre, a halo and a wider bloom that spills past the bar. Breathes slowly (2.2 s, 0.9 s
-        while transcribing) and brightens with the mic level, so speaking lights it up."""
-        n_w, n_h, x0, y0, x1, y1, r = self._geom()
-        S = self.SS * self.scale
-        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-        breath = 0.5 + 0.5 * float(np.sin(self.phase))
-        b = min(1.0, 0.55 + 0.45 * breath + 0.35 * self.lvl) * self.opacity
-        # only the scalar b changes between frames: the two blurs and the mgrid distance field
-        # cost ~10 ms a frame, so build the geometry once (colour-independent) and per frame
-        # only tint and scale it. configure() clears _cache, which is where opacity/scale change.
-        if "led" not in self._cache:
-            def disc(d, blur):
-                m = Image.new("L", (n_w, n_h), 0)
-                ImageDraw.Draw(m).ellipse((cx - d / 2, cy - d / 2, cx + d / 2, cy + d / 2), fill=255)
-                return m.filter(ImageFilter.GaussianBlur(blur))
-
-            rad = 0.4 * self.H * S
-            ys, xs = np.mgrid[0:n_h, 0:n_w].astype(np.float32)
-            d = np.clip(np.hypot(xs - cx, ys - cy) / rad, 0, 1)[..., None]
-            self._cache["led"] = (disc(1.8 * self.H * S, 7 * S),   # bloom, well past the bar
-                                  disc(1.8 * self.H * S, 3 * S),   # halo
-                                  (1 - d) ** 1.6,
-                                  np.clip((1 - d) * rad, 0, 1) * 255)   # 1 px feather at the rim
-        bloom, halo, f, a0 = self._cache["led"]
-
-        def lit(m, alpha):
-            lay = Image.new("RGBA", (n_w, n_h), col + (255,))
-            lay.putalpha(m.point(lambda v: v * alpha * b))
-            return lay
-
-        img = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
-        img.alpha_composite(lit(bloom, 0.35))
-        img.alpha_composite(lit(halo, 0.7))
-        img.alpha_composite(self._base())                          # the glass sits over both
-        # the LED itself: lighter core fading to the accent at its rim (the _fill formula)
-        light = np.array([min(255, c * 0.35 + 255 * 0.65) for c in col], np.float32)
-        rgb = light * f + np.array(col, np.float32) * (1 - f)
-        img.alpha_composite(Image.fromarray(np.concatenate([rgb, a0 * b], 2).astype(np.uint8), "RGBA"))
-        return img
-
     @staticmethod
     def _dissolve(idle: Image.Image, active: Image.Image, level: float) -> Image.Image:
         """Cross-fade idle -> active in PREMULTIPLIED alpha. Straight-alpha blending (what
@@ -502,50 +484,37 @@ class Overlay:
 
     def _render(self) -> Image.Image:
         """One renderer per look: idle is the resting glass, *every* active state is the lit
-        stick (waves) or the light, and `level` dissolves between the two. No renderer swap
-        mid-transition, so nothing can jump."""
+        stick, and `level` dissolves between the two. No renderer swap mid-transition, so
+        nothing can jump."""
         idle = self._base()
         img = idle
         if self.level > 0.0:
             col = self._live_color(self.state)
-            if self.style == "light":
-                act = self._light(col)
+            # with the bands relaxed lobes() is 0 everywhere, so the mask no longer depends on
+            # `frame`; once level and the colour have settled the fill is bit-identical frame to
+            # frame. That is the whole model load and everything past the first ~2 s of a take,
+            # and _fill's per-pixel float32 work is ~17 ms a frame on a CPU already busy with
+            # whisper - so keep one slot (core + mask + haze layer) and re-sweep only the pulse.
+            key = (col, self.haze)
+            slot = self._cache.get("fill")
+            static = self.level >= 1.0 and self.bands.max() == 0.0
+            if static and slot is not None and slot[0] == key:
+                core, mask = slot[1].copy(), slot[2]
             else:
-                # with the bands relaxed lobes() is 0 everywhere, so the mask no longer depends
-                # on `frame`; once level and the colour have settled the fill is bit-identical
-                # frame to frame. That is the whole model load and everything past the first
-                # ~2 s of a take, and _fill's per-pixel float32 work is ~17 ms a frame on a CPU
-                # already busy with whisper - so keep one slot and re-sweep only the pulse.
-                key = (col, self.haze)
-                slot = self._cache.get("fill")
-                static = self.level >= 1.0 and self.bands.max() == 0.0
-                if static and slot is not None and slot[0] == key:
-                    act = slot[1].copy()
-                else:
-                    act = Image.new("RGBA", (self.w * self.SS, self.h * self.SS), (0, 0, 0, 0))
-                    self._fill(act, self._spectrum_mask(self.level), col)   # bands at 0 -> plain stick
-                    if static:
-                        self._cache["fill"] = (key, act.copy())
-                if self.busymix > 0.02:
-                    self._pulse(act, self.busymix * self.pulse_gain)
+                mask = self._spectrum_mask(self.level)                    # bands at 0 -> plain stick
+                core = Image.new("RGBA", (self.cw * self.SS, self.ch * self.SS), (0, 0, 0, 0))
+                self._fill(core, mask, col)
+                if static:
+                    self._cache["fill"] = (key, core.copy(), mask)
+            if self.busymix > 0.02:
+                self._pulse(core, self.busymix * self.pulse_gain)
+            act = self._frame(core, mask, col, 12, 2.4, 0.45, ckey=("haze", key) if static else None)
             img = self._dissolve(idle, act, self.level)
         return img.reduce(self.SS)  # box filter: the 2x supersample already did the anti-aliasing
 
     # --- API ----------------------------------------------------------------
     def post(self, state: str) -> None:
         self.q.put(state)
-
-    def _mic_level(self, x) -> None:
-        """Mic loudness in 0..1 for the light style: RMS auto-gained against a decaying peak,
-        fast attack / slow release."""
-        rms = 0.0
-        if x is not None and len(x) >= 512:
-            rms = float(np.sqrt(np.mean(np.square(np.asarray(x, dtype=np.float32)))))
-            if not np.isfinite(rms):
-                rms = 0.0
-        self.lpeak = max(rms, self.lpeak * 0.995, 0.01)
-        raw = min(1.0, max(0.0, rms / self.lpeak))
-        self.lvl = self.lvl * 0.5 + raw * 0.5 if raw > self.lvl else self.lvl * 0.9
 
     def tick(self) -> None:
         while not self.q.empty():
@@ -565,7 +534,6 @@ class Overlay:
             # colour, pulse and breath advance only while active: during the exit they are frozen
             # and only `level` moves, so the fade cannot drift back towards the accent colour
             self.ctime += dt
-            self.phase += 2 * np.pi * dt / (2.2 - 1.3 * self.busymix)
             self.pulse_gain = 1.0 if self.state == "busy" else 0.6
             bm = 1.0 if self.state in ("busy", "loading") else 0.0
             tau = (0.25 if bm > self.busymix else 0.30) / 3      # ~95% there in 250 / 300 ms
@@ -573,12 +541,7 @@ class Overlay:
         elif self.level <= 0.0:
             self.busymix = 0.0                         # the take is over: forget its colour
             self.bands[:] = 0                          # and its shape
-        if self.style == "light":
-            if self.state in ("recording", "persistent"):
-                self._mic_level(self.get_samples())    # no spectrum analysed in light style
-            elif self.state != "idle":
-                self.lvl *= 0.9                        # settle back to the plain breath
-        elif self.state in ("recording", "persistent"):
+        if self.state in ("recording", "persistent"):
             self._analyse(self.get_samples())
         elif self.bands.max() > 0.01:
             self._analyse(None)                        # keeps relaxing at fall 0.9 while it fades

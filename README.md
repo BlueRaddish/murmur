@@ -87,9 +87,7 @@ ripples across its whole length and pinches back into the stick at the tips, the
 slowly when you stop; it auto-scales to your mic. Colours, opacity and haze are yours:
 Settings has an accent colour (recording) and a transcribing colour with preset swatches, an
 opacity slider and a haze toggle; every change applies as you make it. An orange-to-yellow
-pulse runs along it while transcribing. Settings > Style (or `"indicator": "waves" | "light"`
-in `config.json`) swaps the spectrum for a single light behind the glass that breathes in
-your accent colour and brightens as you speak. If the bar stays flat while you talk, it is
+pulse runs along it while transcribing. If the bar stays flat while you talk, it is
 listening to the wrong input: pick the microphone in Settings.
 
 **Latency.** Transcription runs while you are still talking: every 6 s or so of new speech
@@ -159,12 +157,12 @@ the draft lists which notes were used (click one to open it in Obsidian). Privat
 folders (journal, diary, private, people) are never indexed, and you can exclude more. Off
 by default.
 
-**Settings** - model, microphone, colours, retention, the trigger key; changes apply as you
-make them.
+**Settings** - light or dark (or follow Windows), model, microphone, colours, retention,
+the trigger key; changes apply as you make them.
 
 <picture>
 <source media="(prefers-color-scheme: dark)" srcset="docs/settings-dark.png">
-<img src="docs/settings-light.png" alt="Settings: indicator style and colours, trigger key, microphone">
+<img src="docs/settings-light.png" alt="Settings: appearance, colours, trigger key, microphone">
 </picture>
 
 **Extra trigger key.** Settings > Trigger key > Change... binds any single key - a wired

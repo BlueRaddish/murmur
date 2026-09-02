@@ -73,7 +73,7 @@ CMD_KEYS = {Key.cmd, Key.cmd_l, Key.cmd_r}
 
 DEFAULTS = {"model": "small.en", "device": "cpu", "language": None, "mic": None, "trigger_vk": None,
             "beam_size": 5, "streaming": True, "retention_days": 7, "color": "#e63c3c",
-            "color_busy": "#ffaa32", "opacity": 0.9, "haze": False, "indicator": "waves",
+            "color_busy": "#ffaa32", "opacity": 0.9, "haze": False, "theme": "system",
             # Promptify: which engine writes the prompt, its model (blank = the engine's default),
             # the target the prompt is written for, whether one dictation may split into several
             # prompts, and whether the "this leaves the machine" line has been acknowledged

@@ -99,7 +99,7 @@ def fake_history(n=45):
 def fresh_cfg():
     return {"retention_days": 7, "color": "#00ff00", "color_busy": "#e63c3c", "opacity": 0.9,
             "haze": True, "model": "small.en", "language": None, "mic": None,
-            "trigger_vk": 0xB3}   # note: no "indicator" key
+            "trigger_vk": 0xB3}   # note: no "theme" key
 
 
 clip = []
@@ -263,12 +263,12 @@ print("history view ok")
 # --- settings -------------------------------------------------------------------------------
 win.go("settings")
 root.update()
-assert cfg.get("indicator") is None                      # missing key treated as waveform
+assert cfg.get("theme") is None                          # missing key = follow the system
 
 # the frame: group labels are meta/muted on E over cards that start 12 before it; the row
 # labels land on E; the thumb is 4 px; the rule under the title shows only while scrolled
 glab = win.cards[0].master.pack_slaves()[0]
-assert glab.cget("text") == "Indicator" and glab.cget("fg") == win.pal["muted"]
+assert glab.cget("text") == "Window" and glab.cget("fg") == win.pal["muted"]
 assert W.tkfont.Font(root, font=glab.cget("font")).actual("size") == 9
 Es = lambda w: w.winfo_rootx() - win.views["settings"].winfo_rootx()
 assert Es(glab) == px_(16) and Es(win.cards[0]) == px_(4) and Es(win.r_mic.head) == px_(16)
@@ -291,18 +291,18 @@ assert win.ctl["color"]["entry"].master.winfo_width() == px_(96) == win.e_lang.m
 assert win.e_days.master.winfo_width() == px_(64)
 assert win.r_mic.right.winfo_children()[0].winfo_width() == px_(200)
 # the segment: a `hover` track with no hairline, the picked cell `selected`
-seg_img = lambda i: win.ctl["style"][i][0].cget("image")
-i_on = next(i for i, (l, v) in enumerate(win.ctl["style"]) if v == "waves")
-i_off = 1 - i_on
+seg_img = lambda i: win.ctl["theme"][i][0].cget("image")
+i_on = next(i for i, (l, v) in enumerate(win.ctl["theme"]) if v == "system")
+i_off = next(i for i, (l, v) in enumerate(win.ctl["theme"]) if v == "dark")
 pix = lambda i, x, y: tuple(int(v) for v in root.tk.splitlist(root.tk.call(seg_img(i), "get", x, y)))
 h_seg = win.px(W.H_CTL)
-assert pix(i_on, win.ctl["style"][i_on][0].winfo_width() // 2, h_seg // 2) == W.rgb(win.pal["selected"])
-assert pix(i_off, win.ctl["style"][i_off][0].winfo_width() // 2, h_seg // 2) == W.rgb(win.pal["hover"])
-assert pix(i_off, win.ctl["style"][i_off][0].winfo_width() // 2, 0) == W.rgb(win.pal["hover"])   # no hairline
+assert pix(i_on, win.ctl["theme"][i_on][0].winfo_width() // 2, h_seg // 2) == W.rgb(win.pal["selected"])
+assert pix(i_off, win.ctl["theme"][i_off][0].winfo_width() // 2, h_seg // 2) == W.rgb(win.pal["hover"])
+assert pix(i_off, win.ctl["theme"][i_off][0].winfo_width() // 2, 0) == W.rgb(win.pal["hover"])   # no hairline
 
 # one right edge: every control column, the trigger row's button group and the header agree
 edge = lambda w: w.winfo_rootx() + w.winfo_width()
-for name, w in (("segment", win.ctl["style"][0][0].master), ("hex", win.ctl["color"]["entry"].master),
+for name, w in (("segment", win.ctl["theme"][0][0].master), ("hex", win.ctl["color"]["entry"].master),
                 ("haze", win.ctl["haze"]), ("remove", win.b_rm.f), ("saved", win.saved)):
     assert edge(w) == edge(win.r_mic.right), (name, edge(w), edge(win.r_mic.right))
 
@@ -315,11 +315,6 @@ for _ in range(20):
     seen.append(str(stop))
     assert str(stop).startswith(str(win.views["settings"]) + "."), stop
 assert len(seen) >= 10, seen                             # ... and the whole path is reachable
-win.ctl["style"][1][0].event_generate("<Button-1>")      # the "Light" segment
-root.update()
-assert cfg["indicator"] == "light" and saves[-1]["indicator"] == "light"
-assert "light" in win.r_color.desc.cget("text")
-
 n = len(saves)
 win.ctl["color"]["dots"][3].event_generate("<Button-1>")  # a preset dot
 root.update()
@@ -1025,6 +1020,18 @@ root.update()
 win.list.event_generate("<Enter>")
 root.update()
 assert root.bind_all("<MouseWheel>") != ""
+# Appearance: Dark rebuilds the window in place - same geometry, view and selection - and
+# the cfg choice beats the constructor's theme override; System hands it back
+win.go("settings")
+root.update()
+geo, sel_ = win.win.geometry(), win.sel
+next(l for l, v in win.ctl["theme"] if v == "dark").event_generate("<Button-1>")
+root.update()
+assert cfg["theme"] == "dark" and win.dark and W.lum(win.pal["bg"]) < 0.1 and win.win.winfo_exists()
+assert win.view == "settings" and win.sel is sel_ and win.win.geometry().split("+")[0] == geo.split("+")[0]
+next(l for l, v in win.ctl["theme"] if v == "system").event_generate("<Button-1>")
+root.update()
+assert cfg["theme"] == "system" and not win.dark               # the override says light
 win.hide()
 root.update()
 assert root.bind_all("<MouseWheel>") == "", "wheel binding leaked past hide()"
