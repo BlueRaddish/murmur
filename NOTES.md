@@ -208,6 +208,12 @@ Decisions
   Text clip the last one - the panel's Texts have no spacing. Dictating into an answer field
   works because Typist already skips the paste when murmur's own window is in front; the take
   now also lands in the focused panel field (and in History like any take).
+- 1.0.0, the default model (2026-09-01): "make default model on install base, as the tiny.en
+  is lowkey not that great" - the shipped default was small.en all along; their own config said
+  tiny.en (switched in Settings on 08-28). DEFAULTS model -> base.en (~150 MB first download
+  instead of ~480), README to match, and their config pointed at base.en so the change is real
+  on this machine (base.en was already in the HF cache here). small.en stays the accuracy pick
+  in Settings.
 - 1.0.0, the second verdict (2026-09-01, three asks). (1) "A dark mode option inside the
   settings": a Window > Appearance segment (System / Light / Dark, cfg "theme", default
   "system"); the palette is baked into every widget, so a change rebuilds the toplevel in place

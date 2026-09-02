@@ -35,7 +35,7 @@ before it reaches you. murmur has no server side at all:
 
 - **Audio** is recorded into memory, transcribed by Whisper on this computer, and discarded.
   No account, no API key, no telemetry.
-- **Network** is used exactly once: the first run downloads the model (~480 MB) from Hugging
+- **Network** is used exactly once: the first run downloads the model (~150 MB) from Hugging
   Face. After that murmur checks the local copy first and never goes online again - it works
   with Wi-Fi off.
 - **Text** goes to your clipboard and, if you keep history on, to
@@ -62,7 +62,7 @@ python murmur.py
 ### The first five minutes
 
 1. Start murmur - a tiny glass stick appears at the bottom of the screen and pulses while the
-   model downloads (`small.en`, ~480 MB, first run only).
+   model downloads (`base.en`, ~150 MB, first run only).
 2. Click into any text field, hold **Ctrl+Win**, say a sentence, let go. It types.
 3. Thinking out loud? **Double-tap Ctrl+Win** and it keeps recording until you press again.
 4. **Triple-tap Ctrl+Win** to open the murmur window: everything you dictated in the last
@@ -105,8 +105,8 @@ classic); 1 is greedy and 1.6x faster. Decoding is one deterministic pass: Whisp
 ladder (re-decoding at rising temperatures whenever confidence dips) is off, because on an
 ordinary sentence it cost 20 s and kept a random sample. `"streaming": false` in
 `config.json` transcribes each take whole at release instead.
-`base.en` is another 2x faster than `small.en` but mangles technical terms; switch in
-Settings if you prefer speed.
+`small.en` is noticeably more accurate on technical terms than the default `base.en`, at
+about twice the time per pass; switch in Settings if you prefer accuracy.
 
 ## The window
 
@@ -178,7 +178,7 @@ Settings in the app window (changes apply at once; model, microphone and languag
 restart), or `%APPDATA%\murmur\config.json`; command-line flags override for one run.
 
 ```
---model tiny.en|base.en|small.en|medium.en|large-v3   default small.en
+--model tiny.en|base.en|small.en|medium.en|large-v3   default base.en
 --device cpu|cuda                                     cuda needs an NVIDIA GPU + CUDA libs
 --language en|ko|...                                  default: en for *.en models, else auto
 --mic 2  or  --mic "Headset"                          pick an input; see --list-devices
@@ -186,8 +186,9 @@ restart), or `%APPDATA%\murmur\config.json`; command-line flags override for one
 --console                                             no tray/pill, log to the terminal
 ```
 
-`tiny.en` is near-instant on CPU and fine for short phrases. `small.en` is noticeably more
-accurate and still ~1-2 s for a sentence on a laptop CPU. Multilingual dictation: use a
+`base.en` (the default) is the middle ground: quick on a CPU and fine for everyday
+sentences. `tiny.en` is near-instant but sloppy; `small.en` is noticeably more accurate on
+technical terms and still ~1-2 s for a sentence on a laptop CPU. Multilingual dictation: use a
 model without `.en` (`small`, `medium`, `large-v3`).
 
 ## vocab.txt

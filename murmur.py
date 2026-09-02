@@ -71,7 +71,7 @@ VK_MEDIA_PLAY_PAUSE = 0xB3  # what a wired headset's inline button sends on Wind
 CTRL_KEYS = {Key.ctrl, Key.ctrl_l, Key.ctrl_r}
 CMD_KEYS = {Key.cmd, Key.cmd_l, Key.cmd_r}
 
-DEFAULTS = {"model": "small.en", "device": "cpu", "language": None, "mic": None, "trigger_vk": None,
+DEFAULTS = {"model": "base.en", "device": "cpu", "language": None, "mic": None, "trigger_vk": None,
             "beam_size": 5, "streaming": True, "retention_days": 7, "color": "#e63c3c",
             "color_busy": "#ffaa32", "opacity": 0.9, "haze": False, "theme": "system",
             # Promptify: which engine writes the prompt, its model (blank = the engine's default),
