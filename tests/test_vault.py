@@ -1,6 +1,6 @@
-"""vault: index building over a fake vault, spoken-name matching, scoring, exclusions, the
-deadline-guarded snippet reads, the injected format, and the Obsidian URI.
-Run: python tests/test_vault.py"""
+"""vault: index building over a fake vault, spoken-name matching, scoring, exclusions,
+snippets served from the cached index (the hot path never reads the mount), the injected
+format, and the Obsidian URI. Run: python tests/test_vault.py"""
 import sys
 import tempfile
 import time
@@ -73,21 +73,29 @@ terms = V.extract_terms('use the vibe-check flow like "second brain" with RowLis
 assert "vibe check" in terms and "second brain" in terms and "row list" in terms
 print("search ok")
 
-# --- snippets: deadline-guarded reads, budgets, the injected format --------------------------
+# --- snippets: from the cached index alone, budgets, the injected format ---------------------
 cfg = {"vault_path": str(vp), "vault_exclude": ["0-Inbox"]}
 ctx, used = V.context_for(cfg, d, app)
 assert ctx.startswith("<vault_context>") and ctx.rstrip().endswith("</vault_context>")
 assert '<note path="1-Projects/second-brain/README.md" title="second-brain"' in ctx
 assert "sorts whatever lands in it" in ctx and used[0]["title"] == "second-brain"
+assert "status: active" in ctx                                  # frontmatter lines cached too
 assert len(ctx) < V.TOTAL_BUDGET + 400
-# a hung read falls back to the index description within the deadline
-_read = V._read_deadline
-V._read_deadline = lambda path, deadline: (time.sleep(min(deadline + 0.2, 0.5)), None)[1]
+# the hot path never opens a note file: delete the vault, the cached index still serves
+import shutil
+moved = root / "gone"
+shutil.move(str(vp), str(moved))
 t0 = time.monotonic()
 ctx2, used2 = V.context_for(cfg, d, app)
-assert time.monotonic() - t0 < V.IO_DEADLINE_S + 1.5
-assert "A Drive folder that sorts" in ctx2                      # the desc floor still serves
-V._read_deadline = _read
+assert time.monotonic() - t0 < 0.5 and "sorts whatever lands in it" in ctx2
+shutil.move(str(moved), str(vp))
+# an index without the cached material (pre-v2) is rejected, so it rebuilds instead of degrading
+import json as _json
+raw = _json.loads(V.index_path(app).read_text(encoding="utf-8"))
+raw.pop("v")
+V.index_path(app).write_text(_json.dumps(raw), encoding="utf-8")
+assert V.load_index(app) is None
+V.build_index(str(vp), app, excludes=["0-Inbox"])               # restore for the rest
 # off, unindexed, or no match -> empty, never an exception
 assert V.context_for({"vault_path": ""}, d, app) == ("", [])
 assert V.context_for({"vault_path": str(vp)}, "irrelevant words only", app) == ("", [])

@@ -46,6 +46,7 @@ SCHEMA = {"type": "object", "required": ["analysis", "prompt", "questions"], "pr
 SCHEMA_JSON = json.dumps(SCHEMA, separators=(",", ":"))
 
 TARGETS = (("Claude Code", "code"), ("claude.ai", "chat"))
+ASSUME = "(assume)"      # an answer the speaker delegated: the engine decides and says so
 TIMEOUT = 150            # s; the slowest measured pass was 17 s on this laptop's busy CPU
 
 # key -> how the engine is reached. `model` is the default when the model field is blank;
@@ -83,23 +84,28 @@ def system_prompt() -> str:
     return SYSTEM_FILE.read_text(encoding="utf-8")
 
 
-def message(target: str, dictation: str, prompts=None, questions=None, answers=None, vault_ctx="") -> str:
+def message(target: str, dictation: str, prompts=None, questions=None, answers=None, vault_ctx="",
+            split=False) -> str:
     """Pass 1 wraps the dictation; pass 2 adds the prompt(s) as they stand (the user's edits ride
     along) and the answers, verbatim, "(skipped)" where empty. The vault context, when there is
     one, rides right after the dictation on both passes - pass 2 reuses pass 1's block verbatim
     so the answers fold against the same facts. Text inside the tags is material, and the system
     prompt says so - a dictation that says "ignore your rules" is carried, not obeyed."""
     name = dict((v, k) for k, v in TARGETS).get(target, "Claude Code")
+    sp = "allowed" if split else "never"
     vc = (vault_ctx.strip() + "\n") if (vault_ctx or "").strip() else ""
     if prompts is None:
-        return f"Target: {name}\nPass: 1\n\n<dictation>\n{dictation.strip()}\n</dictation>\n{vc}"
-    out = [f"Target: {name}\nPass: 2\n\n<dictation>\n{dictation.strip()}\n</dictation>\n{vc}"]
+        return f"Target: {name}\nPass: 1\nSplit: {sp}\n\n<dictation>\n{dictation.strip()}\n</dictation>\n{vc}"
+    out = [f"Target: {name}\nPass: 2\nSplit: {sp}\n\n<dictation>\n{dictation.strip()}\n</dictation>\n{vc}"]
     for i, p in enumerate(prompts, 1):
         out.append(f'<previous_prompt n="{i}">\n{p.strip()}\n</previous_prompt>\n')
     out.append("<answers>")
     for i, q in enumerate(questions or []):
         a = (answers or [""] * len(questions))[i] if i < len(answers or []) else ""
         a = " ".join(a.split()) or "(skipped)"
+        if a == ASSUME:
+            a = ("(assume - I delegate this one: pick the reading most consistent with the "
+                 "dictation and state it in the prompt as an Assumed line)")
         out.append(f"{i + 1}. Q: {q.get('q', '')}\n   A: {a}")
     out.append("</answers>\n")
     return "\n".join(out)
@@ -389,10 +395,10 @@ def run_cli_engine(spec: dict, msg: str, cancel, workdir: Path) -> tuple:
                                    watch=("[Y/n]:", b"n\n"))
         else:
             rc, out, err = run_cli(argv, msg, cli_env(spec, sysfile), TIMEOUT, cancel, str(empty))
-        # a nonzero exit with silence on both streams is a CLI crash (seen intermittently under
-        # load right after an auto-update), not an API answer: one retry
-        if attempt == 0 and rc != 0 and not out.strip() and not err.strip():
-            log(f"  promptify {k}: crashed silently (rc {rc}), retrying once")
+        # silence on both streams is never a real answer, exit code 0 or not - the CLI crashes
+        # (or answers empty) intermittently under load since its 08-31 auto-update: one retry
+        if attempt == 0 and not out.strip() and not err.strip():
+            log(f"  promptify {k}: no output (rc {rc}), retrying once")
             continue
         break
     wall = time.monotonic() - t0
@@ -561,12 +567,15 @@ def draft(cfg: dict, dictation: str, target="code", prompts=None, questions=None
         import vault
         vault_ctx, vault_notes = vault.context_for(cfg, dictation, workdir.parent,
                                                    vocab=vocab_text(workdir.parent))
-    msg = message(target, dictation, prompts, questions, answers, vault_ctx or "")
+    split = bool(cfg.get("prompt_split"))
+    msg = message(target, dictation, prompts, questions, answers, vault_ctx or "", split=split)
     if spec["kind"] == "cli":
         obj, meta = run_cli_engine(spec, msg, cancel, workdir)
     else:
         obj, meta = run_api_engine(spec, cfg, msg, appdir=workdir.parent)
     out = normalize(obj)
+    if not split and prompts is None and len(out["prompts"]) > 1:   # belt over the Split line
+        out["prompts"] = ["\n\n".join(out["prompts"])]
     out.update(engine=spec["key"], model=meta.get("model") or spec["model"], target=target,
                wall=meta.get("wall", 0.0), t=time.time(),
                vault_ctx=vault_ctx or "", vault_notes=vault_notes)

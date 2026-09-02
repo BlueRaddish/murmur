@@ -463,13 +463,14 @@ class _Btn:
             self._paint()
 
     def _ring(self, on) -> None:
-        self.ring = on
+        self.ring = on and getattr(self.ui, "kbd", True)   # focus-visible: keyboard focus only
         self._paint()
 
     def _release(self, e) -> None:
         if not self.on:
             return
         self._set("hover")
+        self.ui.kbd = False
         self.f.focus_set()
         if 0 <= e.x < self.f.winfo_width() and 0 <= e.y < self.f.winfo_height():
             self.cmd()
@@ -868,12 +869,32 @@ class AppWindow:
                 w.iconbitmap(str(self.icon))
             except tk.TclError:
                 pass
+        # the .ico alone leaves the title bar stretching a small frame at high DPI (it read as
+        # pixelated at 200%): hand Tk exact-size renders and let it pick per surface
+        try:
+            import io
+            self._icons = []
+            for s in (self.px(16), self.px(32)):
+                buf = io.BytesIO()
+                brand.tile(s).save(buf, "PNG")
+                self._icons.append(tk.PhotoImage(master=w, data=buf.getvalue()))
+            w.iconphoto(False, *self._icons)
+        except Exception:
+            pass
         w.configure(bg=p["bg"])
         w.geometry(f"{self.px(WIN[0])}x{self.px(WIN[1])}")
         w.minsize(self.px(WIN_MIN[0]), self.px(WIN_MIN[1]))
         w.protocol("WM_DELETE_WINDOW", self.hide)
         self.mf = {k: tkfont.Font(w, family=f[0], size=f[1]) for k, f in self.F.items()}
         self.measure = self.mf["body"].measure(SAMPLE80)    # the body column's width, device px
+        # focus-visible: rings mark keyboard focus. A mouse click that happens to focus a
+        # control keeps the ring off - the click already shows its result, and the sudden
+        # green box around a whole segment read as a glitch.
+        self.kbd = True                                     # Tab (and the tests) count as keyboard
+        # on the toplevel's bindtag, which runs BEFORE the "all" tag that moves focus on Tab -
+        # so the FocusIn that follows already sees keyboard mode
+        w.bind("<KeyPress-Tab>", lambda e: setattr(self, "kbd", True), add="+")
+        w.bind("<Button>", lambda e: setattr(self, "kbd", False), add="+")
         # a card starts 12 px before the pane's text edge E (like a row highlight) and spends
         # 1 px on its hairline, so its padding is 12 minus that px - which puts every line of
         # text inside it back on E, cards or no cards
@@ -938,6 +959,7 @@ class AppWindow:
                                                        {"expand": "1", "sticky": "nswe"})]})])
             st.configure(style, troughcolor=ground, background=p["border_strong"], bordercolor=ground,
                          darkcolor=p["border_strong"], lightcolor=p["border_strong"],
+                         gripcount=0,           # clam's thumb draws grip ticks unless told not to
                          arrowsize=self.px(SP[0]) + 2)
             st.map(style, background=[("active", p["muted"])],
                    darkcolor=[("active", p["muted"])], lightcolor=[("active", p["muted"])])
@@ -956,6 +978,13 @@ class AppWindow:
             pass
 
     # --- small parts -------------------------------------------------------------------------
+    def focus_visible(self, wdg, ground) -> None:
+        """Wire a highlight-ring widget to show its ring only under keyboard focus; a later
+        key press while focused (arrows) brings the ring back."""
+        upd = lambda: wdg.configure(highlightcolor=self.pal["ring"] if self.kbd else ground)
+        wdg.bind("<FocusIn>", lambda e: upd(), add="+")
+        wdg.bind("<KeyPress>", lambda e: (setattr(self, "kbd", True), upd()), add="+")
+
     def hairline(self, parent, vertical=False, color=None) -> tk.Frame:
         n = {"width" if vertical else "height": 1}
         return tk.Frame(parent, bg=color or self.pal["border"], **n)
@@ -1118,20 +1147,26 @@ class AppWindow:
         self._nav_paint(name, p["hover"] if on else p["surface"])
 
     def go(self, name) -> None:
+        """Prepare the target view while it is still hidden, flush the layout, then swap - a
+        frame mutated on screen paints in visible steps (the repaint the user called not
+        flowy). grid/grid_remove, not tkraise: an unmapped frame is skipped by tk_focusNext,
+        a raised-over one is not."""
         self.view = name
         p = self.pal
         for n, (row, l) in self.nav.items():
             sel = n == name
             self._nav_paint(n, p["selected"] if sel else p["surface"])
             l.configure(fg=p["ink"] if sel else p["muted"])
-        for n, v in self.views.items():        # not tkraise: an unmapped frame is skipped by
-            v.grid() if n == name else v.grid_remove()   # tk_focusNext, a raised-over one is not
         lst = self._list()
         if lst is not None:                    # both lists share the selection: the one shown
             lst.paint()                        # catches up and brings the row into view
-            self.win.after_idle(lst.show_sel)
         if name == "promptify":
             self._show(self._state_for(self.sel))
+        self.win.update_idletasks()            # the hidden frame's layout settles off screen
+        for n, v in self.views.items():
+            v.grid() if n == name else v.grid_remove()
+        if lst is not None:
+            self.win.after_idle(lst.show_sel)
 
     # --- history view ------------------------------------------------------------------------
     def _build_history(self, f) -> None:
@@ -1188,6 +1223,10 @@ class AppWindow:
         self.dsb = ttk.Scrollbar(trow, orient="vertical", style="C.Vertical.TScrollbar",
                                  command=self.detail.yview, takefocus=0)
         self.detail.configure(yscrollcommand=self.dsb.set)
+        self.detail.bind("<Escape>", lambda e: (self._edit_abort(), self._select(self.sel))
+                         if self.editing else None)
+        self.detail.bind("<Control-Return>", lambda e: (self._edit_toggle(), "break")[1]
+                         if self.editing else None)
 
         act = self.act = tk.Frame(card, bg=p["surface"])
         act.pack(fill="x", padx=self.cpad, pady=(self.px(SP[2]), self.cpad))
@@ -1196,6 +1235,10 @@ class AppWindow:
         # the way into the Promptify view from here: the same row, drafting at once (Ctrl+D)
         self.b_prompt = _Btn(self, act, "Promptify", self._to_promptify)
         self.b_prompt.f.pack(side="left", padx=(self.px(SP[1]), 0))
+        # fix what Whisper misheard before it goes anywhere ("para" once landed as "power")
+        self.editing = False
+        self.b_edit = _Btn(self, act, "Edit", self._edit_toggle)
+        self.b_edit.f.pack(side="left", padx=(self.px(SP[1]), 0))
         self.b_del = _Btn(self, act, "Delete", self.delete_selected)
         self.b_del.f.pack(side="left", padx=(self.px(SP[1]), 0))
         # the status ("Copied", "Deleted · Undo") is meta on the SAME row, after the buttons -
@@ -1262,9 +1305,43 @@ class AppWindow:
         finally:
             self._fitting = False
 
+    def _edit_toggle(self) -> None:
+        """Edit makes the transcript card writable; the same button saves. Esc abandons,
+        leaving the row abandons. A changed text drops the entry's draft - it was made FROM
+        the old words."""
+        if self.sel is None:
+            return
+        if not self.editing:
+            self.editing = True
+            self.b_edit.text("Save", hold=False)
+            self.s_undo.pack_forget()
+            self.s_text.configure(text="Editing · Ctrl+Enter saves · Esc cancels")
+            self.detail.configure(state="normal")
+            self.detail.focus_set()
+            return
+        text = " ".join(self.detail.get("1.0", "end-1c").split())
+        it, self.editing = self.sel, False
+        self.b_edit.text("Edit", hold=False)
+        self.s_text.configure(text="")
+        if text and text != it["text"]:
+            it["text"] = text
+            had = it.pop("draft", None) is not None
+            self.history.save()
+            self.refresh()
+            self.s_undo.pack_forget()
+            self.flash(self.s_text, "Saved · draft cleared" if had else "Saved")
+        self._select(it)
+
+    def _edit_abort(self) -> None:
+        self.editing = False
+        self.b_edit.text("Edit", hold=False)
+        self.s_text.configure(text="")
+
     def _select(self, it) -> None:
         """The one selection, shared by both lists; the History card and the Promptify detail
         pane follow it."""
+        if getattr(self, "editing", False):
+            self._edit_abort()               # leaving the row abandons the edit
         self.sel = it
         if self.p_err and self.p_err[0] is not it:
             self.p_err = None            # a failure belongs to the dictation it happened on
@@ -1587,8 +1664,9 @@ class AppWindow:
         def paint():
             fills = tuple(p["selected"] if v == value[0] else
                           p["active"] if i == hover[0] else None for i, (_, v) in enumerate(cells))
-            border = p["ring"] if focus[0] else p["hover"]        # idle: the track's own colour
-            bw = self.px(2) if focus[0] else 1
+            ringed = focus[0] and self.kbd            # focus-visible: keyboard focus only
+            border = p["ring"] if ringed else p["hover"]          # idle: the track's own colour
+            bw = self.px(2) if ringed else 1
             for i, (l, val) in enumerate(cells):
                 l.configure(fg=p["ink"] if val == value[0] else p["muted"],
                             image=self.img(("seg", ws, i, fills, ground, border, bw),
@@ -1611,9 +1689,10 @@ class AppWindow:
         for i, (l, val) in enumerate(cells):
             l.bind("<Enter>", lambda e, i=i: hov(i))
             l.bind("<Leave>", lambda e: hov(None))
-            l.bind("<Button-1>", lambda e, v=val: pick(v))
-        step = lambda d: pick(cells[(next(i for i, c in enumerate(cells) if c[1] == value[0])
-                                    + d) % len(cells)][1])
+            l.bind("<Button-1>", lambda e, v=val: (setattr(self, "kbd", False), pick(v)))
+        step = lambda d: (setattr(self, "kbd", True),
+                          pick(cells[(next(i for i, c in enumerate(cells) if c[1] == value[0])
+                                      + d) % len(cells)][1]))
         f.bind("<Left>", lambda e: step(-1))
         f.bind("<Right>", lambda e: step(1))
         f.bind("<FocusIn>", lambda e: (focus.__setitem__(0, True), paint()))
@@ -1633,6 +1712,7 @@ class AppWindow:
         dots = tk.Frame(row.right, bg=ground, takefocus=1, highlightthickness=ring,
                         highlightbackground=ground, highlightcolor=p["ring"])
         dots.pack(side="left")
+        self.focus_visible(dots, ground)
 
         def paint():
             for i, (l, hx) in enumerate(cells):
@@ -1652,7 +1732,8 @@ class AppWindow:
                 image=self.img((hx, "hov"), lambda hx=hx: dot_png(box, d, hx, p["border_strong"], ring,
                                                                  edge=p["border_strong"]))))
             l.bind("<Leave>", lambda e: paint())
-            l.bind("<Button-1>", lambda e, hx=hx: (dots.focus_set(), pick(hx)))
+            l.bind("<Button-1>", lambda e, hx=hx: (setattr(self, "kbd", False),
+                                                   dots.focus_set(), pick(hx)))
 
         def cursor(step):
             kb[0] = (kb[0] + step) % len(cells)
@@ -1707,6 +1788,7 @@ class AppWindow:
         c = tk.Canvas(parent, width=W, height=H, bg=ground, cursor="hand2", takefocus=1,
                       highlightthickness=ring, highlightbackground=ground, highlightcolor=p["ring"])
         c.pack(side="right", padx=(0, self.px(SP[2])))
+        self.focus_visible(c, ground)
         r = self.px(14) / 2
         c.create_line(r, H / 2, W - r, H / 2, fill=p["border_strong"], width=self.px(2))
         fill = c.create_line(r, H / 2, r, H / 2, fill=p["primary"], width=self.px(2))
@@ -1732,14 +1814,14 @@ class AppWindow:
                 self.save()
 
         self.ctl["opacity"] = c
-        c.bind("<Button-1>", lambda e: (c.focus_set(), at(e, False)))
+        c.bind("<Button-1>", lambda e: (setattr(self, "kbd", False), c.focus_set(), at(e, False)))
         c.bind("<B1-Motion>", lambda e: at(e, False))
         c.bind("<ButtonRelease-1>", lambda e: at(e, True))
         c.bind("<Left>", lambda e: set_(val[0] - 0.01, True))     # keyboard: one step, committed
         c.bind("<Right>", lambda e: set_(val[0] + 0.01, True))
         paint()
 
-    def _toggle(self, parent, value) -> None:
+    def _toggle(self, parent, value, key="haze") -> None:
         p, w, h = self.pal, self.px(36), self.px(20)
         ground = parent["bg"]
         on = [bool(value)]
@@ -1747,6 +1829,7 @@ class AppWindow:
                      highlightthickness=self.px(2), highlightbackground=ground,
                      highlightcolor=p["ring"])
         l.pack(side="right")
+        self.focus_visible(l, ground)
 
         def paint(hover=False):
             track = (p["primary_hover"] if hover else p["primary"]) if on[0] else \
@@ -1757,11 +1840,11 @@ class AppWindow:
 
         def toggle(*_):
             on[0] = not on[0]
-            self.cfg["haze"] = on[0]
+            self.cfg[key] = on[0]
             paint(True)
             self.save()
 
-        self.ctl["haze"] = l
+        self.ctl[key] = l
         l.bind("<Enter>", lambda e: paint(True))
         l.bind("<Leave>", lambda e: paint(False))
         l.bind("<Button-1>", toggle)
@@ -2099,7 +2182,7 @@ class AppWindow:
             w.destroy()
         self.p_inner.unbind("<Configure>")       # the wrap bindings of the labels just destroyed
         self.p_fields = {"prompts": [], "questions": [], "answers": [], "chips": [], "cur": 0,
-                         "text": None}
+                         "assume": [], "text": None}
 
     def _body_pick(self, it) -> None:
         self._line(self.p_inner, "Pick a dictation on the left." if self.history.items else
@@ -2206,13 +2289,14 @@ class AppWindow:
             # the strip is made before the answer so Tab reaches the chips first
             strip = tk.Frame(blk, bg=p["bg"], takefocus=1, highlightthickness=0,
                              height=px(H_CHIP)) if q.get("options") else None
-            a = self._uline(blk, "", (1, 3), "Type an answer, or leave it blank to skip")
+            arow = tk.Frame(blk, bg=p["bg"])
+            a = self._uline(arow, "", (1, 3), "Type an answer")
             if strip is not None:
                 self._chips(strip, q["options"], a)
                 strip.pack(fill="x", pady=(px(SP[1]), 0))
-            a.host.pack(fill="x", pady=(px(SP[1]), 0))
             F["answers"].append(a)
             F["chips"].append(strip)
+            self._assume(blk, arow, a)     # packs the button, then the expanding field
         meta = tk.Frame(inner, bg=p["bg"])
         meta.pack(anchor="w", padx=pad, pady=(px(SP[4]), 0))
         label = promptify.ENGINES.get(d.get("engine"), {}).get("label", d.get("engine", ""))
@@ -2336,6 +2420,55 @@ class AppWindow:
         t.bind("<Control-Return>", lambda e: (self._update(), "break")[1])
         self.win.after_idle(fit)
         return t
+
+    def _assume(self, blk, arow, a) -> None:
+        """The deliberate way to defer a question: Assume hands it to the engine, which picks
+        the most consistent reading and writes an Assumed line into the prompt. On, a tint bar
+        covers the whole answer row; clicking it (or Space) hands the question back."""
+        p, px = self.pal, self.px
+        on = [False]
+        self.p_fields["assume"].append(on)
+        # the button first: a packed-earlier expanding field would leave it no cavity at all
+        btn = _Btn(self, arow, "Assume", lambda: set_on(True), kind="text")
+        btn.f.pack(side="right", anchor="s", padx=(px(SP[1]), 0), pady=(0, px(2)))
+        a.host.pack(side="left", fill="x", expand=True)
+        BAR_TEXT = "Assumed · the engine decides and says so · click to answer instead"
+        bar = tk.Label(blk, text=BAR_TEXT, font=self.F["meta"], fg=p["ink"], bg=p["bg"],
+                       bd=0, padx=0, pady=0, compound="center", cursor="hand2", takefocus=1,
+                       highlightthickness=0)
+
+        def paint(e=None):
+            w = bar.winfo_width()
+            if w > 1:
+                bar.configure(image=self.rr(w, px(H_CTL), px(R_CTL), p["tint"], p["bg"]),
+                              text=ellipsize(self.mf["meta"], BAR_TEXT, w - 2 * px(SP[2])))
+
+        bar.bind("<Configure>", paint)
+
+        def set_on(v):
+            if on[0] == bool(v):
+                return
+            on[0] = bool(v)
+            if on[0]:
+                arow.pack_forget()
+                bar.pack(fill="x", pady=(px(SP[1]), 0))
+                bar.focus_set()
+            else:
+                bar.pack_forget()
+                arow.pack(fill="x", pady=(px(SP[1]), 0))
+                a.focus_set()
+
+        for seq in ("<Button-1>", "<space>", "<Return>"):
+            bar.bind(seq, lambda e: set_on(False))
+
+        def changed(prev=a.changed):     # a chip picked while assumed hands the question back
+            if on[0] and a.value():
+                set_on(False)
+            prev()
+
+        a.changed = changed
+        self.p_fields.setdefault("assume_ui", []).append((btn, bar, set_on))
+        arow.pack(fill="x", pady=(px(SP[1]), 0))
 
     def _chips(self, strip, options, answer) -> tk.Frame:
         """A question's options as chips in `strip` (a focusable Frame), wrapping. ONE tab stop
@@ -2553,7 +2686,8 @@ class AppWindow:
             return
         self._save_edits()
         F = self.p_fields
-        answers = [a.value() for a in F["answers"] if a.winfo_exists()]
+        answers = [promptify.ASSUME if on[0] else a.value()
+                   for a, on in zip(F["answers"], F["assume"]) if a.winfo_exists()]
         if any(answers):
             self._run_draft(self.p_item, list(F["prompts"]), list(F["questions"]), answers)
         else:
@@ -2725,6 +2859,7 @@ class AppWindow:
             if action == "active":
                 row["model"] = self._model_line(blk, key)
         self._vault_block(inner)
+        self._split_block(inner)
         self._line(inner, "Connect opens the engine’s own sign-in in your browser. A dictation is "
                    "sent only to the engine you pick, only when you press Promptify. With a vault "
                    "turned on, short excerpts from matching notes travel with it.", "meta",
@@ -2769,6 +2904,25 @@ class AppWindow:
             _Btn(self, col, "Refresh", self._vault_refresh, kind="text").f.pack(anchor="e")
             _Btn(self, col, "Off", lambda: self._pick_vault(None), kind="text").f.pack(
                 anchor="e", pady=(px(SP[0]), 0))
+
+    def _split_block(self, inner) -> None:
+        """One dictation stays one prompt unless the speaker turns splitting on."""
+        p, px, pad = self.pal, self.px, self.px(SP[3])
+        self.hairline(inner).pack(fill="x", padx=pad, pady=(px(SP[4]), 0))
+        blk = tk.Frame(inner, bg=p["bg"])
+        blk.pack(fill="x", padx=pad, pady=(px(SP[2]), 0))
+        right = tk.Frame(blk, bg=p["bg"])
+        right.pack(side="right")
+        left = tk.Frame(blk, bg=p["bg"])
+        left.pack(side="left", fill="x", expand=True, padx=(0, px(SP[2])))
+        tk.Label(left, text="Split into prompts", font=self.F["body"], fg=p["ink"], bg=p["bg"],
+                 bd=0, padx=0, pady=0).pack(anchor="w")
+        l = tk.Label(left, text="Off, one take is one prompt; on, unrelated asks in a take "
+                     "become separate prompts", font=self.F["meta"], fg=p["muted"], bg=p["bg"],
+                     anchor="w", justify="left", bd=0, padx=0, pady=0)
+        l.pack(anchor="w", pady=(px(SP[0]), 0))
+        self._wrap(l, px(120))
+        self._toggle(right, self.cfg.get("prompt_split", False), key="prompt_split")
 
     def _pick_vault(self, path) -> None:
         self.cfg["vault_path"] = str(path) if path else None

@@ -105,8 +105,13 @@ def _entry(vault: Path, p: Path, head: str, st) -> dict:
                  if ln.strip() and not ln.startswith("#")), "")
     desc = (str(fm.get("description") or "") or para)[:300]
     tags = [str(t).lstrip("#").lower() for t in (fm.get("tags") or []) if str(t).strip()]
+    # the snippet material is cached at index time so the hot path never touches the mount
+    # (a live read through rclone cost up to the whole 2 s deadline per draft)
+    lines = [f"{k}: {fm[k]}" for k in ("description", "status", "next")
+             if isinstance(fm.get(k), str) and fm[k]]
     return {"p": rel, "title": title, "names": sorted({_norm_name(n) for n in names if n}),
             "tags": tags, "type": str(fm.get("type") or ""), "desc": desc,
+            "fm": "\n".join(lines), "head": body[:1800],
             "mtime": int(st.st_mtime), "size": st.st_size}
 
 
@@ -144,7 +149,7 @@ def build_index(vault_path: str, appdir, excludes=(), cancel=None, old=None) -> 
             except OSError:
                 continue
     notes.sort(key=lambda e: -e["mtime"])
-    idx = {"vault": str(vault), "built": time.time(), "excludes": sorted(skip_prefixes),
+    idx = {"v": 2, "vault": str(vault), "built": time.time(), "excludes": sorted(skip_prefixes),
            "notes": notes[:MAX_INDEX_NOTES]}
     ip = index_path(appdir)
     ip.parent.mkdir(parents=True, exist_ok=True)
@@ -158,7 +163,8 @@ def build_index(vault_path: str, appdir, excludes=(), cancel=None, old=None) -> 
 def load_index(appdir):
     try:
         j = json.loads(index_path(appdir).read_text(encoding="utf-8"))
-        return j if isinstance(j, dict) and isinstance(j.get("notes"), list) else None
+        # v2 carries the snippet material; an older index rebuilds rather than degrade
+        return j if isinstance(j, dict) and isinstance(j.get("notes"), list) and j.get("v") == 2 else None
     except (OSError, ValueError):
         return None
 
@@ -260,23 +266,6 @@ def search(index: dict, dictation: str, vocab="") -> list:
     return [{"score": round(s, 1), "matched": m, **e} for s, m, e in hits[:MAX_NOTES]]
 
 
-def _read_deadline(path: Path, deadline: float):
-    """A read through a mount that can hang: do it on a throwaway daemon thread and abandon it
-    on timeout - a blocked file read cannot be interrupted in Python, the thread dies with the
-    process. Returns text or None."""
-    box = {}
-
-    def work():
-        try:
-            box["t"] = path.read_bytes()[:65536].decode("utf-8", "replace")
-        except OSError:
-            pass
-    t = threading.Thread(target=work, daemon=True)
-    t.start()
-    t.join(max(0.05, deadline))
-    return box.get("t")
-
-
 def _section(text: str, term: str) -> str:
     """The heading section around the first hit of `term`, khoj-style; else the head."""
     body = re.sub(r"\A---\s*\n.*?\n---\s*\n", "", text, flags=re.S)
@@ -291,7 +280,8 @@ def _section(text: str, term: str) -> str:
 
 
 def context_for(cfg: dict, dictation: str, appdir, vocab="") -> tuple:
-    """(xml_block, [{path, title}...]) within IO_DEADLINE_S; ("", []) when the vault is off,
+    """(xml_block, [{path, title}...]) from the cached index alone - the hot path never reads
+    the mount (a live read through rclone cost seconds). ("", []) when the vault is off,
     unindexed, or nothing matches. Never raises."""
     try:
         vault = (cfg.get("vault_path") or "").strip()
@@ -303,19 +293,11 @@ def context_for(cfg: dict, dictation: str, appdir, vocab="") -> tuple:
         picked = search(idx, dictation, vocab)
         if not picked:
             return "", []
-        t0 = time.monotonic()
         blocks, used, total = [], [], 0
         for e in picked:
-            snippet = e["desc"]
-            left = IO_DEADLINE_S - (time.monotonic() - t0)
-            if left > 0.1:
-                text = _read_deadline(Path(vault) / e["p"], left)
-                if text:
-                    fm = _frontmatter(text)
-                    lines = [f"{k}: {fm[k]}" for k in ("description", "status", "next")
-                             if isinstance(fm.get(k), str) and fm[k]]
-                    sec = _section(text, e.get("matched") or "")
-                    snippet = "\n".join(lines + [sec]) if (lines or sec) else snippet
+            sec = _section(e.get("head") or "", e.get("matched") or "")
+            parts = [x for x in (e.get("fm"), sec) if x]
+            snippet = "\n".join(parts) if parts else e["desc"]
             snippet = snippet[:NOTE_BUDGET].replace("</note", "</ note")
             if total + len(snippet) > TOTAL_BUDGET:
                 snippet = snippet[:max(0, TOTAL_BUDGET - total)]

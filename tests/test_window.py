@@ -173,6 +173,38 @@ win.b_copy.f.event_generate("<ButtonRelease-1>")
 root.update()
 assert clip and clip[-1] == win.rows[3][0]["text"] and win.s_text.cget("text") == "Copied"
 
+# Edit: the card becomes writable, Save persists the fix and drops the entry's draft (it was
+# made FROM the old words); Esc abandons; leaving the row abandons
+it_e = win.sel
+it_e["draft"] = {"prompts": ["stale"], "questions": []}
+win._edit_toggle()
+assert win.editing and win.b_edit.f.cget("text") == "Save" and win.detail.cget("state") == "normal"
+win.detail.delete("1.0", "end")
+win.detail.insert("1.0", "my para vault, not power")
+win._edit_toggle()
+root.update()
+assert not win.editing and win.b_edit.f.cget("text") == "Edit"
+assert it_e["text"] == "my para vault, not power" and "draft" not in it_e
+assert win.s_text.cget("text") == "Saved · draft cleared" and win.detail.cget("state") == "disabled"
+saved_e = [l for l in hist.path.read_text(encoding="utf-8").splitlines() if "not power" in l]
+assert saved_e, "the edit did not reach the history file"
+win._edit_toggle()
+win.detail.insert("end", " ABANDONED")
+win._select(win.rows[5][0])             # leaving the row abandons the edit
+assert not win.editing and "ABANDONED" not in win.rows[3][0]["text"]
+win._select(win.rows[3][0])
+win._edit_toggle()
+win.detail.insert("end", " ABANDONED")
+win.detail.focus_force()
+root.update()
+win.detail.event_generate("<Escape>")
+root.update()
+assert not win.editing and "ABANDONED" not in win.detail.get("1.0", "end")
+it_e["text"] = LONG[:1400]              # the height tests below need the long transcript back
+hist.save()
+win.refresh()
+win._select(it_e)
+
 # the longest transcript is ellipsised in the row but whole in the detail panel
 row_text = [win.list.itemcget(i, "text") for i in win.list.find_all()
             if win.list.type(i) == "text"]
@@ -567,7 +599,7 @@ assert settle(lambda: win.head_rows == 2)
 # the strip is ONE tab stop with a cursor
 strip, a0 = F["chips"][0], F["answers"][0]
 assert F["chips"][1] is None and [c.label for c in strip.chips] == ["3", "5"]
-assert a0.value() == "" and a0.get("1.0", "end-1c") == "Type an answer, or leave it blank to skip"
+assert a0.value() == "" and a0.get("1.0", "end-1c") == "Type an answer"
 strip.chips[1].cmd()
 root.update()
 assert a0.value() == "5" and strip.chips[1].is_chosen and not strip.chips[0].is_chosen
@@ -594,6 +626,34 @@ assert win.receive("in the repo") and win.receive("under src") and a1.value() ==
 win.plist.focus_force()
 root.update()
 assert not win.receive("nowhere") and a1.get("1.0", "end-1c") == "in the repo under src"
+# Assume: the button swaps the answer row for a covering bar, pass 2 carries the sentinel,
+# clicking the bar (or a chip picked later) hands the question back
+btn0, bar0, set0 = F["assume_ui"][0]
+assert F["assume"][0] == [False] and btn0.cmd is not None
+btn0.cmd()
+root.update()
+assert F["assume"][0] == [True] and bar0.winfo_ismapped() and not F["answers"][0].host.master.winfo_ismapped()
+calls.clear()
+win._update()
+assert settle(lambda: win.pstate == "draft" and calls)
+assert calls[0]["answers"][0] == PF.ASSUME          # the sentinel, not the field text
+win._run_draft(win.p_item)                          # fresh pass 1: the questions come back
+assert settle(lambda: win.pstate == "draft" and win.p_fields.get("assume_ui"))
+F = win.p_fields
+btn0, bar0, set0 = F["assume_ui"][0]
+set0(True)
+root.update()
+bar0.event_generate("<Button-1>")
+root.update()
+assert F["assume"][0] == [False] and not bar0.winfo_ismapped()
+strip0 = F["chips"][0]
+set0(True)
+root.update()
+strip0.chips[0].cmd()                               # a chip while assumed hands it back filled
+root.update()
+assert F["assume"][0] == [False] and F["answers"][0].value() == strip0.chips[0].label
+F["answers"][0].set("5")                            # restore the state the tests below built
+F["answers"][1].set("in the repo under src")
 # the second prompt is reachable; a take into the prompt; edits ride along into pass 2
 win._switch_prompt(1)
 assert F["text"].get("1.0", "end").strip() == "Second ask."
@@ -703,10 +763,11 @@ assert "claude" not in win.eng_err                     # the marker goes with th
 assert settle(lambda: win.pstate == "draft") and "claude" not in win.eng_err
 assert win.eng_dot.cget("image") == str(win.dot(8, 6, win.pal["primary"]))
 # the tab order: list → engine → segment → primary → Original › → 1 of 2 → prompt → chip strip →
-# answer → answer → Update prompt → (round to the list): nothing hidden, nothing twice
+# answer → Assume → answer → Assume → Update prompt → (round to the list): nothing hidden, nothing twice
 F = win.p_fields
 want = [win.plist, win.b_eng.f, win.seg, win.b_main.f, win.b_orig.f, win.ctl["which"][0][0].master,
-        F["text"], F["chips"][0], F["answers"][0], F["answers"][1], win.b_update.f, win.plist]
+        F["text"], F["chips"][0], F["answers"][0], F["assume_ui"][0][0].f, F["answers"][1],
+        F["assume_ui"][1][0].f, win.b_update.f, win.plist]
 stop, seen = win.plist, []
 for _ in range(len(want) - 1):
     stop = stop.tk_focusNext()
@@ -729,6 +790,10 @@ b.f.focus_force()                                           # a generated key ne
 root.update()
 b._ring(False)
 img0 = b.f.cget("image")
+win.kbd = False                                             # focus-visible: a mouse focus rings nothing
+b._ring(True)
+assert b.f.cget("image") == img0
+win.kbd = True
 b._ring(True)
 assert b.f.cget("image") != img0                            # the inner ring, in on_primary
 b._ring(False)
@@ -813,6 +878,16 @@ root.update()
 win._login_tick()
 assert STATUS["claude"][0] == "connected" and "claude" not in win.logins and win.e_rows["claude"]["action"] == "active"
 assert cfg.get("prompt_engine", "claude") == "claude"       # it was the engine: nothing to write
+# the split toggle lives in the sheet, default off; flipping it writes prompt_split
+root.update()                       # drain pending rebuilds so the fetched toggle is the live one
+sw = win.ctl["prompt_split"]
+assert not cfg.get("prompt_split")
+sw.event_generate("<Button-1>")
+root.update()
+assert cfg["prompt_split"] is True and saves
+sw.event_generate("<Button-1>")
+root.update()
+assert cfg["prompt_split"] is False
 
 
 class FailingLogin(FakeLogin):

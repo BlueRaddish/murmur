@@ -208,6 +208,50 @@ Decisions
   Text clip the last one - the panel's Texts have no spacing. Dictating into an answer field
   works because Typist already skips the paste when murmur's own window is in front; the take
   now also lands in the focused panel field (and in History like any take).
+- 1.0.0, the user's first verdict (2026-09-01, seven asks, all in the same version - it never
+  shipped). (1) "Takes a long time to promptify... tried it with the para": murmur.log had the
+  real call - ONE claude engine call, rc 0, 93.6 s; the vault index rebuild ran 12 min later in
+  the background and note reads were deadline-capped at 2 s, so para was not the cost. An
+  interleaved bench (2 rounds x 2 golden dictations + a fixed-overhead probe): CLI+service floor
+  ~4 s; the v2 prompt ran 21-67 s with the emitted "analysis" field unbounded (one 3,711-char
+  analysis - the worked example's ~200-word analysis taught the model to write long ones, the
+  examples-beat-rules lesson again); a variant with a 60-word example analysis and an explicit
+  "under 80 words, fragments" cap held analyses to ~450 chars and ran 18-37 s. Fidelity gate
+  (mechanical term retention, same metric both arms, 5 golden dictations): >= the stored
+  current-prompt outputs wherever those were comparable (two stored outputs were the known
+  "Test prompt." transients). Adopted. Also: three silent no-output CLI replies in ~15 calls
+  today (rc 0, empty stdout) - the one retry now fires on silence whatever the exit code. And
+  the vault hot path no longer opens a note at all: the index (v2, rebuilds itself) caches the
+  frontmatter lines + 1,800 chars of body per note, so a draft never waits on the mount. (2)
+  Edit the transcript before Promptify ("para" came out as "power"): Edit on the History card
+  makes the transcript writable, the same button saves (Ctrl+Enter too, Esc abandons, leaving
+  the row abandons); a changed text is written to history.jsonl, both lists repaint, and the
+  entry's draft is dropped - it was made FROM the old words ("Saved - draft cleared"). (3) One
+  take = one prompt by default: message carries "Split: never|allowed", the system prompt keeps
+  independent asks as Parts of one prompt unless allowed, draft() folds a stray more_prompts on
+  pass 1 as a belt; "Split into prompts" toggle in Promptify > Engines (prompt_split, default
+  off). (4) Assume instead of leave-blank-to-skip: a text button at the right of each answer
+  field; on, a tint bar (H_CTL, R_CTL, ellipsised label) covers the whole answer row and the
+  field is gone; click/Space hands it back, so does a chip picked meanwhile. Pass 2 sends the
+  ASSUME sentinel, message() expands it to the delegation instruction, the prompt rule adds an
+  "Assumed:" line and retires the question. Gotcha: the button must be packed BEFORE the
+  expanding field or pack leaves it no cavity at all (it was created, managed, and unmapped).
+  (5) "A green outline around the whole lot" on click: every click-focused control rang. Now
+  focus-visible: rings mark keyboard focus only - AppWindow.kbd, set True on Tab (bound on the
+  toplevel's bindtag, which runs BEFORE the "all" tag that moves focus) and False by every
+  mouse handler before it calls focus_set; _segment paints its ring only when kbd, _Btn._ring
+  reads it, highlight-ring widgets (colour dots, opacity slider, toggles) go through
+  focus_visible(). Arrow keys inside a focused control bring the ring back. (6) Pixelated
+  title-bar icon: iconbitmap alone let Windows stretch a small .ico frame at 200%; the window
+  now also hands Tk iconphoto renders of brand.tile at px(16) and px(32) device pixels - the
+  real-screen grab shows a clean tile. (7) The view switch "not flowy": go() mapped the target
+  frame FIRST and then painted its list and rebuilt the Promptify pane on screen. Researched
+  (WPF/iOS/Electron all pre-render then reveal; Tk: mutate while unmapped, update_idletasks
+  before mapping, grid_remove over destroy, never mix pack/grid on one master, no per-widget
+  alpha exists): go() now prepares the hidden view, flushes idle tasks, then swaps frames in
+  one event cycle. (8) The scrollbar's "tick bar in the middle": clam's thumb element draws its
+  own grip (`gripcount`, default 5) - not a layout element; gripcount=0 on both styles.
+  Screenshot review of every changed surface in the scratchpad (rv_*.png).
 - 1.0.0: the compaction pass, the tap grammar, the README (2026-09-01). (1) First run of the
   major-version cleanup procedure (reference copy: PARA vault,
   3-Resources/programming/major-release-cleanup.md). Baseline: 7 suites green, source 5824

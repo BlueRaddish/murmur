@@ -115,9 +115,10 @@ Settings if you prefer speed.
 Triple-tap the chord, or double-click the tray icon.
 
 **History** - everything transcribed in the last 7 days: copy it back if a paste went missing
-or you overwrote the clipboard, delete one (undo offered) or clear all. The retention window
-is adjustable in Settings (0 keeps nothing). Stored in `%APPDATA%\murmur\history.jsonl`,
-local only.
+or you overwrote the clipboard, **edit** it when Whisper misheard a word (the fix is what
+Promptify then works from), delete one (undo offered) or clear all. The retention window is
+adjustable in Settings (0 keeps nothing). Stored in `%APPDATA%\murmur\history.jsonl`, local
+only.
 
 <picture>
 <source media="(prefers-color-scheme: dark)" srcset="docs/history-dark.png">
@@ -128,9 +129,12 @@ local only.
 to turn a rambling take into a prompt for Claude: the goal first, in your words, your terms
 and decisions kept verbatim, musings kept as open points, and at most three questions about
 the things only you can answer (scope, which repo, how many, what "done" looks like). Answer
-by clicking a chip, typing, or holding the chord and talking into the field; Update prompt
+by clicking a chip, typing, or holding the chord and talking into the field - or press
+**Assume** and the engine decides that one itself and says what it assumed; Update prompt
 folds the answers in; Copy prompt, paste into Claude Code (or claude.ai - the toggle changes
-how references to "the repo" are handled). The draft stays on the entry.
+how references to "the repo" are handled). The draft stays on the entry. One take is one
+prompt; if you'd rather have unrelated asks in a single take come out as separate prompts,
+turn on Split into prompts in Promptify > Engines.
 
 <picture>
 <source media="(prefers-color-scheme: dark)" srcset="docs/promptify-dark.png">
@@ -149,7 +153,8 @@ button, and the first press says where the words go.
 looks a dictation's referents up in your own notes before drafting: say "like how we set up
 second-brain" and the engine gets a short excerpt from that note instead of asking you where
 it lives. Matching is by note names against your spoken words, all local, from a small cached
-index; the excerpts travel only with that one dictation, only to the engine you chose, and
+index of names, tags and first lines (the vault itself is never read while you wait); the
+excerpts travel only with that one dictation, only to the engine you chose, and
 the draft lists which notes were used (click one to open it in Obsidian). Private-looking
 folders (journal, diary, private, people) are never indexed, and you can exclude more. Off
 by default.

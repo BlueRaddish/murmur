@@ -75,9 +75,10 @@ DEFAULTS = {"model": "small.en", "device": "cpu", "language": None, "mic": None,
             "beam_size": 5, "streaming": True, "retention_days": 7, "color": "#e63c3c",
             "color_busy": "#ffaa32", "opacity": 0.9, "haze": False, "indicator": "waves",
             # Promptify: which engine writes the prompt, its model (blank = the engine's default),
-            # the target the prompt is written for, and whether the "this leaves the machine"
-            # line has been acknowledged
-            "prompt_engine": "claude", "prompt_models": {}, "prompt_target": "code", "prompt_ack": False,
+            # the target the prompt is written for, whether one dictation may split into several
+            # prompts, and whether the "this leaves the machine" line has been acknowledged
+            "prompt_engine": "claude", "prompt_models": {}, "prompt_target": "code",
+            "prompt_split": False, "prompt_ack": False,
             # the Obsidian bridge: a vault path (None = off), folders kept out of its index, and
             # whether the with-vault disclosure has been acknowledged
             "vault_path": None, "vault_exclude": [], "vault_ack": False}

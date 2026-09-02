@@ -19,6 +19,11 @@ qs = [{"q": "How many?", "why": "count"}, {"q": "Which repo?", "why": "path"}]
 m2 = P.message("code", "d", prompts=["P1", "P2"], questions=qs, answers=["four ", ""])
 assert 'Pass: 2' in m2 and '<previous_prompt n="1">\nP1\n</previous_prompt>' in m2 and 'n="2">\nP2' in m2
 assert "1. Q: How many?\n   A: four" in m2 and "2. Q: Which repo?\n   A: (skipped)" in m2
+# the Split line rides on both passes; an (assume) answer becomes the delegation instruction
+assert "\nSplit: never\n" in m1 and "\nSplit: never\n" in m2
+assert "\nSplit: allowed\n" in P.message("code", "x", split=True)
+m3 = P.message("code", "d", prompts=["P"], questions=[{"q": "A?", "why": "w"}], answers=[P.ASSUME])
+assert "(assume - I delegate this one" in m3 and "Assumed line)" in m3
 print("messages ok")
 
 # --- parsing ---------------------------------------------------------------------------------
@@ -38,6 +43,17 @@ n = P.normalize({"prompt": " P ", "questions": [{"q": "A?", "why": "b", "options
                                                  {"q": "", "why": "skip me"}, "junk"],
                  "more_prompts": ["Q", " "], "notes": None})
 assert n == {"prompts": ["P", "Q"], "questions": [{"q": "A?", "why": "b", "options": ["x", "y", "z"]}], "notes": ""}
+# split off (the default): a pass-1 draft folds a stray more_prompts into the one prompt
+_r = P.run_cli_engine
+P.run_cli_engine = lambda spec, msg, cancel, wd: (
+    {"prompt": "P1", "more_prompts": ["P2"], "questions": []}, {"model": "m", "wall": 0.1})
+_wd = tempfile.mkdtemp()
+assert P.draft({"prompt_engine": "claude"}, "d", "code", workdir=_wd)["prompts"] == ["P1\n\nP2"]
+assert P.draft({"prompt_engine": "claude", "prompt_split": True}, "d", "code",
+               workdir=_wd)["prompts"] == ["P1", "P2"]
+assert P.draft({"prompt_engine": "claude"}, "d", "code", prompts=["P1", "P2"], questions=[],
+               answers=[], workdir=_wd)["prompts"] == ["P1", "P2"]   # pass 2 keeps old splits
+P.run_cli_engine = _r
 print("parsing ok")
 
 # --- engine spec / availability --------------------------------------------------------------
