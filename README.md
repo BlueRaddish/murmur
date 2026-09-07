@@ -178,7 +178,7 @@ Settings in the app window (changes apply at once; model, microphone and languag
 restart), or `%APPDATA%\murmur\config.json`; command-line flags override for one run.
 
 ```
---model tiny.en|base.en|small.en|medium.en|large-v3   default base.en
+--model tiny.en|base.en|small.en|tiny|base|small     default base.en
 --device cpu|cuda                                     cuda needs an NVIDIA GPU + CUDA libs
 --language en|ko|...                                  default: en for *.en models, else auto
 --mic 2  or  --mic "Headset"                          pick an input; see --list-devices
@@ -189,7 +189,8 @@ restart), or `%APPDATA%\murmur\config.json`; command-line flags override for one
 `base.en` (the default) is the middle ground: quick on a CPU and fine for everyday
 sentences. `tiny.en` is near-instant but sloppy; `small.en` is noticeably more accurate on
 technical terms and still ~1-2 s for a sentence on a laptop CPU. Multilingual dictation: use a
-model without `.en` (`small`, `medium`, `large-v3`).
+model without `.en` (`tiny`, `base`, `small`). Nothing bigger is offered: the biggest model
+murmur will load is ~480 MB, so the app never turns into a multi-gigabyte install.
 
 ## vocab.txt
 

@@ -215,7 +215,9 @@ assert murmur.load_config(cp) == murmur.DEFAULTS
 c = dict(murmur.DEFAULTS, mic=2, trigger_vk=0x7C); murmur.save_config(cp, c)
 assert murmur.load_config(cp) == c
 cp.write_text('{"headset_button": true}', encoding="utf-8")   # pre-0.5 config migrates
-assert murmur.load_config(cp)["trigger_vk"] == murmur.VK_MEDIA_PLAY_PAUSE; os.remove(cp)
+assert murmur.load_config(cp)["trigger_vk"] == murmur.VK_MEDIA_PLAY_PAUSE
+cp.write_text('{"model": "medium.en"}', encoding="utf-8")     # a model over the size cap falls back
+assert murmur.load_config(cp)["model"] == murmur.DEFAULTS["model"] == "base.en"; os.remove(cp)
 from window import vk_name
 assert vk_name(0xB3) == "Play/Pause" and vk_name(None) == "none" and vk_name(0x41).upper() == "A"
 

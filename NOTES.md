@@ -208,6 +208,18 @@ Decisions
   Text clip the last one - the panel's Texts have no spacing. Dictating into an answer field
   works because Typist already skips the paste when murmur's own window is in front; the take
   now also lands in the focused panel field (and in History like any take).
+- 1.0.0, "can't find murmur in the Windows search bar" + the model cap (2026-09-01). Search:
+  Windows finds apps through Start Menu shortcuts, and the mirror installs since 08-31 (robocopy
+  /MIR of dist into %LOCALAPPDATA%\Programs\murmur, because Inno Setup vanished) never made
+  one - worse, /MIR deleted Inno's unins000.exe/.dat from the 0.9.0 install, so the Start Menu
+  folder held only a dead "Uninstall murmur" link, no app link, no startup link, and the
+  uninstall registry entry was gone. Fixed by hand for this machine: murmur.lnk in the Start
+  Menu group and the Startup folder (what installer.iss [Icons] makes), the dead link removed.
+  The real fix is the real installer: winget install JRSoftware.InnoSetup, then build.ps1. Model
+  cap: "anything beyond 500 MB is overkill... remove those options completely" - MODELS is now
+  tiny/base/small (.en and multilingual); medium.en, medium and large-v3 are gone from the
+  picker, --model (choices=) and the README; load_config falls back to the default for a config
+  still naming one, with a log line. Biggest offered: small at ~480 MB.
 - 1.0.0, the default model (2026-09-01): "make default model on install base, as the tiny.en
   is lowkey not that great" - the shipped default was small.en all along; their own config said
   tiny.en (switched in Settings on 08-28). DEFAULTS model -> base.en (~150 MB first download

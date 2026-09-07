@@ -175,7 +175,7 @@ SAMPLE80 = "The quick brown fox jumps over the lazy dog while the band plays on 
 
 # --- domain ---------------------------------------------------------------------------------
 
-MODELS = ["tiny.en", "base.en", "small.en", "medium.en", "tiny", "base", "small", "medium", "large-v3"]
+MODELS = ["tiny.en", "base.en", "small.en", "tiny", "base", "small"]   # nothing over ~500 MB: the app stays light (the user's rule)
 MIC_DEFAULT = "System default"      # the microphone combo's first entry (cfg["mic"] = None)
 PRESETS = ["#ffffff", "#e63c3c", "#ff7a1a", "#ffc82a", "#4ade80", "#22d3ee", "#3c8cff", "#a855f7", "#ff4fa3"]
 MEDIA_KEYS = {0xB3: "Play/Pause", 0xB2: "Media Stop", 0xB0: "Next Track", 0xB1: "Previous Track", 0xAD: "Mute",

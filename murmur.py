@@ -110,6 +110,10 @@ def load_config(path: Path) -> dict:
             cfg.update({k: v for k, v in raw.items() if k in DEFAULTS})
         except (OSError, ValueError) as e:
             log(f"config ignored: {e}")
+    from window import MODELS            # the picker's list is the one allowed set
+    if cfg.get("model") not in MODELS:   # a medium/large left over from before the size cap
+        log(f"config: model {cfg.get('model')!r} is not offered any more, using {DEFAULTS['model']}")
+        cfg["model"] = DEFAULTS["model"]
     return cfg
 
 
@@ -788,7 +792,8 @@ def run_app(factory, cfg: dict, cfg_path: Path) -> None:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="murmur", description=__doc__.split("\n")[0])
-    p.add_argument("--model", help="faster-whisper model (tiny.en, base.en, small.en, medium.en, large-v3)")
+    from window import MODELS
+    p.add_argument("--model", choices=MODELS, help="faster-whisper model (tiny.en, base.en, small.en; or tiny/base/small for other languages)")
     p.add_argument("--device", choices=["cpu", "cuda"])
     p.add_argument("--language", help="force a language code, e.g. en, ko. default: en for *.en models")
     p.add_argument("--mic", help="input device index or name substring (see --list-devices)")
