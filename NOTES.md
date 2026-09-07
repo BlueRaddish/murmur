@@ -215,7 +215,23 @@ Decisions
   folder held only a dead "Uninstall murmur" link, no app link, no startup link, and the
   uninstall registry entry was gone. Fixed by hand for this machine: murmur.lnk in the Start
   Menu group and the Startup folder (what installer.iss [Icons] makes), the dead link removed.
-  The real fix is the real installer: winget install JRSoftware.InnoSetup, then build.ps1. Model
+  ... which turned out to be only the surface. The recreated shortcuts vanished within a minute:
+  Get-MpThreatDetection shows Windows Defender flagging murmur.exe as Trojan:Win32/Bearfoos.A!ml
+  (an ML heuristic, ThreatID 2147731250) on 09-01 03:22 - that detection's resources were the
+  exe, both .lnk files AND the Inno uninstall registry key, all quarantined: THAT is where the
+  Start Menu entry, the startup link and the uninstaller went - and again on 09-07 06:29 / 06:34
+  (the new shortcuts; the running process terminated), after which Start-Process refuses the
+  exe outright ("the file contains a virus or potentially unwanted software"). Bisect with
+  MpCmdRun -Scan -ScanType 3: a bare PyInstaller hello-world exe is clean, a PyInstaller exe
+  with a pynput keyboard hook + pyperclip + ctypes is clean, murmur.exe is flagged - so it is
+  not the (often-blamed) PyInstaller bootloader, it is Defender's model on murmur's own binary.
+  Remedies, in order: an exclusion for %LOCALAPPDATA%\Programs\murmur (admin:
+  Add-MpPreference -ExclusionPath ...) for this machine; a false-positive submission to
+  Microsoft (microsoft.com/wdsi/filesubmission) for everyone; code signing (Authenticode - e.g.
+  SignPath's free OSS signing) for the release, since unsigned + no reputation is what !ml
+  detections punish. The published 0.9.0 setup.exe may be hitting the same detection on other
+  machines. The real installer fix still stands: winget install JRSoftware.InnoSetup, then
+  build.ps1. Model
   cap: "anything beyond 500 MB is overkill... remove those options completely" - MODELS is now
   tiny/base/small (.en and multilingual); medium.en, medium and large-v3 are gone from the
   picker, --model (choices=) and the README; load_config falls back to the default for a config
