@@ -141,7 +141,13 @@ def upd(pred=lambda: True, n=50):
 
 assert len(hist.items) == 45 and win.sel is hist.items[-1]        # newest selected by default
 assert "45 dictations" in win.count.cget("text") and "7 days" in win.count.cget("text")
-assert len(win.rows) == 45 and win.rows[0][0] is hist.items[-1]   # newest first
+assert len(win.rows) == 45 and win.rows[0][0] is hist.items[-1]   # newest first (item rows only)
+# the canvas rows carry a day header before each day's first item: "Today" first, then the
+# newest; a header is 24 tall and no row (hover over it lands on nothing); one header per day
+assert win.list.rows[0][0] is None and win.list.rows[1][0] is hist.items[-1] and win.list.row_at(2) is None
+heads = [r for r in win.list.rows if r[0] is None]
+assert heads[0][2] == win.px(W.H_GROUP) and len(heads) == len({W.day_of(it["t"]) for it in hist.items})
+assert win.list.natural() == len(heads) * win.px(W.H_GROUP) + 45 * win.px(W.H_ROW) == win.list.rows[-1][1] + win.list.rows[-1][2]
 
 # --- the sidebar: one canvas, the lockup on it -----------------------------------------------
 side, px_ = win.side, win.px
@@ -298,6 +304,16 @@ win._nav_key(1)                     # reaches the list, focuses it, moves
 assert win.sel is win.rows[4][0]
 win._list().move(-1)                # once focused, Up/Down are the list's own binding
 assert win.sel is win.rows[3][0]
+# focus-visible on the list: the selected row wears the ring under KEYBOARD focus only - a
+# click's focus shows none, the next Up/Down brings it back
+win.list.focus_force()
+root.update()
+assert win.kbd and win.list.itemcget(win.list.hl_id["sel"], "image") == str(win.list.hl["focus"])
+win.kbd = False
+win.list.paint()
+assert win.list.itemcget(win.list.hl_id["sel"], "image") == str(win.list.hl["sel"])
+win._list().move(0)
+assert win.kbd and win.list.itemcget(win.list.hl_id["sel"], "image") == str(win.list.hl["focus"])
 win.b_copy.f.event_generate("<Button-1>")
 win.b_copy.f.event_generate("<ButtonRelease-1>")
 root.update()
@@ -307,8 +323,11 @@ assert clip and clip[-1] == win.rows[3][0]["text"] and win.s_text.cget("text") =
 # made FROM the old words); Esc abandons; leaving the row abandons
 it_e = win.sel
 it_e["draft"] = {"prompts": ["stale"], "questions": []}
+x_del = win.b_del.f.winfo_x()
 win._edit_toggle()
 assert win.editing and win.b_edit.f.cget("text") == "Save" and win.detail.cget("state") == "normal"
+root.update()
+assert win.b_del.f.winfo_x() == x_del and win.b_edit.w == win.b_edit.w0      # "Save" moves nothing after it
 win.detail.delete("1.0", "end")
 win.detail.insert("1.0", "my para vault, not power")
 win._edit_toggle()
@@ -350,6 +369,48 @@ assert E(win.card) == px_(4) and E(win.detail) == px_(16), (E(win.card), E(win.d
 # goes with the flash), "Editing" does not and swaps the footer's hints for the edit strip
 assert (win.status is win.foot_h.right and win.status.master is win.foot_h and win.foot_h.grid_info()["row"] == 4
         and W.tkfont.Font(root, font=win.s_text.cget("font")).actual("size") == 10)
+# the action row: the primary, then three ink text buttons, each with its key drawn as a cap
+# chord 8 after it and the actions 16 apart. The row is ONE canvas (a Frame + Labels per
+# chord was +3.5 ms on the switch): the caps are its "cap" text items, `caps_copy` etc. their
+# ids, the buttons placed over it
+cap_texts = lambda ids: [win.act.itemcget(i, "text") for i in ids]
+assert cap_texts(win.caps_prompt) == ["Ctrl", "D"] and cap_texts(win.caps_copy) == ["↵"]
+assert cap_texts(win.caps_edit) == ["Ctrl", "↵"] and cap_texts(win.caps_del) == ["Del"]
+assert isinstance(win.act, tk.Canvas) and all("cap" in win.act.gettags(i) for i in win.caps_copy + win.caps_prompt + win.caps_edit + win.caps_del)
+assert win.b_prompt.kind == "text" and win.b_prompt.fg == win.pal["ink"] and win.b_copy.kind == "primary"
+assert win.b_copy.f.master is win.act and win.b_copy.f.winfo_x() == 0 and win.b_copy.f.winfo_height() == px_(W.H_CTL) == win.act.winfo_height()
+img_copy = [i for i in win.act.find_all() if win.act.type(i) == "image"][0]
+assert win.act.coords(img_copy)[0] == win.b_copy.f.winfo_width() + px_(8) and win.act.coords(img_copy)[1] == px_(W.H_CTL) // 2
+assert win.b_prompt.f.winfo_x() == win.act.coords(img_copy)[0] + win.kbd_img("↵").width() + px_(16)
+assert pix(win.act.itemcget(img_copy, "image"), 0, 0) == W.rgb(win.pal["card"]) and opaque(win.act.itemcget(img_copy, "image"), 0, 0)   # on the card, opaque: no blend per paint
+# the rows: a right-aligned mono time column (every "HH:MM" ends on the same x), the selected
+# highlight carries the ring bar at x 4 and the hover one does not
+import re
+times = [i for i in win.list.find_all() if win.list.type(i) == "text" and win.list.itemcget(i, "anchor") == "e"]
+assert len(times) == 45 and all(re.fullmatch(r"\d\d:\d\d", win.list.itemcget(i, "text")) for i in times)
+assert len({win.list.coords(i)[0] for i in times}) == 1 and W.tkfont.Font(root, font=win.list.itemcget(times[0], "font")).actual("size") == 9
+hl = win.list.hl
+assert pix(hl["sel"], px_(4) + 1, px_(W.H_ROW) // 2) == W.rgb(win.pal["ring"]) and pix(hl["hover"], px_(4) + 1, px_(W.H_ROW) // 2) == W.rgb(win.pal["sub_hover"](win.pal["layer"]))
+assert pix(hl["sel"], px_(40), px_(W.H_ROW) // 2) == W.rgb(win.pal["sub"](win.pal["layer"])) and pix(hl["focus"], px_(40), 0) == W.rgb(win.pal["ring"])
+# hover on a secondary / text button: a 50 % blend frame now, the full hover 40 ms later, idle
+# at once on leave; a release after a press paints hover directly; reduced motion snaps
+bp = win.b_prompt
+bp.f.event_generate("<Enter>")
+assert bp.state == "blend" and ("blend", id(bp.f)) in win.jobs
+assert upd(lambda: bp.state == "hover") and ("blend", id(bp.f)) not in win.jobs
+bp.f.event_generate("<Leave>")
+assert bp.state == "idle" and ("blend", id(bp.f)) not in win.jobs
+win.motion = False
+bp.f.event_generate("<Enter>")
+assert bp.state == "hover" and ("blend", id(bp.f)) not in win.jobs
+bp.f.event_generate("<Leave>")
+win.motion = True
+bp.f.event_generate("<Enter>")
+bp.f.event_generate("<Leave>")
+assert bp.state == "idle" and ("blend", id(bp.f)) not in win.jobs     # leaving drops the frame
+win.b_copy.f.event_generate("<Enter>")
+assert win.b_copy.state == "hover"                                    # a primary never blends
+win.b_copy.f.event_generate("<Leave>")
 assert win.foot_h.winfo_height() == px_(W.H_FOOT) and win.foot_h.winfo_width() == win.views["history"].winfo_width()
 assert win.foot_h.right.winfo_x() + win.foot_h.right.winfo_width() == win.foot_h.winfo_width() - px_(16)
 # the footer is one canvas - the hints are items, a Label per cap cost ~0.3 ms per view
@@ -383,12 +444,22 @@ assert int(win.detail.cget("height")) == 1 and not win.dsb.winfo_ismapped()
 win.win.geometry(f"{px_(600)}x{px_(400)}")
 win._select(next(it for it in hist.items if len(it["text"]) > 1300))
 assert upd(lambda: int(win.detail.cget("height")) == 3), win.detail.cget("height")
+# ... and at 600 the card cannot hold the four actions AND their caps: the caps hide, the
+# buttons close up to 8 apart and Delete stays inside the card
+assert upd(lambda: win.act.itemcget(win.caps_del[0], "state") == "hidden")
+assert win.b_del.f.winfo_x() + win.b_del.f.winfo_width() <= win.act.winfo_width() < win.act_need
+assert win.b_prompt.f.winfo_x() == win.b_copy.f.winfo_width() + px_(8)
 win.win.geometry(f"{px_(780)}x{px_(560)}")
 assert upd(lambda: int(win.detail.cget("height")) == 6)
-# ... and when the list fits, the card gets the rest of the pane, past 6 lines
+assert upd(lambda: win.act.itemcget(win.caps_del[0], "state") == "normal" and win.b_prompt.f.winfo_x() == win.act_xs[1])
+# ... and when the list fits, the card gets the rest of the pane, past 6 lines (at 560 the
+# chrome - filter 44, footer 28, a day header 24 - leaves room for exactly the 6-line cap, which
+# proves nothing; at 640 the room is 10 lines)
 few = W.AppWindow(root, fake_history(4), fresh_cfg(), lambda c: None, theme="light")
 few.show()
 root.update()
+few.win.geometry(f"{px_(780)}x{px_(640)}")
+assert upd(lambda: few.views["history"].winfo_height() >= px_(600))
 few._select(next(it for it in few.history.items if len(it["text"]) > 1300))
 root.update()
 assert int(few.detail.cget("height")) > 6 and few.dsb.winfo_ismapped() and not few.list.sb.winfo_ismapped()
@@ -431,6 +502,50 @@ win.win.event_generate("<Control-f>")
 root.update()
 assert win.view == "history"
 upd(lambda: "slide" not in win.jobs, n=30)
+# the filter: Ctrl+F put the caret in it (260 wide on E, the search glyph inside); typing
+# narrows the list live (item rows only in `rows`), a miss empties it and takes the card with
+# it; Esc in the field clears the text, a second Esc hands focus to the list, a third hides
+assert win.win.focus_get() is win.filter and win.filter.master.winfo_width() == px_(W.W_FILTER)
+assert win.filter.master.winfo_x() == px_(16) and win.filter.master.grid_info()["row"] == 1
+win.filter.insert(0, "number 7")
+win.filter.event_generate("<KeyRelease>")
+root.update()
+assert len(win.rows) == 1 and win.rows[0][0]["text"].startswith("Dictation number 7,") and win.card.winfo_ismapped()
+assert [r[0] for r in win.list.rows] == [None, win.rows[0][0]]        # "Today"-or-whichever, then the row
+assert win.sel is win.rows[0][0] and win.detail.get("1.0", "end").strip() == win.sel["text"]   # the card follows the match
+assert win.list.itemcget(win.list.hl_id["sel"], "state") == "normal" and win.list.itemcget(win.list.hl_id["hover"], "state") == "hidden"
+assert win.list.coords(win.list.hl_id["sel"])[1] == px_(W.H_GROUP)      # on the row, never on the header
+# a delete while filtered selects the newest row the filter still shows, not the newest overall
+win.filter.delete(0, "end")
+win.filter.insert(0, "number 1")                     # 1, 10..19
+win.filter.event_generate("<KeyRelease>")
+root.update()
+n_shown, gone = len(win.rows), win.sel
+assert n_shown == 11 and gone is win.rows[0][0]
+win.delete_selected()
+root.update()
+assert len(win.rows) == n_shown - 1 and win.sel is win.rows[0][0] and "number 1" in win.sel["text"]
+win._undo()
+root.update()
+assert len(win.rows) == n_shown and win.sel is gone
+win.filter.delete(0, "end")
+win.filter.insert(0, "number 7x")
+win.filter.event_generate("<KeyRelease>")
+root.update()
+assert win.rows == [] and not win.card.winfo_ismapped()
+assert any(win.list.itemcget(i, "text") == "No dictations match." for i in win.list.find_all())
+assert not any(win.list.itemcget(i, "text") == "No dictations yet" for i in win.list.find_all())
+win._escape()
+root.update()
+assert win.filter.value() == "" and len(win.rows) == 45 and win.card.winfo_ismapped() and win.win.focus_get() is win.filter
+win._escape()
+root.update()
+assert win.win.focus_get() is win.list and win.win.winfo_viewable()
+win._escape()
+root.update()
+assert not win.win.winfo_viewable()
+win.show()
+root.update()
 print("history view ok")
 
 # --- settings -------------------------------------------------------------------------------
@@ -700,7 +815,8 @@ win.go("promptify")
 root.update()
 assert win.view == "promptify" and win.views["promptify"].winfo_ismapped()
 assert win.win.tk.call("winfo", "children", str(win.views["promptify"].master))  # all views live in the cell
-assert win.plist.rows and win.plist.rows[0][0] is hist.items[-1] and win.plist.H == win.px(W.H_ROW2)
+assert win.plist.rows and win.plist.rows[0][0] is None and win.plist.rows[1][0] is hist.items[-1]   # a day header, then the newest
+assert win.plist.H == win.px(W.H_ROW2) and win.plist.rows[1][2] == win.plist.H
 assert win.pcount.cget("text") == str(len(hist.items)) and len(hist.items) >= 10   # 3-day retention pruned the 45
 lp = win.views["promptify"].grid_slaves(row=0, column=0)[0]
 assert lp.winfo_width() == max(win.px(176), min(win.px(240), int(0.36 * win.views["promptify"].winfo_width()))), lp.winfo_width()
@@ -1219,15 +1335,21 @@ win._clear_ask()
 win._clear_do()
 root.update()
 assert hist.items == [] and not win.act.winfo_ismapped() and not win.b_clear.f.winfo_ismapped()
-assert any("No dictations yet" == win.list.itemcget(i, "text") for i in win.list.find_all())
+assert not win.filter.master.winfo_ismapped()          # nothing to filter: the field goes with the rows
+texts_h = lambda lst: [lst.itemcget(i, "text") for i in lst.find_all() if lst.type(i) == "text"]
+assert "No dictations yet" in texts_h(win.list) and sum(win.list.type(i) == "image" for i in win.list.find_all()) == 3   # the mark + 2 caps
 assert win.count.cget("text").startswith("no dictations · "), win.count.cget("text")
 # ... and in the Promptify pane the empty state is two lines, wrapped inside the pane (never
 # clipped at its hairline), and the detail pane says to dictate first
 win.go("promptify")
 root.update()
-texts = [i for i in win.plist.find_all() if win.plist.type(i) == "text"]
-assert [win.plist.itemcget(i, "text") for i in texts] == ["No dictations yet", "Hold ", "Ctrl+Win", " and talk."]
+texts = [i for i in win.plist.find_all() if win.plist.type(i) == "text" and "cap" not in win.plist.gettags(i)]
+assert [win.plist.itemcget(i, "text") for i in texts] == ["No dictations yet", "Hold ", " and talk."]
 assert all(win.plist.bbox(i)[2] <= win.plist.winfo_width() - px_(16) for i in texts), [win.plist.bbox(i) for i in texts]
+# ... the 32 px mark over the line and the two real keycaps ("Ctrl", "Win" as cap items) on it
+assert sum(win.plist.type(i) == "image" for i in win.plist.find_all()) == 3
+assert [win.plist.itemcget(i, "text") for i in win.plist.find_withtag("cap")] == ["Ctrl", "Win"]
+assert win.plist.bbox(win.plist.find_all()[0])[1] == 0 and win.plist.type(win.plist.find_all()[0]) == "image"
 assert win.pstate == "pick" and win.p_inner.winfo_children()[0].cget("text") == "Dictate something first."
 win.go("history")
 root.update()
@@ -1276,7 +1398,7 @@ zero = W.AppWindow(root, fake_history(0), off, lambda c: None, theme="light")
 zero.show()
 root.update()
 assert "history is off" in zero.count.cget("text")
-assert any("History is off" == zero.list.itemcget(i, "text") for i in zero.list.find_all())
+assert "History is off" in texts_h(zero.list) and "Hold " not in texts_h(zero.list)   # its sentence, no caps
 zero.win.destroy()
 root.destroy()
 print("builds ok")

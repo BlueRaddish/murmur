@@ -17,6 +17,7 @@ wear four corner masks (`corner_pngs`) pinned at their corners. Settings autosav
 Save button.
 """
 import base64
+import bisect
 import datetime
 import io
 import json
@@ -205,8 +206,8 @@ W_SIDE = 192                        # sidebar: 8 + pill 176 + 8 (label 40 + "Pro
 W_FIELD = 96                        # the hex and language entries (7 mono characters)
 W_DAYS = 64                         # the retention entry
 W_COMBO = 200                       # the microphone and model combos
-W_TIME = 104                        # history time column ("Yesterday 09:10" before the text);
-                                    # 44 once the column is a right-aligned mono "17:44"
+W_TIME = 44                         # the time column: a right-aligned mono9 "17:44" (35 px) at the
+                                    # row's inner right; the day lives in the group header above
 W_FILTER = 260                      # the History filter field
 W_LIST = (176, 0.36, 240)           # Promptify's list pane: clamp(min, share of the main width, max)
 W_ACT = 80                          # the engines sheet's action column
@@ -638,6 +639,7 @@ class _Btn:
     def _paint(self) -> None:
         p = self.ui.pal
         fill, fg = {"idle": (self.fill, self.fg), "hover": (self.hov, self.hov_fg),
+                    "blend": (mix(self.fill, self.hov, .5), self.hov_fg),   # the hover's first frame
                     "down": (self.down, self.hov_fg)}[self.state]
         border, bw, inner = self.outline, 1, None
         edge = None if self.state == "down" else self.edge     # pressed: the edge goes, the sink
@@ -656,9 +658,24 @@ class _Btn:
         self.f.configure(image=img, fg=fg)
 
     def _set(self, state) -> None:
-        if self.on:
-            self.state = state
+        """Hover on a secondary, text or chip button comes in two frames (Fluent's 83 ms): the
+        50 % blend now, the full hover 40 ms later (`ui.jobs[("blend", id)]`, so a rebuild
+        cancels it); only from idle - a release after a press paints hover at once - and only
+        with motion on. Every other change, leaving included, is instant and drops a pending
+        frame. The frame skips a button destroyed in the meantime (a rebuilt pane)."""
+        if not self.on:
+            return
+        ui, key = self.ui, ("blend", id(self.f))
+        ui._cancel(key)
+        if (state == "hover" and self.state == "idle" and ui.motion
+                and self.kind in ("secondary", "text", "chip")):
+            self.state = "blend"
             self._paint()
+            ui.jobs[key] = ui.win.after(40, lambda: (ui.jobs.pop(key, None),
+                                                     self.f.winfo_exists() and self._set("hover")))
+            return
+        self.state = state
+        self._paint()
 
     def _ring(self, on) -> None:
         self.ring = on and getattr(self.ui, "kbd", True)   # focus-visible: keyboard focus only
@@ -690,6 +707,7 @@ class _Btn:
         ignored. Nothing changes size."""
         self.on = bool(on)
         self.state = "idle"
+        self.ui._cancel(("blend", id(self.f)))
         self.f.configure(takefocus=1 if self.on else 0, cursor="hand2" if self.on else "arrow")
         self._paint()
 
@@ -813,27 +831,33 @@ class _Row:
 
 class RowList(tk.Canvas):
     """The dictations, newest first, as canvas items - 45 of them as Frames would be slow and
-    would each need their own hover bindings. Two modes: one line (History: time, text, a draft
-    dot at the inner right; `H_ROW`) and two lines (Promptify: text over time + dot; `H_ROW2`).
+    would each need their own hover bindings - grouped under a day header ("Today",
+    "Yesterday", "Monday", "Aug 12") wherever the day changes. Two modes: one line (History:
+    text, then the draft mark and a right-aligned mono time at the inner right; `H_ROW`) and
+    two lines (Promptify: text over time + mark; `H_ROW2`). `keep(item)` is the pane's filter
+    predicate (History's reads the filter field); `rows` holds `(item, y, h)` per canvas row,
+    `(None, y, h)` for a header, and `ys` the row tops for a bisect in `row_at`.
 
     Hover and selection are not per-row rectangles but TWO rounded images moved to the row they
     belong to - a rounded highlight would otherwise cost three rectangles and four corner masks
-    per row, and only two rows are ever lit. The keyboard's row wears the focus ring on the
-    selected highlight itself: a hard ring around the whole list would be the one rigid line in
-    the view. The selection is the window's (`ui.sel`, shared by both lists); `on_select(item)`
-    is told when a row is picked, `keys` are the pane's own bindings (Return, Delete...).
+    per row, and only two rows are ever lit. The selected one carries the 3 x 16 `ring` bar (the
+    nav's), hover is the fill alone. The keyboard's row wears the focus ring on the selected
+    highlight itself: a hard ring around the whole list would be the one rigid line in the
+    view. The selection is the window's (`ui.sel`, shared by both lists); `on_select(item)` is
+    told when a row is picked, `keys` are the pane's own bindings (Return, Delete...).
 
     Ceiling: `draw()` redraws EVERY row on every <Configure>, ~7 font.measure calls each. Fine to
     about 2 000 items (a year at 5 dictations a day); past that the upgrade path is to draw only
     the slice between canvasy(0) and canvasy(0)+height, and redraw on scroll too."""
 
-    def __init__(self, ui, parent, two_line=False, on_select=None, keys=None):
+    def __init__(self, ui, parent, two_line=False, on_select=None, keys=None, keep=None):
         p = ui.pal
         super().__init__(parent, bg=p["layer"], highlightthickness=0, takefocus=1, yscrollincrement=1,
                          width=1, height=1, bd=0)
         self.ui, self.two, self.on_select = ui, two_line, on_select or (lambda it: None)
+        self.keep = keep or (lambda it: True)
         self.H = ui.px(H_ROW2 if two_line else H_ROW)
-        self.rows, self.hl, self.hl_id, self.hover = [], {}, {}, None
+        self.rows, self.ys, self.hl, self.hl_id, self.hover = [], [], {}, {}, None
         self.sb = ttk.Scrollbar(parent, orient="vertical", style="M.Vertical.TScrollbar",
                                 command=self.yview, takefocus=0)
         self.configure(yscrollcommand=self._scrolled)
@@ -852,7 +876,14 @@ class RowList(tk.Canvas):
             self.bind(k, lambda e, fn=fn: fn())
 
     def items(self) -> list:
-        return self.ui.history.items
+        """The dictations this list shows (oldest first, as the file): the history through
+        the pane's `keep` predicate."""
+        return [it for it in self.ui.history.items if self.keep(it)]
+
+    def natural(self) -> int:
+        """The height of every row drawn, headers included: the scrollregion, and what the
+        History view's height rule gives the list before the card takes the rest."""
+        return sum(h for _, _, h in self.rows)
 
     def _scrolled(self, lo, hi) -> None:
         self.sb.set(lo, hi)
@@ -869,13 +900,13 @@ class RowList(tk.Canvas):
         ui, p, c = self.ui, self.ui.pal, self
         px = ui.px
         c.delete("all")
-        self.rows = []
+        self.rows, self.ys = [], []
         items = self.items()
         w, h = c.winfo_width(), self.H
         x0 = px(SP[3])                          # E, the pane's one text edge
         if not items:
             self.hl_id = {}       # the highlights went with delete("all"): nothing to move
-            self.empty(w)
+            self.empty(w, filtered=bool(ui.history.items))
             c.configure(scrollregion=(0, 0, 0, 0))
             return
         # the highlight runs from E - 12 to the pane's right edge - 4, like every surface that
@@ -886,62 +917,93 @@ class RowList(tk.Canvas):
             png = lambda **kw: tk.PhotoImage(data=base64.b64encode(rr_png(
                 hw, h, px(R_CTL), ground=p["layer"], **kw)).decode())
             # not in the img() cache: these are as wide as the window and would pile up a copy
-            # per pixel of a resize drag
+            # per pixel of a resize drag. The selected row carries the nav's 3 x 16 bar at x 4
             g = p["layer"]
-            self.hl = {"w": hw, "hover": png(fill=p["sub_hover"](g)), "sel": png(fill=p["sub"](g)),
-                       "focus": png(fill=p["sub"](g), border=p["ring"], border_w=px(2))}
+            bar = (px(SP[0]), px(3), px(16), max(1, px(1.5)), p["ring"])
+            self.hl = {"w": hw, "hover": png(fill=p["sub_hover"](g)), "sel": png(fill=p["sub"](g), bar=bar),
+                       "focus": png(fill=p["sub"](g), bar=bar, border=p["ring"], border_w=px(2))}
         self.hl_id = {k: c.create_image(hx, 0, anchor="nw", image=self.hl[k], state="hidden")
                       for k in ("hover", "sel")}     # created first: the row text draws over them
         right = hx + hw - px(SP[2])                  # the highlight's inner right edge
-        dot = ui.dot(8, 6, p["ring"])
-        for i, idx in enumerate(range(len(items) - 1, -1, -1)):
-            it, y = items[idx], i * h
+        mark, hg = ui.mark(px(10), p["ring"]), px(H_GROUP)   # the draft mark: the m at 10 px
+        mono, now, day, y = ui.mf["mono9"], time.time(), None, 0
+        for idx in range(len(items) - 1, -1, -1):
+            it = items[idx]
+            d = day_of(it["t"], now)
+            if d != day:          # a day header: meta muted, its text 4 above the first row
+                day = d
+                c.create_text(x0, y + hg - px(SP[0]), anchor="sw", text=d, font=ui.mf["meta"],
+                              fill=p["muted"])
+                self.rows.append((None, y, hg))
+                self.ys.append(y)
+                y += hg
             body = " ".join(it["text"].split())
-            t = when(it["t"])
-            if self.two:      # line 1 y+8..26: the words; line 2 y+28..44: the time, then the dot
+            t = time.strftime("%H:%M", time.localtime(it["t"]))
+            draft = it.get("draft")
+            if self.two:      # line 1 y+8..26: the words; line 2 y+28..44: the time, then the mark
                 c.create_text(x0, y + px(17), anchor="w", font=ui.mf["body"], fill=p["ink"],
                               text=ellipsize(ui.mf["body"], body, right - x0))
-                c.create_text(x0, y + px(36), anchor="w", text=t, fill=p["muted"], font=ui.mf["meta"])
-                if it.get("draft"):
-                    c.create_image(x0 + ui.mf["meta"].measure(t) + px(SP[1]), y + px(36),
-                                   anchor="w", image=dot)
-            else:
-                c.create_text(x0, y + h / 2, anchor="w", text=t, fill=p["muted"], font=ui.mf["meta"])
-                tx = x0 + px(W_TIME)
-                c.create_text(tx, y + h / 2, anchor="w", font=ui.mf["body"], fill=p["ink"],
-                              text=ellipsize(ui.mf["body"], body, right - px(14) - tx))
-                if it.get("draft"):
-                    c.create_image(right, y + h / 2, anchor="e", image=dot)
-            self.rows.append((it, y))
-        c.configure(scrollregion=(0, 0, w, len(items) * h))
+                c.create_text(x0, y + px(36), anchor="w", text=t, fill=p["muted"], font=mono)
+                if draft:
+                    c.create_image(x0 + mono.measure(t) + px(SP[1]), y + px(36), anchor="w", image=mark)
+            else:             # the time right-aligned in its column, the mark 8 before it
+                c.create_text(right, y + h / 2, anchor="e", text=t, fill=p["muted"], font=mono)
+                room = right - px(W_TIME) - px(SP[2]) - x0 - (px(10) + px(SP[1]) if draft else 0)
+                c.create_text(x0, y + h / 2, anchor="w", font=ui.mf["body"], fill=p["ink"],
+                              text=ellipsize(ui.mf["body"], body, room))
+                if draft:
+                    c.create_image(right - px(W_TIME) - px(SP[1]), y + h / 2, anchor="e", image=mark)
+            self.rows.append((it, y, h))
+            self.ys.append(y)
+            y += h
+        c.configure(scrollregion=(0, 0, w, self.natural()))
         self.paint()
 
-    def empty(self, w) -> None:
+    def empty(self, w, filtered=False) -> None:
         """Hung on the one left edge, at the top: centred in the whole column it was an orphan
         half a screen below the header it belongs to, and the widest muted line in the app was
-        the first thing the eye landed on."""
+        the first thing the eye landed on. The mark at 32 px in `stroke_field` over the line,
+        then "Hold [Ctrl] [Win] and talk." with real keycaps, then the retention sentence.
+        `filtered`: there are dictations, the filter just matches none - one muted line."""
         ui, p = self.ui, self.ui.pal
         days = ui.cfg.get("retention_days", 0)
         off = not days
-        x, f, mono, gap = ui.px(SP[3]), ui.mf["body"], ui.mf["mono"], ui.px(SP[0])
+        x, f, gap = ui.px(SP[3]), ui.mf["body"], ui.px(SP[0])
         lh = f.metrics("linespace")
         width = min(ui.measure, max(w - 2 * x, ui.px(120)))     # E to E-from-the-right
-        self.create_text(x, 0, anchor="nw", text="History is off" if off else "No dictations yet",
+        if filtered:
+            self.create_text(x, 0, anchor="nw", text="No dictations match.", font=f, fill=p["muted"])
+            return
+        m = ui.mark(ui.px(32), p["stroke_field"])
+        self.create_image(x, 0, anchor="nw", image=m)
+        y = m.height() + ui.px(SP[2])
+        self.create_text(x, y, anchor="nw", text="History is off" if off else "No dictations yet",
                          font=f, fill=p["ink"])
-        y = lh + gap
+        y += lh + gap
         if off:
             self.create_text(x, y, anchor="nw", font=f, fill=p["muted"], width=width, justify="left",
                              text="Set ‘Keep dictations for’ in Settings to keep dictations.")
             return
-        # three items on ONE baseline: the key is in mono, which hangs a different descent
-        base = y + lh - f.metrics("descent")
-        for text, font in (("Hold ", f), ("Ctrl+Win", mono), (" and talk.", f)):
-            self.create_text(x, base + font.metrics("descent"), anchor="sw", text=text, font=font,
-                             fill=p["muted"])
-            x += font.measure(text)
+        # "Hold", the two caps (opaque on the layer, a mono9 glyph centred on each), "and talk."
+        # - on one centre line; when the pane is too narrow for the sentence (the Promptify
+        # list at 176) the tail drops to the next line rather than clip at the hairline
+        cy = y + lh // 2
+        cx = x + f.measure("Hold ")
+        self.create_text(x, cy, anchor="w", text="Hold ", font=f, fill=p["muted"])
+        for cap in ("Ctrl", "Win"):
+            img = ui.kbd_img(cap, ground=p["layer"])
+            self.create_image(cx, cy, anchor="w", image=img)
+            self.create_text(cx + img.width() // 2, cy, text=cap, font=ui.mf["mono9"], fill=p["muted"],
+                             tags=("cap",))
+            cx += img.width() + gap
+        tail = " and talk."
+        if cx + f.measure(tail) > x + width and w > 1:
+            y += lh + gap
+            cx, cy, tail = x, y + lh // 2, tail.strip()
+        self.create_text(cx, cy, anchor="w", text=tail, font=f, fill=p["muted"])
         if self.two:          # the retention sentence is History's; the pane beside it has a header
             return
-        self.create_text(ui.px(SP[3]), y + lh + gap, anchor="nw", font=f, fill=p["muted"],
+        self.create_text(x, y + lh + gap, anchor="nw", font=f, fill=p["muted"],
                          width=width, justify="left",
                          text="What you say is typed where your cursor is, and kept here for "
                               f"{days:g} days.")
@@ -952,19 +1014,22 @@ class RowList(tk.Canvas):
             item = self.hl_id.get(key)
             if item is None:
                 continue
-            y = next((y for it, y in self.rows if it is want), None)
+            # `want is None` must not find a header row (its item is None too)
+            y = None if want is None else next((y for it, y, _ in self.rows if it is want), None)
             if y is None or (key == "hover" and want is ui.sel):
                 self.itemconfigure(item, state="hidden")
             else:
                 self.coords(item, ui.px(SP[0]), y)
                 self.itemconfigure(item, state="normal")
-                if key == "sel":     # the keyboard's row wears the focus ring
-                    self.itemconfigure(item, image=self.hl[
-                        "focus" if self.focus_get() is self else "sel"])
+                if key == "sel":     # the keyboard's row wears the focus ring (focus-visible:
+                    self.itemconfigure(item, image=self.hl[      # keyboard focus only, `ui.kbd`)
+                        "focus" if self.focus_get() is self and ui.kbd else "sel"])
 
     def row_at(self, y):
-        i = int(self.canvasy(y) // self.H)
-        return self.rows[i][0] if 0 <= i < len(self.rows) else None
+        """The item under widget y, or None (a header, the air below the last row)."""
+        cy = self.canvasy(y)
+        i = bisect.bisect_right(self.ys, cy) - 1
+        return self.rows[i][0] if i >= 0 and cy < self.rows[i][1] + self.rows[i][2] else None
 
     def set_hover(self, it) -> None:
         if it is not self.hover:
@@ -978,7 +1043,10 @@ class RowList(tk.Canvas):
             self.on_select(it)
 
     def move(self, step) -> None:
-        order = [r[0] for r in self.rows]
+        """Up/Down: the next item row (headers skipped). Only the keyboard gets here, so the
+        selection it lands on wears the focus ring."""
+        self.ui.kbd = True
+        order = [r[0] for r in self.rows if r[0] is not None]
         if not order:
             return
         i = next((j for j, it in enumerate(order) if it is self.ui.sel), -1)
@@ -986,11 +1054,13 @@ class RowList(tk.Canvas):
         self.show_sel()
 
     def show_sel(self) -> None:
-        """Scroll the selected row into view."""
-        i = next((j for j, (it, _) in enumerate(self.rows) if it is self.ui.sel), None)
-        if i is None:
+        """Scroll the selected row into view - once the canvas has a size: `go()` asks at idle
+        time and a not-yet-laid-out canvas is 1 px high, where every row is "below the fold"
+        (that used to scroll a fresh list 35 px down before its first paint)."""
+        top = next((y for it, y, _ in self.rows if it is self.ui.sel), None)
+        total, vis = max(1, self.natural()), self.winfo_height()
+        if top is None or vis <= 1:
             return
-        top, total, vis = i * self.H, max(1, len(self.rows) * self.H), self.winfo_height()
         if top < self.canvasy(0):
             self.yview_moveto(top / total)
         elif top + self.H > self.canvasy(0) + vis:
@@ -1290,11 +1360,13 @@ class AppWindow:
         return self.img(("kbd", label, h, w, ground), lambda: self.kbd_png(label, h, w, ground))
 
     def keycap(self, parent, label, h=H_KBD, fg=None, w=None) -> tk.Label:
-        """A decorative keycap (`kbd` is taken: the focus-visible flag): not focusable, not clickable, mono9 `muted` (or `fg`) text
-        centred on its image. Every cap is registered in `caps_all` for the coverage check."""
+        """A decorative keycap (`kbd` is taken: the focus-visible flag): not focusable, not
+        clickable, mono9 `muted` (or `fg`) text centred on its image - rendered opaque on the
+        parent's ground (a Label knows it), so no read-back blend per paint. Every cap is
+        registered in `caps_all` for the coverage check."""
         l = tk.Label(parent, text=label, font=self.F["mono9"], fg=fg or self.pal["muted"],
                      bg=parent["bg"], compound="center", bd=0, padx=0, pady=0,
-                     highlightthickness=0, takefocus=0, image=self.kbd_img(label, h, w))
+                     highlightthickness=0, takefocus=0, image=self.kbd_img(label, h, w, parent["bg"]))
         self.caps_all.append(l)
         return l
 
@@ -1379,6 +1451,21 @@ class AppWindow:
                           image=self.icon("check", p["ring"]))
         return l
 
+    def _chord_items(self, c, x, cy, caps, text_tags, img_tags=()) -> tuple:
+        """A cap chord as canvas items from x, centred on cy: per cap its `kbd_img` (opaque on
+        the canvas's own ground) and a mono9 muted text item carrying `text_tags` ("cap" among
+        them, for the coverage check), 4 apart. Returns (the x after the last cap, the text
+        item ids)."""
+        p, ids = self.pal, []
+        for j, cap in enumerate(caps):
+            x += self.px(SP[0]) if j else 0
+            img = self.kbd_img(cap, ground=c["bg"])
+            c.create_image(x, cy, anchor="w", image=img, tags=img_tags)
+            ids.append(c.create_text(x + img.width() // 2, cy, text=cap, font=self.F["mono9"],
+                                     fill=p["muted"], tags=text_tags))
+            x += img.width()
+        return x, ids
+
     def _footer(self, parent, hints, edit_hints=None) -> tk.Canvas:
         """The keyboard-hint strip at the foot of a view: a 28 px row under a `divider` rule,
         hints from E (a cap chord + a meta muted word, 16 apart), the flash slot `.right` at
@@ -1405,13 +1492,7 @@ class AppWindow:
             x = px(SP[3])
             for k, (caps, word) in enumerate(items):
                 x += px(SP[3]) if k else 0
-                for j, cap in enumerate(caps):
-                    x += px(SP[0]) if j else 0
-                    img = self.kbd_img(cap, ground=p["layer"])
-                    c.create_image(x, cy, anchor="w", image=img, tags=(which,))
-                    c.create_text(x + img.width() // 2, cy, text=cap, font=self.F["mono9"],
-                                  fill=p["muted"], tags=(which, "cap", f"{which}{k}"))
-                    x += img.width()
+                x = self._chord_items(c, x, cy, caps, (which, "cap", f"{which}{k}"), (which,))[0]
                 x += px(SP[1])
                 c.create_text(x, cy, anchor="w", text=word, font=self.F["meta"], fill=p["muted"],
                               tags=(which,))
@@ -1426,9 +1507,10 @@ class AppWindow:
         return self.filter.value().strip().lower() if self.filter is not None else ""
 
     def _focus_filter(self) -> None:
-        """Ctrl+F from any view: the History view, with the caret in the filter field."""
+        """Ctrl+F from any view: the History view, with the caret in the filter field (which
+        is hidden while there is nothing to filter)."""
         self.go("history")
-        if self.filter is not None:
+        if self.filter is not None and self.filter.master.winfo_ismapped():
             self.filter.focus_set()
 
     # --- sidebar -----------------------------------------------------------------------------
@@ -1708,14 +1790,14 @@ class AppWindow:
 
     # --- history view ------------------------------------------------------------------------
     def _build_history(self, f) -> None:
-        """Rows: 0 head · 1 (the filter field, when it lands) · 2 the list · 3 the transcript
-        card · 4 the footer."""
+        """Rows: 0 head · 1 the filter field · 2 the list · 3 the transcript card · 4 the
+        footer. The filter (Ctrl+F) narrows the list as you type; Esc clears it."""
         p, pad = self.pal, self.px(SP[3])
         f.grid_rowconfigure(2, weight=1)
         f.grid_columnconfigure(0, weight=1)
 
         head = tk.Frame(f, bg=p["layer"], height=self.px(H_CTL))
-        head.grid(row=0, column=0, sticky="ew", padx=pad, pady=(self.px(PAD_TOP), pad))
+        head.grid(row=0, column=0, sticky="ew", padx=pad, pady=(self.px(PAD_TOP), self.px(SP[2])))
         head.pack_propagate(False)                 # the title row is 32 high with or without a button
         tk.Label(head, text="History", font=self.F["title"], fg=p["ink"], bg=p["layer"], bd=0, padx=0,
                  pady=0).pack(side="left")
@@ -1732,6 +1814,13 @@ class AppWindow:
         _Btn(self, self.confirm, "Clear", self._clear_do, kind="danger").f.pack(side="left")
         _Btn(self, self.confirm, "Keep", self._clear_cancel).f.pack(side="left", padx=(self.px(SP[1]), 0))
 
+        # the filter: a field with the search glyph, 260 wide on E; every key release redraws
+        # the list through its `keep` predicate
+        self.filter = self._entry(f, "", 20, self.F["body"], lambda: None, w=W_FILTER,
+                                  placeholder="Filter dictations", icon="search")
+        self.filter.master.grid(row=1, column=0, sticky="w", padx=pad, pady=(0, self.px(SP[2])))
+        self.filter.bind("<KeyRelease>", lambda e: self._filter_changed())
+        self._filtered = ""                        # the text the list was last drawn for
         # no rule under the header: a full-bleed hairline over a list of rounded highlights is
         # the most rigid line on the screen, and the air below the title separates them anyway
         box = self.box = tk.Frame(f, bg=p["layer"])
@@ -1739,7 +1828,8 @@ class AppWindow:
         self.list = RowList(self, box, on_select=self._select, keys={
             "<Return>": self.copy_selected, "<Control-c>": self.copy_selected,
             "<Double-Button-1>": self.copy_selected, "<Delete>": self.delete_selected,
-            "<Control-d>": self._to_promptify})
+            "<Control-d>": self._to_promptify},
+            keep=lambda it: self.filter_text() in it["text"].lower())
 
         f.bind("<Configure>", self._fit_detail)
         # the selected transcript and its two actions are ONE grouped surface, from E - 12 to
@@ -1768,19 +1858,34 @@ class AppWindow:
         self.detail.bind("<Control-Return>", lambda e: (self._edit_toggle(), "break")[1]
                          if self.editing else None)
 
-        act = self.act = tk.Frame(card, bg=p["card"])
+        # the action row: the primary, then three text buttons (ink: actions, not meta), each
+        # with its key drawn as a cap chord 8 after it, the actions 16 apart. The row IS one
+        # canvas - the caps are items on it (`_chord_items`, as in the footers) and the four
+        # buttons are placed over it: a chord of a Frame and cap Labels is an HWND each, and a
+        # raise-based switch pays ~0.35 ms per HWND in the raised view (measured 2026-09-08:
+        # four chord Frames + six cap Labels were +3.5 ms on the History switch)
+        act = self.act = tk.Canvas(card, bg=p["card"], height=self.px(H_CTL), highlightthickness=0, bd=0)
         act.pack(fill="x", padx=self.cpad, pady=(self.px(SP[2]), self.cpad))
         self.b_copy = _Btn(self, act, "Copy", self.copy_selected, kind="primary")
-        self.b_copy.f.pack(side="left")
         # the way into the Promptify view from here: the same row, drafting at once (Ctrl+D)
-        self.b_prompt = _Btn(self, act, "Promptify", self._to_promptify)
-        self.b_prompt.f.pack(side="left", padx=(self.px(SP[1]), 0))
+        self.b_prompt = _Btn(self, act, "Promptify", self._to_promptify, kind="text", ink=True)
         # fix what Whisper misheard before it goes anywhere ("para" once landed as "power")
         self.editing = False
-        self.b_edit = _Btn(self, act, "Edit", self._edit_toggle)
-        self.b_edit.f.pack(side="left", padx=(self.px(SP[1]), 0))
-        self.b_del = _Btn(self, act, "Delete", self.delete_selected)
-        self.b_del.f.pack(side="left", padx=(self.px(SP[1]), 0))
+        self.b_edit = _Btn(self, act, "Edit", self._edit_toggle, kind="text", ink=True)
+        self.b_del = _Btn(self, act, "Delete", self.delete_selected, kind="text", ink=True)
+        # Edit reads Save while editing: born as wide as the wider word, so nothing after it moves
+        self.b_edit.w = self.b_edit.w0 = max(self.b_edit.w, self.mf["body"].measure("Save") + 2 * self.b_edit.pad)
+        self.b_edit._paint()
+        x, cy, self.act_xs = 0, self.px(H_CTL) // 2, []
+        for b, name, caps in ((self.b_copy, "copy", ("↵",)), (self.b_prompt, "prompt", ("Ctrl", "D")),
+                              (self.b_edit, "edit", ("Ctrl", "↵")), (self.b_del, "del", ("Del",))):
+            self.act_xs.append(x)                      # the button's x with its caps drawn
+            x, ids = self._chord_items(act, x + b.w + self.px(SP[1]), cy, caps, ("cap", "caps", name), ("caps",))
+            setattr(self, "caps_" + name, ids)       # the chord's text items: caps_copy, caps_prompt...
+            x += self.px(SP[3])
+        self.act_need = x - self.px(SP[3])             # the row's width with the caps
+        act.bind("<Configure>", lambda e: self._layout_act(e.width))
+        self._layout_act(self.act_need)
         # the footer: the keys this view answers to that no action already shows, and at its
         # right the status ("✓ Copied", "Deleted · Undo", "Editing") in the flash slot
         self.foot_h = self._footer(f, [(("↑", "↓"), "move"), (("Ctrl", "F"), "filter"), (("Esc",), "close")],
@@ -1791,9 +1896,40 @@ class AppWindow:
         # underlined so the one clickable word in the status line does not read as more meta
         self.s_undo = self.link(self.status, "Undo", self._undo, font=self.F["meta"] + ("underline",))
 
+    def _layout_act(self, width) -> None:
+        """Place the action row's buttons for `width`: with their caps (16 apart, a chord 8
+        after each) when the whole row fits, else the caps hidden and the buttons 8 apart -
+        the caps are decorative, the buttons are the actions, and at 600 wide the card holds
+        the four buttons but not the chords (measured, not hard-coded)."""
+        fits = self.act_need <= width
+        self.act.itemconfigure("caps", state="normal" if fits else "hidden")
+        x = 0
+        for b, x_full in zip((self.b_copy, self.b_prompt, self.b_edit, self.b_del), self.act_xs):
+            b.f.place(x=x_full if fits else x, y=0)
+            x += b.w + self.px(SP[1])
+
     @property
     def rows(self) -> list:
-        return self.list.rows
+        """The History list's item rows, newest first (`RowList.rows` carries the day headers
+        too; a `(None, y, h)` row is one of those)."""
+        return [r for r in self.list.rows if r[0] is not None]
+
+    def _filter_changed(self) -> None:
+        """A key released in the filter: redraw the list when its text changed (a Tab or an
+        arrow releases too), show the card only while something matches, and when the filter
+        hid the selected row move the selection to the newest match - the card always shows
+        a row that is in the list."""
+        text = self.filter_text()
+        if text == self._filtered:
+            return
+        self._filtered = text
+        self.list.draw()
+        items = self.list.items()
+        self.card.grid() if items else self.card.grid_remove()
+        if items and not any(it is self.sel for it in items):
+            self._select(items[-1])
+        else:
+            self._fit_height()
 
     def _list(self):
         """The row list of the view on screen, if it has one."""
@@ -1830,7 +1966,9 @@ class AppWindow:
             H = self.views["history"].winfo_height()
             lh = self.mf["body"].metrics("linespace") + 2 * px(LH)
             chrome = 2 + 2 * self.cpad + px(SP[2]) + px(H_CTL)      # hairlines, padding, gap, actions
-            room = (H - px(PAD_TOP) - px(H_CTL) - px(SP[3]) - len(self.history.items) * self.list.H
+            # head (16, 12), filter (0, 12), the list's natural height, the card's 16 either
+            # side and its chrome, the footer
+            room = (H - px(PAD_TOP) - px(H_CTL) - px(SP[2]) - px(H_CTL) - px(SP[2]) - self.list.natural()
                     - px(SP[3]) - chrome - px(SP[3]) - px(H_FOOT))
             fit = room // lh
             cap = fit if fit >= 3 else (6 if H >= px(480) else 3)
@@ -1853,7 +1991,7 @@ class AppWindow:
             return
         if not self.editing:
             self.editing = True
-            self.b_edit.text("Save", hold=False)
+            self.b_edit.text("Save")            # born wide enough for both words: nothing shifts
             self.s_undo.pack_forget()
             self._say(self.s_text, "Editing")        # the footer's edit strip names the keys
             self.foot_h.hints("edit")
@@ -1862,7 +2000,7 @@ class AppWindow:
             return
         text = " ".join(self.detail.get("1.0", "end-1c").split())
         it, self.editing = self.sel, False
-        self.b_edit.text("Edit", hold=False)
+        self.b_edit.text("Edit")
         self._say(self.s_text, "")
         self.foot_h.hints("view")
         if text and text != it["text"]:
@@ -1876,7 +2014,7 @@ class AppWindow:
 
     def _edit_abort(self) -> None:
         self.editing = False
-        self.b_edit.text("Edit", hold=False)
+        self.b_edit.text("Edit")
         self._say(self.s_text, "")
         self.foot_h.hints("view")
 
@@ -2137,11 +2275,14 @@ class AppWindow:
         self.e_days.master.pack(side="right")
 
     # --- controls ----------------------------------------------------------------------------
-    def _field(self, parent, w, h, r=None):
+    def _field(self, parent, w, h, r=None, icon=None):
         """The rounded field a text control lives in: a Label whose image IS the field, with the
         control placed inside it. Inset by the RADIUS horizontally and by the hairline
         vertically (`.slot`), which is the whole trick - a square widget placed that far in can
         never cover a corner, and its inset is exactly the padding the text wanted anyway.
+        `icon` names a glyph drawn in muted 8 in from the left edge (the filter's search) and
+        the slot then starts 8 after it; the glyph is composed INTO the field's image rather
+        than carried by a Label of its own - one widget fewer to paint on a view switch.
 
         A Canvas + create_window would look identical and be wrong: Tk unmaps a canvas's window
         items while the canvas is scrolled out of sight, so a field below the fold would drop
@@ -2150,18 +2291,26 @@ class AppWindow:
         fill = self.pal["ctl"]
         box = tk.Label(parent, bd=0, highlightthickness=0, bg=ground, padx=0, pady=0)
 
+        def face(border, bw):
+            if not icon:
+                return self.rr(w, h, r, fill, ground, border, bw)
+            ic = self.px(ICON)
+            return self.img(("field", w, h, r, fill, ground, border, bw, icon), lambda: compose_png(
+                w, h, [(0, 0, rr_png(w, h, r, fill, border, bw, ground)),
+                       (self.px(SP[1]), (h - ic) // 2, icon_png(icon, self.pal["muted"], ic))]))
+
         def paint(state="idle"):
             border = {"idle": self.pal["stroke_field"], "focus": self.pal["ring"],
                       "error": self.pal["danger"]}[state]
-            box.configure(image=self.rr(w, h, r, fill, ground, border,
-                                        1 if state == "idle" else self.px(2)))
+            box.configure(image=face(border, 1 if state == "idle" else self.px(2)))
         box.paint, box.fill = paint, fill
-        box.slot = lambda child: child.place(x=r, y=1, relwidth=1.0, width=-2 * r,
+        x = self.px(SP[1]) + self.px(ICON) + self.px(SP[1]) if icon else r
+        box.slot = lambda child: child.place(x=x, y=1, relwidth=1.0, width=-(x + r),
                                              relheight=1.0, height=-2)
         paint()
         return box
 
-    def _entry(self, parent, value, width, font, commit, w=None, placeholder=None) -> tk.Entry:
+    def _entry(self, parent, value, width, font, commit, w=None, placeholder=None, icon=None) -> tk.Entry:
         """A one-line field `width` characters wide - or `w` logical px. Empty and unfocused it
         shows `placeholder` in muted; `.value()` is "" then (`.get()` would hand it back)."""
         p = self.pal
@@ -2171,7 +2320,7 @@ class AppWindow:
             probe = tk.Entry(parent, width=width, font=font)     # what this many characters measure
             w = probe.winfo_reqwidth() + 2 * self.px(SP[1])
             probe.destroy()
-        box = self._field(parent, w, self.px(H_CTL))
+        box = self._field(parent, w, self.px(H_CTL), icon=icon)
         e = tk.Entry(box, width=width, font=font, bg=box.fill, fg=p["ink"], relief="flat", bd=0,
                      insertbackground=p["ink"], highlightthickness=0, justify="left",
                      selectbackground=p["sub"](p["ctl"]), selectforeground=p["ink"])
@@ -3308,10 +3457,11 @@ class AppWindow:
 
     def _escape(self) -> None:
         """Esc, one step back at a time: the sheet closes; a draft in progress is cancelled; a
-        field - or anything in the Promptify detail pane, chip strips and header buttons
-        included - hands focus back to the view's list; the Clear confirm is dismissed; the
-        History filter is cleared; and with nothing left to undo the window hides (the footers'
-        "Esc close")."""
+        filter with text under the caret is cleared (as any search field); a field - or
+        anything in the Promptify detail pane, chip strips and header buttons included - hands
+        focus back to the view's list; the Clear confirm is dismissed; a filter with text left
+        behind is cleared; and with nothing left to undo the window hides (the footers' "Esc
+        close")."""
         if self.view == "promptify":
             if self.sheet_open:
                 self._close_sheet()
@@ -3320,6 +3470,10 @@ class AppWindow:
                 self._cancel_draft()
                 return
         f, lst = self.win.focus_get(), self._list()
+        if f is self.filter and self.filter_text():
+            self.filter.clear()
+            self._filter_changed()
+            return
         if lst is not None and f is not None and (isinstance(f, (tk.Entry, tk.Text, ttk.Combobox))
                                                   or str(f).startswith(str(self.dpane) + ".")):
             lst.focus_set()
@@ -3329,7 +3483,7 @@ class AppWindow:
             return
         if self.filter_text():
             self.filter.clear()
-            self.list.draw()
+            self._filter_changed()
             return
         self.hide()
 
@@ -3673,14 +3827,16 @@ class AppWindow:
         self.history.prune()
         items = self.history.items
         if not any(it is self.sel for it in items):
-            self.sel = items[-1] if items else None
+            shown = self.list.items()      # the newest row the filter shows, else the newest
+            self.sel = (shown or items)[-1] if items else None
         n, days = len(items), self.cfg.get("retention_days", 0)
         kept = "history is off" if not days else f"kept {days:g} days"
         self.count.configure(text=f"{'no' if not n else n} dictation{'s' if n != 1 else ''} · {kept}")
         self.pcount.configure(text=str(n))
         self._clear_cancel()
         self.b_clear.f.pack(side="right") if n else self.b_clear.f.pack_forget()
-        self.card.grid() if n else self.card.grid_remove()
+        self.filter.master.grid() if n else self.filter.master.grid_remove()  # nothing to filter
+        self.card.grid() if self.list.items() else self.card.grid_remove()   # the filter may empty it
         self.list.draw()
         self.plist.draw()
         self._select(self.sel)

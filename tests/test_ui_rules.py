@@ -162,21 +162,22 @@ for theme in ("light", "dark"):
         tags = sorted({t for i in c.find_withtag("cap") for t in c.gettags(i) if t[-1].isdigit()})
         chords += [[c.itemcget(i, "text") for i in c.find_withtag(t)] for t in tags]
     chords += [[side.itemcget(c, "text") for c in row["caps"] if side.type(c) == "text"][::-1]
-               for row in win.nav.values()]                     # ... and the nav rows' (drawn digit-first)
-    assert len(chords) == 3 + 2 + 3 + 4 + 3, chords               # History view + edit, Promptify, Settings, nav
+               for row in win.nav.values()]                     # ... the nav rows' (drawn digit-first) ...
+    chords += [[win.act.itemcget(i, "text") for i in win.act.find_withtag(name)]   # ... and the card's
+               for name in ("copy", "prompt", "edit", "del")]   # action row (one canvas, a tag per chord)
+    assert len(chords) == 3 + 2 + 3 + 4 + 3 + 4, chords           # History view + edit, Promptify, Settings, nav, card
     for chord in chords:
         ctrl, keys = chord[0] == "Ctrl", [c for c in chord if c != "Ctrl"]
         assert keys, chord
         for cap in keys:
             assert has(keysym(cap), ctrl), (theme, "cap without a binding", chord, sorted(bound))
     drawn = {l.cget("text") for l in win.caps_all} | {
-        c.itemcget(i, "text") for c in (side, win.foot_h, win.foot_p, win.foot_s)
+        c.itemcget(i, "text") for c in (side, win.foot_h, win.foot_p, win.foot_s, win.act)
         for i in c.find_withtag("cap")}
-    assert {"↵", "Ctrl", "C", "Esc", "↑", "↓", "F", "1", "2", "3", "Tab", "Space", "←", "→"} <= drawn, drawn
-    # `Ctrl ,` and `Ctrl W` are the two documented undrawn synonyms (of the Settings row and Esc);
-    # `Ctrl D` and `Del` get their caps with the History action row (build stage 3)
+    assert {"↵", "Ctrl", "C", "D", "Del", "Esc", "↑", "↓", "F", "1", "2", "3", "Tab", "Space", "←", "→"} <= drawn, drawn
+    # `Ctrl ,` and `Ctrl W` are the two documented undrawn synonyms (of the Settings row and Esc)
     CAP = {v: k for k, v in KEYSYM.items()}
-    undrawn = {("Control", "Key", "comma"), ("Control", "Key", "w"), ("Control", "Key", "d"), ("Key", "Delete")}
+    undrawn = {("Control", "Key", "comma"), ("Control", "Key", "w")}
     for seq in bound - undrawn:
         if "Key" not in seq or seq[-1] == "Key" or "Shift" in seq:
             continue                                            # mouse events, bare <Key>, Tab's shift twin
