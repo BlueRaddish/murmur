@@ -14,25 +14,38 @@ import window as W
 for acc in ("#00ff00", "#e63c3c", "#ffffff", "#000000", "#3c8cff"):
     for dark in (False, True):
         p = W.palette(acc, dark)
-        assert len([k for k in p if k[:1] == "s" and k[1:].isdigit()]) == 12, p
-        assert all(n in p for n in W.STEPS)
-        assert W.contrast(p["ink"], p["surface"]) >= 4.5, (acc, dark, "ink")
-        assert W.contrast(p["muted"], p["surface"]) >= 4.5, (acc, dark, "muted")
+        assert all(n in p for n in ("base", "layer", "card", "ctl", "ctl_hover", "ctl_press", "ink", "muted",
+                                    "ring", "primary", "primary_hover", "on_primary", "tint", "tint_hover",
+                                    "danger", "danger_text", "on_danger", "stroke_edge", "stroke_field",
+                                    "stroke_strong", "disabled")), p
+        for g in ("layer", "card", "ctl", "base"):
+            assert W.contrast(p["ink"], p[g]) >= 4.5, (acc, dark, "ink on", g)
+            assert W.contrast(p["muted"], p[g]) >= 4.5, (acc, dark, "muted on", g)
         assert W.contrast(p["on_primary"], p["primary"]) >= 3.0, (acc, dark, "on_primary")
         assert W.contrast(p["on_danger"], p["danger"]) >= 3.0, (acc, dark, "on_danger")
-        # the focus ring is non-text UI: 3:1 against the ground it is drawn on, or it is decoration
-        assert W.contrast(p["ring"], p["bg"]) >= 3.0, (acc, dark, "ring", p["ring"])
+        # the focus ring is non-text UI: 3:1 against the grounds it is drawn on, or it is decoration
+        for g in ("layer", "card", "base"):
+            assert W.contrast(p["ring"], p[g]) >= 3.0, (acc, dark, "ring on", g, p["ring"])
         # where the chroma is spent: secondary TEXT is a tinted neutral (light muted used to be
         # #20701d, a span of 83 - full accent), the ring genuinely reads as the accent
         span = lambda hx: max(W.rgb(hx)) - min(W.rgb(hx))
         assert span(p["muted"]) <= 0.30 * span(p["primary"]), (acc, dark, "muted", p["muted"])
         assert span(p["ring"]) >= 0.60 * span(p["primary"]), (acc, dark, "ring", p["ring"])
-        assert p["bg"] != p["surface"] != p["hover"]           # the surface ladder is visible
+        # the surface ladder is visible: base under layer in both themes, a raised control above
+        # it; in dark every step (base -> layer -> card -> ctl) is its own value, >= 1.09 apart
+        assert p["base"] != p["layer"] and p["ctl"] != p["layer"]
+        if dark:
+            assert p["layer"] != p["card"] != p["ctl"]
+            for lo, hi in (("base", "layer"), ("layer", "card"), ("card", "ctl"), ("base", "ctl")):
+                assert W.contrast(p[lo], p[hi]) >= 1.09, (lo, hi, p[lo], p[hi])
+        # the ground-relative tokens are functions: premixed against the surface they sit on
+        assert p["sub"](p["layer"]) != p["sub"](p["base"]) and p["stroke"](p["layer"]) != p["layer"]
         # neutrals are achromatic since 2026-08-28 (a tinted ramp read as pink under a red accent);
         # the light ground is pure white by the user's word
-        for n in ("bg", "surface", "hover", "active", "selected", "border", "border_strong", "muted", "ink"):
+        for n in ("base", "layer", "card", "ctl", "ctl_hover", "ctl_press", "ink", "muted", "stroke_edge",
+                  "stroke_field", "stroke_strong", "disabled"):
             assert len(set(W.rgb(p[n]))) == 1, (acc, dark, n, p[n])
-        assert dark or p["bg"] == "#ffffff", (acc, p["bg"])
+        assert dark or p["layer"] == "#ffffff", (acc, p["layer"])
 assert W.hex_hue("#808080") == 250.0 and W.hex_hue("#000000") == 250.0   # achromatic -> fallback
 assert abs(W.hex_hue("#00ff00") - 142.5) < 1.0
 # the window's accent is the brand green whatever the bar colour says (a red bar made it pink)
@@ -61,6 +74,10 @@ d3 = mk(2026, 8, 23, 21, 5, 0)
 assert W.when(d3, now) == time.strftime("%a", time.localtime(d3)) + " 21:05"
 assert W.when(mk(2026, 8, 12, 8, 0, 0), now) == "Aug 12"
 assert W.when(mk(2025, 8, 12, 8, 0, 0), now) == "Aug 12 2025"
+# the day-group header: the same day arithmetic without the clock, the weekday spelled out
+assert W.day_of(now - 3600, now) == "Today" and W.day_of(mk(2026, 8, 25, 9, 10, 0), now) == "Yesterday"
+assert W.day_of(d3, now) == time.strftime("%A", time.localtime(d3))
+assert W.day_of(mk(2026, 8, 12, 8, 0, 0), now) == "Aug 12" and W.day_of(mk(2025, 8, 12, 8, 0, 0), now) == "Aug 12 2025"
 print("text helpers ok")
 
 # --- History.insert -------------------------------------------------------------------------
@@ -150,9 +167,9 @@ W.H_MARK = was
 px_ = win.px
 assert win.nav["history"][0].winfo_y() == px_(W.PAD_TOP) + px_(W.H_CTL) + px_(16)
 assert win.nav["promptify"][0].winfo_y() == win.nav["history"][0].winfo_y() + px_(W.H_CTL) + px_(2)
-pill = lambda fill: str(win.rr(px_(W.W_SIDE - 2 * W.SP[1]), px_(W.H_CTL), px_(W.R_CTL), fill, win.pal["surface"]))
-assert win.nav["history"][0].cget("image") == pill(win.pal["selected"])
-assert win.nav["settings"][0].cget("image") == pill(win.pal["surface"])
+pill = lambda fill: str(win.rr(px_(W.W_SIDE - 2 * W.SP[1]), px_(W.H_CTL), px_(W.R_CTL), fill, win.pal["base"]))
+assert win.nav["history"][0].cget("image") == pill(win.pal["sub"](win.pal["base"]))
+assert win.nav["settings"][0].cget("image") == pill(win.pal["base"])
 print("lockup ok")
 
 win.go("settings")
@@ -217,7 +234,7 @@ E = lambda w: w.winfo_rootx() - win.views["history"].winfo_rootx()
 assert E(win.card) == px_(4) and E(win.detail) == px_(16), (E(win.card), E(win.detail))
 # the status is meta, on the actions row right after Delete - never at the far edge
 assert (win.status.winfo_x() == win.b_del.f.winfo_x() + win.b_del.f.winfo_width() + px_(12)
-        and W.tkfont.Font(root, font=win.s_text.cget("font")).actual("size") == 9)
+        and W.tkfont.Font(root, font=win.s_text.cget("font")).actual("size") == 10)
 # the height rule: 45 rows cannot fit, so the card shows at most 6 lines and its own thumb; a
 # one-line dictation gets one line and no thumb; a window under 480 tall allows 3
 root.update()
@@ -269,7 +286,7 @@ assert cfg.get("theme") is None                          # missing key = follow 
 # labels land on E; the thumb is 4 px; the rule under the title shows only while scrolled
 glab = win.cards[0].master.pack_slaves()[0]
 assert glab.cget("text") == "Window" and glab.cget("fg") == win.pal["muted"]
-assert W.tkfont.Font(root, font=glab.cget("font")).actual("size") == 9
+assert W.tkfont.Font(root, font=glab.cget("font")).actual("size") == 10
 Es = lambda w: w.winfo_rootx() - win.views["settings"].winfo_rootx()
 assert Es(glab) == px_(16) and Es(win.cards[0]) == px_(4) and Es(win.r_mic.head) == px_(16)
 # the thumb: 4 px painted (clam's 1 px strips either side are clipped by its column), in the
@@ -279,26 +296,26 @@ Es_r = lambda w: w.winfo_rootx() + w.winfo_width() - win.views["settings"].winfo
 assert Es_r(win.cards[0]) == win.views["settings"].winfo_width() - px_(4), Es_r(win.cards[0])
 assert Es_r(win.ssb.master) == win.views["settings"].winfo_width() and win.ssb.master.winfo_width() == px_(4)
 srule = win.views["settings"].grid_slaves(row=1)[0]
-assert srule.cget("bg") == win.pal["bg"]
+assert srule.cget("bg") == win.pal["layer"]
 win.sc.yview_moveto(1.0)
 root.update()
-assert srule.cget("bg") == win.pal["border"]
+assert srule.cget("bg") == win.pal["divider"](win.pal["layer"])
 win.sc.yview_moveto(0.0)
 root.update()
-assert srule.cget("bg") == win.pal["bg"]
+assert srule.cget("bg") == win.pal["layer"]
 # field widths: hex and language 96, days 64, combos 200
 assert win.ctl["color"]["entry"].master.winfo_width() == px_(96) == win.e_lang.master.winfo_width()
 assert win.e_days.master.winfo_width() == px_(64)
 assert win.r_mic.right.winfo_children()[0].winfo_width() == px_(200)
-# the segment: a `hover` track with no hairline, the picked cell `selected`
+# the segment: a `ctl_press` track with no hairline, the picked cell a `ctl` key
 seg_img = lambda i: win.ctl["theme"][i][0].cget("image")
 i_on = next(i for i, (l, v) in enumerate(win.ctl["theme"]) if v == "system")
 i_off = next(i for i, (l, v) in enumerate(win.ctl["theme"]) if v == "dark")
 pix = lambda i, x, y: tuple(int(v) for v in root.tk.splitlist(root.tk.call(seg_img(i), "get", x, y)))
 h_seg = win.px(W.H_CTL)
-assert pix(i_on, win.ctl["theme"][i_on][0].winfo_width() // 2, h_seg // 2) == W.rgb(win.pal["selected"])
-assert pix(i_off, win.ctl["theme"][i_off][0].winfo_width() // 2, h_seg // 2) == W.rgb(win.pal["hover"])
-assert pix(i_off, win.ctl["theme"][i_off][0].winfo_width() // 2, 0) == W.rgb(win.pal["hover"])   # no hairline
+assert pix(i_on, win.ctl["theme"][i_on][0].winfo_width() // 2, h_seg // 2) == W.rgb(win.pal["ctl"])
+assert pix(i_off, win.ctl["theme"][i_off][0].winfo_width() // 2, h_seg // 2) == W.rgb(win.pal["ctl_press"])
+assert pix(i_off, win.ctl["theme"][i_off][0].winfo_width() // 2, 0) == W.rgb(win.pal["ctl_press"])   # no hairline
 
 # one right edge: every control column, the trigger row's button group and the header agree
 edge = lambda w: w.winfo_rootx() + w.winfo_width()
@@ -592,7 +609,7 @@ root.update()
 assert win.b_eng.f.cget("text") == "Codex"
 n_codex = need()
 for W_ in range(px_(700), px_(1200), 2):
-    main_ = W_ - px_(168) - 1
+    main_ = W_ - px_(W.W_SIDE) - 1
     detail_ = main_ - max(px_(176), min(px_(240), int(0.36 * main_))) - 1
     if detail_ - 2 * px_(16) >= n_codex + px_(10):
         break
@@ -673,7 +690,7 @@ win._switch_prompt(0)
 # the prompt's keyboard focus is a 2 px ring bar on its left edge, in the padding before E -
 # ground until then; nothing moves and the text stays on E
 t_ = F["text"]
-assert t_.ring.cget("bg") == win.pal["bg"] and Ep(t_, win.dpane) == px_(16) and t_.ring.winfo_width() == px_(2)
+assert t_.ring.cget("bg") == win.pal["layer"] and Ep(t_, win.dpane) == px_(16) and t_.ring.winfo_width() == px_(2)
 xy0 = (t_.winfo_rootx(), t_.winfo_rooty(), t_.winfo_width())
 F["text"].focus_force()
 F["text"].mark_set("insert", "end-1c")
@@ -773,7 +790,7 @@ win._retry()
 assert win.pstate == "drafting" and not win.b_main.on and win.b_main.f.cget("text") == "Try again"   # stays, faded
 assert "claude" not in win.eng_err                     # the marker goes with the retry, not its result
 assert settle(lambda: win.pstate == "draft") and "claude" not in win.eng_err
-assert win.eng_dot.cget("image") == str(win.dot(8, 6, win.pal["primary"]))
+assert win.eng_dot.cget("image") == str(win.dot(8, 6, win.pal["ring"]))
 # the tab order: list → engine → segment → primary → Original › → 1 of 2 → prompt → chip strip →
 # answer → Assume → answer → Assume → Update prompt → (round to the list): nothing hidden, nothing twice
 F = win.p_fields
@@ -795,7 +812,7 @@ win._plist_go()
 assert win.pstate == "drafting" and settle(lambda: win.pstate == "draft")
 
 # the button register: kinds, disabled, the held width, the solid button's inner ring
-fr = tk.Frame(win.views["promptify"], bg=win.pal["bg"])
+fr = tk.Frame(win.views["promptify"], bg=win.pal["layer"])
 fr.place(x=0, y=0)
 hits = []
 b = W._Btn(win, fr, "Copy prompt", lambda: hits.append(1), kind="primary")
@@ -1049,7 +1066,7 @@ assert settle(lambda: win.drafting is None)          # a rebuild waits for a run
 geo, sel_ = win.win.geometry(), win.sel
 next(l for l, v in win.ctl["theme"] if v == "dark").event_generate("<Button-1>")
 root.update()
-assert cfg["theme"] == "dark" and win.dark and W.lum(win.pal["bg"]) < 0.1 and win.win.winfo_exists()
+assert cfg["theme"] == "dark" and win.dark and W.lum(win.pal["layer"]) < 0.1 and win.win.winfo_exists()
 assert win.view == "settings" and win.sel is sel_ and win.win.geometry().split("+")[0] == geo.split("+")[0]
 next(l for l, v in win.ctl["theme"] if v == "system").event_generate("<Button-1>")
 root.update()
@@ -1064,7 +1081,7 @@ h2, c2, s2 = fake_history(), fresh_cfg(), []
 dark = W.AppWindow(root, h2, c2, s2.append, theme="dark")
 dark.show()
 root.update()
-assert dark.pal["ink"] != win.pal["ink"] and W.lum(dark.pal["bg"]) < 0.1
+assert dark.pal["ink"] != win.pal["ink"] and W.lum(dark.pal["layer"]) < 0.1
 assert dark.foot_links == [], "footer links must be absent without `links`"
 dark.win.destroy()
 

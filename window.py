@@ -1,15 +1,20 @@
 """The app window: transcript history, Promptify (a dictation -> a prompt, and the engines that
 write it) and settings. Hidden until opened from the tray.
 
-One Toplevel, a sidebar and three views. The look is the brand green run through an OKLCH 12-step
-ramp (Radix semantics) for the accent steps - solid fills and the focus ring - over achromatic
-neutrals: a white ground in light, neutral near-black in dark. (Until 2026-08-28 the neutrals
-carried the bar's accent hue at 1-2 % chroma; with a red bar colour the whole window read as
-pink, and the user wants the window white and the brand green.) Depth is a surface ladder + hairlines
-on ROUNDED surfaces: Tk cannot round a widget corner, so every corner in here is PIL-rendered
-and handed to Tk as a PhotoImage - controls carry their shape as their own image (`rr_png`),
-and surfaces that must stretch wear four corner masks (`corner_pngs`) pinned at their corners.
-No motion: hover/active are instant colour swaps. Settings autosave - there is no Save button.
+One Toplevel, a sidebar and three views. The look is Fluent 2's layer model in achromatic
+neutrals - a grained `base` under the sidebar, the user's pure white `layer` for the content,
+`card` for grouped surfaces and `ctl` for anything raised - with the brand green as the only
+chroma: the primary fill and the focus ring come from OKLCH at the accent's hue, and a danger
+sibling sits on the same curve at hue 25. (Until 2026-08-28 the neutrals carried the bar's
+accent hue at 1-2 % chroma; with a red bar colour the whole window read as pink, and the user
+wants the window white and the brand green.) Depth is ONE language: a 1 px hairline, the surface
+ladder, and on a raised control a 1 px elevation edge (a darkened bottom line; in dark a lit top
+too) - zero drop shadows, no glow, no gradients. Tk cannot round a widget corner, so every corner
+in here is PIL-rendered and handed to Tk as a PhotoImage: controls carry their shape as their own
+image (`rr_png`), keycaps are the same raised recipe at 20 px (`kbd_img`), icons are stroked on a
+16 grid (`icon_png`), the sidebar's grain is a tiled noise PNG, and surfaces that must stretch
+wear four corner masks (`corner_pngs`) pinned at their corners. Settings autosave - there is no
+Save button.
 """
 import base64
 import datetime
@@ -70,18 +75,26 @@ def hex_hue(hx, fallback=250.0) -> float:
     return math.degrees(math.atan2(b2, a)) % 360
 
 
-# L, C per step. Light descends from a pure white ground; dark is not a mirror - steps 1-2 are
-# near-black. Chroma budget: 9/10 (the solid accent fills) and 8 (the focus ring, which has to be
-# seen as the accent) carry real chroma; every other step - surfaces, borders, muted and ink text -
-# is achromatic. Tinting them from the hue was the method's rule and the user's "pinkish" verdict
-# overruled it: at 1-2 % chroma a red hue is a visible blush across every surface.
-LIGHT = [(1.0, 0), (0.98, 0), (0.955, 0), (0.93, 0), (0.90, 0), (0.85, 0),
-         (0.78, 0), (0.60, .13), (0.55, .17), (0.50, .17), (0.48, 0), (0.25, 0)]
-DARK = [(0.14, 0), (0.17, 0), (0.21, 0), (0.24, 0), (0.27, 0), (0.31, 0),
-        (0.36, 0), (0.55, .13), (0.60, .14), (0.65, .14), (0.70, 0), (0.92, 0)]
-STEPS = ("bg", "surface", "hover", "active", "selected", "border", "border_strong", "ring",
-         "primary", "primary_hover", "muted", "ink")
+# The accent steps (L, C) at the accent's hue - the only chromatic part of the palette. The
+# neutrals are fixed achromatic hexes in Fluent 2's roles (base darker than layer in BOTH themes,
+# the "layer on Mica" model); tinting them from the hue was the method's rule and the user's
+# "pinkish" verdict overruled it: at 1-2 % chroma a red hue is a visible blush across every
+# surface. Every alpha is premixed to a hex with `mix()` against the surface it sits on - Tk has
+# no alpha, a token is a hex.
+ACCENT = {False: {"ring": (0.60, .17), "primary": (0.55, .17), "primary_hover": (0.50, .17)},
+          True: {"ring": (0.62, .15), "primary": (0.545, .15), "primary_hover": (0.59, .15)}}
 DANGER_HUE = 25.0
+DANGER = {False: {"danger": (0.55, .17), "danger_hover": (0.50, .17), "danger_text": (0.55, .17)},
+          True: {"danger": (0.62, .15), "danger_hover": (0.66, .15), "danger_text": (0.72, .14)}}
+NEUTRAL = {                     # Fluent 2 roles, achromatic, the user's white as the layer
+    False: dict(base="#f3f3f3", layer="#ffffff", card="#ffffff", ctl="#fbfbfb", ctl_hover="#f5f5f5",
+                ctl_press="#efefef", ink="#1b1b1b", muted="#646464"),
+    True: dict(base="#121212", layer="#1c1c1c", card="#242424", ctl="#2e2e2e", ctl_hover="#353535",
+               ctl_press="#292929", ink="#ececec", muted="#a6a6a6")}
+ALPHA = {                       # (light, dark): alpha of black (light) / white (dark) over a surface
+    "subtle": (.045, .065), "subtle_hover": (.03, .045), "stroke": (.08, .07), "divider": (.06, .06),
+    "stroke_edge": (.16, None), "stroke_top": (None, .10), "stroke_field": (.45, .55),
+    "stroke_strong": (.28, .30), "disabled": (.36, .36), "card_inset": (None, .04)}
 
 
 def rgb(hx) -> tuple:
@@ -115,22 +128,44 @@ def norm_hex(v, default=None):
 
 
 def palette(accent_hex: str, dark: bool) -> dict:
-    """One hue -> the whole system. 12 Radix-semantic steps (also exposed as s1..s12), a danger
-    sibling on the same L/C curve at hue 25, and the text colour that sits on a solid fill."""
+    """One hue -> the whole system. The neutrals are `NEUTRAL[dark]`; the four GROUND-RELATIVE
+    tokens are functions on the dict (`p["sub"](ground)`, `sub_hover`, `stroke`, `divider`) so a
+    caller always premixes against the surface it draws on; the edges, strokes and `disabled`
+    are premixed here over the surface they are defined on (`ctl`, `layer`, `card`). The accent
+    (ring, primary) and its danger sibling at hue 25 are OKLCH at the accent's hue, and `on_*`
+    is the text colour on a solid fill - white whenever white clears 4.5."""
     h = hex_hue(norm_hex(accent_hex, "#3c8cff"))
-    ramp = DARK if dark else LIGHT
-    steps = [oklch_hex(L, C, h) for L, C in ramp]
-    p = {n: steps[i] for i, n in enumerate(STEPS)}
-    p.update({"s%d" % (i + 1): s for i, s in enumerate(steps)})
-    dgr = [oklch_hex(L, C, DANGER_HUE) for L, C in ramp]
-    p["danger"], p["danger_hover"], p["danger_text"] = dgr[8], dgr[9], dgr[10]
-    on = lambda fill: max(("#ffffff", steps[0], steps[11]), key=lambda c: contrast(c, fill))
-    p["on_primary"], p["on_danger"] = on(steps[8]), on(dgr[8])
-    # the chips' ground: a whisper of the accent over the page (12 % light / 20 % dark), a
-    # little more under the pointer and behind the chosen chip - only a little in light, where
-    # the focus ring has to stay 3:1 on the chosen chip (16 % holds 3.1; 18 % fell to 2.96)
-    p["tint"] = mix(p["bg"], p["primary"], 0.20 if dark else 0.12)
-    p["tint_hover"] = mix(p["bg"], p["primary"], 0.28 if dark else 0.16)
+    p = dict(NEUTRAL[dark])
+    over = "#ffffff" if dark else "#000000"            # what the alphas are alphas OF
+    a = lambda name: ALPHA[name][dark]
+    p["sub"] = lambda g: mix(g, over, a("subtle"))                 # selected row / nav fill
+    p["sub_hover"] = lambda g: mix(g, over, a("subtle_hover"))     # hover on rows, nav, text buttons
+    p["stroke"] = lambda g: mix(g, over, a("stroke"))              # a card's or control's outline
+    p["divider"] = lambda g: mix(g, over, a("divider"))            # inset rules
+    # the elevation edge of a raised control: a darkened bottom line in both themes (black 25 %
+    # over `ctl` in dark), a lit top line in dark only
+    p["stroke_edge"] = mix(p["ctl"], "#000000", .25) if dark else mix(p["ctl"], over, a("stroke_edge"))
+    p["stroke_top"] = mix(p["ctl"], over, a("stroke_top")) if dark else None
+    p["stroke_field"] = mix(p["layer"], over, a("stroke_field"))   # a field's underline at rest
+    p["stroke_strong"] = mix(p["layer"], over, a("stroke_strong"))  # scroll thumb, slider track
+    p["thumb"] = p["stroke_strong"]
+    p["disabled"] = mix(p["layer"], over, a("disabled"))           # < 4.5 on purpose (WCAG exempts)
+    p["card_inset"] = mix(p["card"], over, a("card_inset")) if dark else None
+    for n, (L, C) in ACCENT[dark].items():
+        p[n] = oklch_hex(L, C, h)
+    for n, (L, C) in DANGER[dark].items():
+        p[n] = oklch_hex(L, C, DANGER_HUE)
+    on = lambda fill: "#ffffff" if contrast("#ffffff", fill) >= 4.5 else \
+        max(("#ffffff", p["layer"], p["ink"]), key=lambda c: contrast(c, fill))
+    p["on_primary"], p["on_danger"] = on(p["primary"]), on(p["danger"])
+    # the chips' ground: a whisper of the ring over the layer, a little more under the pointer
+    # and behind the chosen chip - only a little in light, where the focus ring has to stay 3:1
+    # on the chosen chip (16 % holds 3.09)
+    p["tint"] = mix(p["layer"], p["ring"], 0.18 if dark else 0.12)
+    p["tint_hover"] = mix(p["layer"], p["ring"], 0.24 if dark else 0.16)
+    # the sidebar's material, not colours: the grain's sigma at 1x device px and the white
+    # alpha of the specular band at its top
+    p["grain"], p["specular"] = (2.5, .045) if dark else (3.0, .40)
     return p
 
 
@@ -151,24 +186,34 @@ LH = 3                              # title bar, and the Text line lead that mak
 R_CTL = 8                           # radius family: controls (button, field, segment, chip,
 R_CARD = 12                         # nav pill, row highlight) and grouped cards. Inner radius
 R_IN = 2                            # = outer - inset, clamped at 0: the segment's selected cell
+R_KBD = 4                           # keycaps
 H_CTL = 32                          # control height
+H_NAV = 36                          # sidebar nav row (Fluent NavigationViewItem); rows 4 apart
 H_ROW = 36                          # history row (one line)
 H_ROW2 = 52                         # Promptify's dictation row (two lines)
-H_CHIP = 24                         # question chips, the trigger-key chip
+H_GROUP = 24                        # day-group header row in both lists
+H_CHIP = 24                         # question chips, the trigger-key cap
+H_KBD = 20                          # keycaps (inline and footer)
+H_FOOT = 28                         # the keyboard-hint footer strip
 H_MARK = 24                         # sidebar lockup: the mark's IMAGE box (its ink is 40/64 of
 GAP_MARK = 16                       # that, ~1.9x the wordmark's x-height) and the air after it.
                                     # Both are up from the 20/10 first cut: at that size the mark
                                     # read as a letter and the sidebar said "m murmur"
-W_CHIP = 88                         # trigger-key chip: fits "Previous Track" at 9 pt
-W_SIDE = 168                        # sidebar
+W_CHIP = 88                         # trigger-key cap: fits "Previous Track" at 9 pt
+W_SIDE = 192                        # sidebar: 8 + pill 176 + 8 (label 40 + "Promptify" 56 + 8 +
+                                    # the Ctrl-digit chord 64 + 8 = 176; at 184 the chord overlaps)
 W_FIELD = 96                        # the hex and language entries (7 mono characters)
 W_DAYS = 64                         # the retention entry
 W_COMBO = 200                       # the microphone and model combos
-W_TIME = 104                        # history time column
+W_TIME = 104                        # history time column ("Yesterday 09:10" before the text);
+                                    # 44 once the column is a right-aligned mono "17:44"
+W_FILTER = 260                      # the History filter field
 W_LIST = (176, 0.36, 240)           # Promptify's list pane: clamp(min, share of the main width, max)
 W_ACT = 80                          # the engines sheet's action column
+ICON = 16                           # icon box (14 inside a chip, 10 for the draft mark in a row)
 WIN = (780, 560)
 WIN_MIN = (600, 400)
+MOTION_FAST, MOTION_NORMAL = 83, 150    # ms: hover blend / slides
 # the body measure: an 80-character line of body text is as wide as a prompt or a transcript
 # gets. (`width=80` on a Text is 80 "0"s, which is ~100 average characters - too wide.)
 SAMPLE80 = "The quick brown fox jumps over the lazy dog while the band plays on by the pier."
@@ -270,13 +315,18 @@ def ellipsize(font, text: str, width: int) -> str:
     return text[:lo] + "…"
 
 
-def when(t: float, now: float = None) -> str:
-    """Relative-day stamp, 24-hour clock: 'Today 14:32' / 'Yesterday 09:10' / 'Mon 21:05' /
-    'Aug 12' / 'Aug 12 2025'."""
+def _days_ago(t: float, now: float = None) -> tuple:
+    """(whole days between t's date and now's, t's struct_time, now's struct_time)."""
     now = time.time() if now is None else now
     lt, ln = time.localtime(t), time.localtime(now)
     day = lambda s: datetime.date(s.tm_year, s.tm_mon, s.tm_mday)
-    d = (day(ln) - day(lt)).days
+    return (day(ln) - day(lt)).days, lt, ln
+
+
+def when(t: float, now: float = None) -> str:
+    """Relative-day stamp, 24-hour clock: 'Today 14:32' / 'Yesterday 09:10' / 'Mon 21:05' /
+    'Aug 12' / 'Aug 12 2025'."""
+    d, lt, ln = _days_ago(t, now)
     hm = time.strftime("%H:%M", lt)
     if d == 0:
         return "Today " + hm
@@ -284,6 +334,20 @@ def when(t: float, now: float = None) -> str:
         return "Yesterday " + hm
     if 2 <= d <= 6:
         return time.strftime("%a ", lt) + hm
+    out = time.strftime("%b ", lt) + str(lt.tm_mday)
+    return out if lt.tm_year == ln.tm_year else out + " " + str(lt.tm_year)
+
+
+def day_of(t: float, now: float = None) -> str:
+    """The day-group header of a list row: 'Today' / 'Yesterday' / 'Monday' (2-6 days back) /
+    'Aug 12' / 'Aug 12 2025' - `when()`'s day arithmetic without the clock."""
+    d, lt, ln = _days_ago(t, now)
+    if d == 0:
+        return "Today"
+    if d == 1:
+        return "Yesterday"
+    if 2 <= d <= 6:
+        return time.strftime("%A", lt)
     out = time.strftime("%b ", lt) + str(lt.tm_mday)
     return out if lt.tm_year == ln.tm_year else out + " " + str(lt.tm_year)
 
@@ -300,45 +364,73 @@ def _png(img) -> bytes:
 
 
 def dot_png(box: int, d: int, fill: str, ring: str = None, ring_w: int = 2, gap: int = 2,
-            edge: str = None) -> bytes:
+            edge: str = None, core: tuple = None) -> bytes:
     """A filled circle of diameter d centred in a transparent box; `edge` is its own hairline
-    (white would otherwise disappear on the light ground), `ring` the selection halo."""
+    (white would otherwise disappear on the light ground), `ring` the selection halo, `core` =
+    (diameter, colour) a second filled circle inside it - the slider thumb's accent core."""
     from PIL import Image, ImageDraw
     im = Image.new("RGBA", (box * SS, box * SS), (0, 0, 0, 0))
     dr, c, r = ImageDraw.Draw(im), box * SS / 2, d * SS / 2
     dr.ellipse([c - r, c - r, c + r, c + r], fill=fill, outline=edge, width=SS if edge else 0)
+    if core:
+        rc = core[0] * SS / 2
+        dr.ellipse([c - rc, c - rc, c + rc, c + rc], fill=core[1])
     if ring:
         rr = r + (gap + ring_w / 2) * SS
         dr.ellipse([c - rr, c - rr, c + rr, c + rr], outline=ring, width=int(ring_w * SS))
     return _png(im)
 
 
-def pill_png(w: int, h: int, track: str, knob: str, on: bool) -> bytes:
-    """The toggle switch: a capsule with the knob at one end."""
+def pill_png(w: int, h: int, track: str, knob: str, on: bool, outline: str = None,
+             knob_d: int = None, t: float = None) -> bytes:
+    """The toggle switch: a capsule with the knob at one end. `outline` is a 1 px hairline round
+    the track (the off state's), `knob_d` the knob's diameter (default h - 6), `t` the knob's
+    position 0.0 .. 1.0 (default: the end `on` says) - the slide's frames pass it."""
     from PIL import Image, ImageDraw
     im = Image.new("RGBA", (w * SS, h * SS), (0, 0, 0, 0))
     dr = ImageDraw.Draw(im)
-    dr.rounded_rectangle([0, 0, w * SS - 1, h * SS - 1], radius=h * SS / 2, fill=track)
-    r, m = (h - 6) * SS / 2, 3 * SS
-    cx = w * SS - m - r if on else m + r
+    dr.rounded_rectangle([0, 0, w * SS - 1, h * SS - 1], radius=h * SS / 2, fill=track,
+                         outline=outline, width=SS if outline else 0)
+    r, m = (h - 6 if knob_d is None else knob_d) * SS / 2, 3 * SS
+    t = (1.0 if on else 0.0) if t is None else t
+    cx = m + r + t * (w * SS - 2 * (m + r))
     dr.ellipse([cx - r, h * SS / 2 - r, cx + r, h * SS / 2 + r], fill=knob)
     return _png(im)
 
 
+def _edges(dr, x0: int, y0: int, x1: int, y1: int, r: int, bottom: str = None,
+           top: str = None) -> None:
+    """The Fluent elevation border on a rounded box already drawn at SS: a 1 logical px line
+    along the very bottom row (`bottom`) and/or the top row (`top`), BETWEEN the corner arcs -
+    it replaces the outline's straight run there and the arcs keep the outline's colour.
+    x0..x1 / y0..y1 are the box's inclusive pixel bounds, r its radius, all in SS px."""
+    if bottom:
+        dr.rectangle([x0 + r, y1 - SS + 1, x1 - r, y1], fill=bottom)
+    if top:
+        dr.rectangle([x0 + r, y0, x1 - r, y0 + SS - 1], fill=top)
+
+
 def rr_png(w: int, h: int, r: int, fill: str, border: str = None, border_w: int = 1,
-           ground: str = None, bar: tuple = None, inner: tuple = None) -> bytes:
+           ground: str = None, bar: tuple = None, inner: tuple = None, edge: tuple = None,
+           under: tuple = None) -> bytes:
     """A rounded rectangle with an optional hairline - the shape a Tk widget cannot have, drawn
     at SS and reduced so the arc is anti-aliased. `ground` is the colour BEHIND the corners: pass
     it and the PNG is opaque (what a canvas item wants); leave it out and the corners are
-    transparent for Tk to composite against a Label's own bg. `bar` = (x, w, h, radius, colour):
-    an accent pill drawn inside, vertically centred. `inner` = (inset, width, colour): a second
-    outline INSIDE the edge, that far in, on the arc of radius r - inset - the focus ring of a
-    solid button, whose fill the accent ring would vanish against."""
+    transparent for Tk to composite against a Label's own bg. `edge` = (bottom, top), each a hex
+    or None: the elevation edge of a raised control (`_edges`). `under` = (colour, px): a text
+    field's underline, `px` tall along the bottom between the arcs. `bar` = (x, w, h, radius,
+    colour): an accent pill drawn inside, vertically centred. `inner` = (inset, width, colour):
+    a second outline INSIDE the edge, that far in, on the arc of radius r - inset - the focus
+    ring of a solid button, whose fill the accent ring would vanish against."""
     from PIL import Image, ImageDraw
     im = Image.new("RGBA", (w * SS, h * SS), ground if ground else (0, 0, 0, 0))
     dr = ImageDraw.Draw(im)
     dr.rounded_rectangle([0, 0, w * SS - 1, h * SS - 1], radius=r * SS, fill=fill,
                          outline=border, width=int(border_w * SS) if border else 0)
+    if edge:
+        _edges(dr, 0, 0, w * SS - 1, h * SS - 1, r * SS, *edge)
+    if under:
+        dr.rectangle([r * SS, (h - under[1]) * SS, (w - r) * SS - 1, h * SS - 1], fill=under[0])
     if bar:
         x, bw, bh, br, col = bar
         y = (h - bh) * SS / 2
@@ -369,8 +461,11 @@ def segment_png(widths: tuple, h: int, r: int, i: int, fills: tuple, ground: str
                 border: str, border_w: int = 1, inset: int = R_IN) -> bytes:
     """Slice `i` of a segmented control. The container is rendered WHOLE - so both end caps come
     off the same arc - the picked/hovered cells get an inner pill inset `inset` px, and only then
-    is it cut at the cell boundaries. Each slice goes on its own Label, which is how the cells
-    stay real widgets (one tab stop on the group, a <Button-1> per option) with round corners."""
+    is it cut at the cell boundaries. Each slice goes on its own widget, which is how the cells
+    stay real widgets (one tab stop on the group, a <Button-1> per option) with round corners.
+    A cell in `fills` is None, a hex (the hovered cell: an inset pill) or a tuple
+    (fill, outline, bottom, top) - the picked cell as the raised key: a hairline and the
+    elevation edge between its inner arcs, the same recipe as `rr_png`'s `edge`."""
     from PIL import Image, ImageDraw
     w = sum(widths)
     im = Image.new("RGBA", (w * SS, h * SS), ground)
@@ -380,11 +475,91 @@ def segment_png(widths: tuple, h: int, r: int, i: int, fills: tuple, ground: str
     for j, cell in enumerate(fills):
         if cell:
             x = sum(widths[:j])
-            dr.rounded_rectangle([(x + inset) * SS, inset * SS,
-                                  (x + widths[j] - inset) * SS - 1, (h - inset) * SS - 1],
-                                 radius=max(0, r - inset) * SS, fill=cell)
+            box = [(x + inset) * SS, inset * SS, (x + widths[j] - inset) * SS - 1, (h - inset) * SS - 1]
+            ri = max(0, r - inset) * SS
+            if isinstance(cell, tuple):
+                dr.rounded_rectangle(box, radius=ri, fill=cell[0], outline=cell[1], width=SS)
+                _edges(dr, *box, ri, cell[2], cell[3])
+            else:
+                dr.rounded_rectangle(box, radius=ri, fill=cell)
     x0 = sum(widths[:i])
     return _png(im.crop((x0 * SS, 0, (x0 + widths[i]) * SS, h * SS)))
+
+
+def grain_png(size: int, base: str, sigma: float) -> bytes:
+    """The sidebar's material: a `size` px square of gaussian noise (sigma, at 1x device px - no
+    supersampling, the grain IS the pixels) around the achromatic `base`. Tiled on a canvas; a
+    monitor-high frost would be 190 ms, ~32 of these tiles are 0.4 ms once."""
+    from PIL import Image
+    b = rgb(base)[0]                       # achromatic: one channel is the colour
+    im = Image.effect_noise((size, size), sigma).point(lambda v: max(0, min(255, v - 128 + b)))
+    buf = io.BytesIO()
+    im.convert("RGB").save(buf, "PNG")
+    return buf.getvalue()
+
+
+def specular_png(w: int, h: int, alpha: float) -> bytes:
+    """A white band whose alpha runs linearly from `alpha` at the top row to 0 at the bottom:
+    the light on the sidebar's top, composited by the canvas over the grain tiles (Tk 8.6
+    alpha-blends a partial-alpha PNG on a Canvas). Device px, no supersampling."""
+    from PIL import Image
+    im = Image.new("RGBA", (w, h), (255, 255, 255, 0))
+    im.putalpha(Image.frombytes("L", (w, h), bytes(round(255 * alpha * (1 - y / h))
+                                                    for y in range(h) for _ in range(w))))
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue()
+
+
+# the icon glyphs on a 16 grid, logical px: ("line", points), ("closed", points), ("ellipse",
+# bbox) - all stroked - and ("knob", (cx, cy, r)), a stroked circle whose inside is cut out to
+# the ground. 1 px safe margin, 1.5 px stroke, round caps and joins, no fills.
+GLYPHS = {
+    "history": (("ellipse", (2, 2, 14, 14)), ("line", ((8, 8), (8, 4.5))), ("line", ((8, 8), (10.5, 9.5)))),
+    "sparkle": (("closed", ((8, 2), (9.6, 6.4), (14, 8), (9.6, 9.6), (8, 14), (6.4, 9.6), (2, 8), (6.4, 6.4))),),
+    "options": (("line", ((2.5, 5.5), (13.5, 5.5))), ("line", ((2.5, 10.5), (13.5, 10.5))),
+                ("knob", (10, 5.5, 1.75)), ("knob", (6, 10.5, 1.75))),
+    "search": (("ellipse", (2.5, 2.5, 11.5, 11.5)), ("line", ((10.3, 10.3), (13.5, 13.5)))),
+    "chev": (("line", ((4, 6.5), (8, 10.5), (12, 6.5))),),
+    "term": (("line", ((3, 4), (7.5, 8), (3, 12))), ("line", ((8.5, 12.5), (13.5, 12.5)))),
+    "globe": (("ellipse", (2, 2, 14, 14)), ("ellipse", (5, 2, 11, 14)), ("line", ((2, 8), (14, 8)))),
+    "note": (("closed", ((4, 2), (9.5, 2), (12, 4.5), (12, 14), (4, 14))),
+             ("line", ((9.5, 2), (9.5, 4.5), (12, 4.5))),
+             ("line", ((6, 8), (10, 8))), ("line", ((6, 10.5), (10, 10.5)))),
+    "check": (("line", ((3, 8.5), (6.5, 12), (13, 4.5))),),
+}
+
+
+def icon_png(name: str, colour: str, size: int = 16, ground: str = None) -> bytes:
+    """One of `GLYPHS` stroked in `colour` on a transparent `size` px box (device px: the 16
+    grid scales with it), drawn at SS and reduced. Round joins are PIL's `joint="curve"`; round
+    caps are a filled circle of the stroke's diameter at each open end. `ground` fills the
+    `options` knobs; left out, their inside is cut to transparent, which reads the same on any
+    ground."""
+    from PIL import Image, ImageDraw
+    k = size * SS / 16                       # grid units -> SS px
+    im = Image.new("RGBA", (size * SS, size * SS), (0, 0, 0, 0))
+    dr = ImageDraw.Draw(im)
+    sw = max(1, round(1.5 * k))              # 4 at SS 3, size 16
+    cap = lambda x, y: dr.ellipse([x - sw / 2, y - sw / 2, x + sw / 2, y + sw / 2], fill=colour)
+    for kind, geo in GLYPHS[name]:
+        if kind == "ellipse":
+            dr.ellipse([v * k for v in geo], outline=colour, width=sw)
+        elif kind == "knob":
+            cx, cy, r = (v * k for v in geo)
+            dr.ellipse([cx - r, cy - r, cx + r, cy + r], fill=ground or (0, 0, 0, 0),
+                       outline=colour, width=sw)
+        else:
+            pts = [(x * k, y * k) for x, y in geo]
+            if kind == "closed":             # the seam gets a joint like every other corner
+                pts += pts[:2]
+            dr.line(pts, fill=colour, width=sw, joint="curve")
+            for x, y in ((pts[0], pts[-1]) if kind == "line" else ()):
+                cap(x, y)
+    return _png(im)
+
+
+TARGET_UI = {"code": ("term", "Code"), "chat": ("globe", "Web")}   # Promptify's target cells: icon, label
 
 
 # --- widgets --------------------------------------------------------------------------------
@@ -394,11 +569,12 @@ class _Btn:
     """A button is ONE Label carrying a rounded-rect image with its text drawn on top
     (`compound="center"`): the shape is the image, so hover, press and focus are re-renders of
     it - no motion, no weight or size shift. Kinds: primary (the one accent fill), danger,
-    secondary (a `hover`-filled pill, ink text, no border), text (bare until hovered; muted, or
-    `ink`) and chip (a full pill on the accent tint, see `_Chip`). The focus ring is drawn on the
-    button's own edge (2 px of `ring`) instead of around it, so focusing never moves anything;
-    a solid button, whose fill the ring would vanish against (1.2:1), wears it INSIDE its edge
-    in its own text colour."""
+    secondary (the raised key: `ctl` with a hairline and the elevation edge, ink text; pressed
+    = `ctl_press` with the edge gone, the sink), text (bare until hovered; muted, or `ink`) and
+    chip (a full pill on the accent tint, see `_Chip`). The focus ring is drawn on the button's
+    own edge (2 px of `ring`) instead of around it, so focusing never moves anything; a solid
+    button, whose fill the ring would vanish against (1.2:1), wears it INSIDE its edge in its
+    own text colour."""
 
     def __init__(self, ui, parent, text, cmd, kind="secondary", font=None, h=None, pad=None,
                  r=None, ink=False):
@@ -409,10 +585,13 @@ class _Btn:
         self.fill, self.fg, self.hov, self.hov_fg, self.down = {
             "primary": (p["primary"], p["on_primary"], p["primary_hover"], p["on_primary"], p["primary_hover"]),
             "danger": (p["danger"], p["on_danger"], p["danger_hover"], p["on_danger"], p["danger_hover"]),
-            "secondary": (p["hover"], p["ink"], p["active"], p["ink"], p["selected"]),
-            "text": (g, p["ink"] if ink else p["muted"], p["hover"], p["ink"], p["active"]),
+            "secondary": (p["ctl"], p["ink"], p["ctl_hover"], p["ink"], p["ctl_press"]),
+            "text": (g, p["ink"] if ink else p["muted"], p["sub_hover"](g), p["ink"], p["sub"](g)),
             "chip": (p["tint"], p["ink"], p["tint_hover"], p["ink"], p["tint_hover"]),
         }[kind]
+        raised = kind == "secondary"                 # the one kind with an outline and an edge
+        self.outline = p["stroke"](p["ctl"]) if raised else None
+        self.edge = (p["stroke_edge"], p["stroke_top"]) if raised else None
         self.h = ui.px(h or (H_CHIP if chip else H_CTL))
         self.r = ui.px((H_CHIP // 2 if chip else R_CTL) if r is None else r)
         self.pad = ui.px((SP[1] if kind in ("text", "chip") else SP[2]) if pad is None else pad)
@@ -445,14 +624,18 @@ class _Btn:
         p = self.ui.pal
         fill, fg = {"idle": (self.fill, self.fg), "hover": (self.hov, self.hov_fg),
                     "down": (self.down, self.hov_fg)}[self.state]
+        border, bw, inner = self.outline, 1, None
+        edge = None if self.state == "down" else self.edge     # pressed: the edge goes, the sink
         if not self.on:
-            fill, fg = mix(fill, self.ground, .45), mix(fg, self.ground, .45)
-        border, bw, inner = None, 1, None
+            fade = lambda c: mix(c, self.ground, .45) if c else c
+            fill, fg, border = fade(fill), fade(fg), fade(border)
+            edge = tuple(fade(c) for c in edge) if edge else None
         if self.ring and self.kind in ("primary", "danger"):
             inner = (self.ui.px(2), self.ui.px(2), fg)
         elif self.ring:
             border, bw = p["ring"], self.ui.px(2)
-        self._draw(self.ui.rr(self.w, self.h, self.r, fill, self.ground, border, bw, inner=inner), fg)
+        self._draw(self.ui.rr(self.w, self.h, self.r, fill, self.ground, border, bw, inner=inner,
+                              edge=edge), fg)
 
     def _draw(self, img, fg) -> None:
         self.f.configure(image=img, fg=fg)
@@ -515,7 +698,7 @@ class _Chip(_Btn):
         c = tk.Canvas(parent, bd=0, highlightthickness=0, bg=self.ground, cursor="hand2", takefocus=0)
         self.i_pill = c.create_image(0, 0, anchor="nw")
         self.i_dot = c.create_image(self.ui.px(7), self.h // 2, anchor="w", state="hidden",
-                                    image=self.ui.dot(8, 6, self.ui.pal["primary"]))
+                                    image=self.ui.dot(8, 6, self.ui.pal["ring"]))
         self.i_text = c.create_text(self.pad, self.h // 2, anchor="w", text=text, font=font)
         return c
 
@@ -556,7 +739,7 @@ class _Row:
 
     def __init__(self, ui, group, label, desc=None):
         p, bg = ui.pal, group["bg"]
-        self.rule = ui.hairline(group, color=p["s5"]) if group.winfo_children() else None
+        self.rule = ui.hairline(group, color=p["divider"](bg)) if group.winfo_children() else None
         if self.rule is not None:
             self.rule.pack(fill="x", padx=ui.cpad)
         self.ui, self.shown = ui, True
@@ -631,7 +814,7 @@ class RowList(tk.Canvas):
 
     def __init__(self, ui, parent, two_line=False, on_select=None, keys=None):
         p = ui.pal
-        super().__init__(parent, bg=p["bg"], highlightthickness=0, takefocus=1, yscrollincrement=1,
+        super().__init__(parent, bg=p["layer"], highlightthickness=0, takefocus=1, yscrollincrement=1,
                          width=1, height=1, bd=0)
         self.ui, self.two, self.on_select = ui, two_line, on_select or (lambda it: None)
         self.H = ui.px(H_ROW2 if two_line else H_ROW)
@@ -686,15 +869,16 @@ class RowList(tk.Canvas):
         hw = max(h, w - 2 * hx)   # w is 1 until Tk has laid the canvas out
         if self.hl.get("w") != hw:
             png = lambda **kw: tk.PhotoImage(data=base64.b64encode(rr_png(
-                hw, h, px(R_CTL), ground=p["bg"], **kw)).decode())
+                hw, h, px(R_CTL), ground=p["layer"], **kw)).decode())
             # not in the img() cache: these are as wide as the window and would pile up a copy
             # per pixel of a resize drag
-            self.hl = {"w": hw, "hover": png(fill=p["hover"]), "sel": png(fill=p["selected"]),
-                       "focus": png(fill=p["selected"], border=p["ring"], border_w=px(2))}
+            g = p["layer"]
+            self.hl = {"w": hw, "hover": png(fill=p["sub_hover"](g)), "sel": png(fill=p["sub"](g)),
+                       "focus": png(fill=p["sub"](g), border=p["ring"], border_w=px(2))}
         self.hl_id = {k: c.create_image(hx, 0, anchor="nw", image=self.hl[k], state="hidden")
                       for k in ("hover", "sel")}     # created first: the row text draws over them
         right = hx + hw - px(SP[2])                  # the highlight's inner right edge
-        dot = ui.dot(8, 6, p["primary"])
+        dot = ui.dot(8, 6, p["ring"])
         for i, idx in enumerate(range(len(items) - 1, -1, -1)):
             it, y = items[idx], i * h
             body = " ".join(it["text"].split())
@@ -815,7 +999,7 @@ class AppWindow:
         self.scale = scale
         self.links = links or {}
         self.theme = theme
-        self.icon = icon
+        self.ico = icon           # the title bar's .ico path (`icon()` is the glyph renderer)
         self.win = None
         self.view = "history"     # remembered between show() and hide()
         self.sel = None           # the selected item itself: survives a delete + undo
@@ -823,6 +1007,7 @@ class AppWindow:
         self.jobs = {}            # named after() ids, so a second flash cancels the first
         self.ctl = {}             # the settings controls, by cfg key (the tests drive these)
         self.foot_links = []      # sidebar footer links, one per entry in `links`
+        self.caps_all = []        # every keycap Label (`keycap`): the shortcut-coverage check reads it
         self.cards = []           # the settings group cards, top to bottom
         self.primaries = []       # every primary _Btn, so a check can count the ones on screen
         self.undo = None          # (index, item) while the undo offer stands
@@ -870,15 +1055,19 @@ class AppWindow:
         # the brand green, not the bar's colour: the bar colour is the user's per-take signal and
         # can be anything (their red made the whole window pink); the window is the product's
         p = self.pal = palette(brand.GREEN, self.dark)
-        self.F = {"title": ("Segoe UI Semibold", 12), "body": ("Segoe UI", 10),
-                  "meta": ("Segoe UI", 9), "mono": ("Cascadia Mono", 10),
-                  "mono9": ("Cascadia Mono", 9)}
+        # three hierarchy levels - title 12/600 ink, body 10/400 ink, meta 10/400 MUTED (the
+        # same size as body: the colour is the level) - and mono as a register, not a level
+        self.F = {"title": ("Segoe UI Semibold", 12),   # 16 px: view titles, the wordmark
+                  "body": ("Segoe UI", 10),             # 13.33 px: everything else in ink
+                  "meta": ("Segoe UI", 10),             # body's size, muted
+                  "mono": ("Cascadia Mono", 10),        # hex field, days, model ids, the slider's digits
+                  "mono9": ("Cascadia Mono", 9)}        # times, keycaps, the trigger-key cap
         w = self.win = tk.Toplevel(self.root)
         w.withdraw()                                  # built hidden; show() deiconifies
         w.title("murmur")
-        if self.icon and Path(self.icon).exists():
+        if self.ico and Path(self.ico).exists():
             try:
-                w.iconbitmap(str(self.icon))
+                w.iconbitmap(str(self.ico))
             except tk.TclError:
                 pass
         # the .ico alone leaves the title bar stretching a small frame at high DPI (it read as
@@ -893,7 +1082,7 @@ class AppWindow:
             w.iconphoto(False, *self._icons)
         except Exception:
             pass
-        w.configure(bg=p["bg"])
+        w.configure(bg=p["layer"])
         w.geometry(f"{self.px(WIN[0])}x{self.px(WIN[1])}")
         w.minsize(self.px(WIN_MIN[0]), self.px(WIN_MIN[1]))
         w.protocol("WM_DELETE_WINDOW", self.hide)
@@ -919,15 +1108,16 @@ class AppWindow:
         w.grid_rowconfigure(0, weight=1)
         self.side = self._sidebar()
         self.side.grid(row=0, column=0, sticky="ns")
-        self.hairline(w, vertical=True).grid(row=0, column=1, sticky="ns")
-        content = tk.Frame(w, bg=p["bg"])
+        # the content layer's rule: the only separator between the sidebar and the content
+        self.hairline(w, vertical=True, color=p["stroke"](p["layer"])).grid(row=0, column=1, sticky="ns")
+        content = tk.Frame(w, bg=p["layer"])
         content.grid(row=0, column=2, sticky="nsew")
         content.grid_rowconfigure(0, weight=1)
         content.grid_columnconfigure(0, weight=1)
         self.views = {}
         for name, build in (("history", self._build_history), ("promptify", self._build_promptify),
                             ("settings", self._build_settings)):
-            f = tk.Frame(content, bg=p["bg"])
+            f = tk.Frame(content, bg=p["layer"])
             f.grid(row=0, column=0, sticky="nsew")
             self.views[name] = f
             build(f)
@@ -946,33 +1136,40 @@ class AppWindow:
         # the combobox sits inside a rounded field image (see `_field`), so every edge clam
         # would draw is painted out in the fill colour - the image is the only border, and the
         # focus ring is the image's too
-        fld = self.up(p["surface"])
+        fld = p["ctl"]
         st.configure("M.TCombobox", fieldbackground=fld, background=fld, foreground=p["ink"],
                      bordercolor=fld, arrowcolor=p["muted"], lightcolor=fld, darkcolor=fld,
-                     insertcolor=p["ink"], selectbackground=p["hover"], selectforeground=p["ink"],
+                     insertcolor=p["ink"], selectbackground=p["sub_hover"](fld), selectforeground=p["ink"],
                      padding=(0, 4), arrowsize=self.px(SP[1]))   # clam's arrow is a 2 px sliver
         st.map("M.TCombobox", fieldbackground=[("readonly", fld)],
                foreground=[("readonly", p["ink"])], bordercolor=[("focus", fld)],
                arrowcolor=[("active", p["ink"])])
-        for k, v in (("*TCombobox*Listbox.background", p["surface"]),
+        # the popdown: a `card` with a hairline round it (the Listbox's highlight ring is the
+        # one border Tk lets it have), rows selected in the card's `sub`
+        for k, v in (("*TCombobox*Listbox.background", p["card"]),
                      ("*TCombobox*Listbox.foreground", p["ink"]),
-                     ("*TCombobox*Listbox.selectBackground", p["active"]),
-                     ("*TCombobox*Listbox.selectForeground", p["ink"])):
+                     ("*TCombobox*Listbox.selectBackground", p["sub"](p["card"])),
+                     ("*TCombobox*Listbox.selectForeground", p["ink"]),
+                     ("*TCombobox*Listbox.borderWidth", 0),
+                     ("*TCombobox*Listbox.relief", "flat"),
+                     ("*TCombobox*Listbox.highlightThickness", 1),
+                     ("*TCombobox*Listbox.highlightBackground", p["stroke"](p["card"])),
+                     ("*TCombobox*Listbox.highlightColor", p["stroke"](p["card"]))):
             self.root.option_add(k, v)
         self.root.option_add("*TCombobox*Listbox.font", self.mf["body"])
         # clam's scrollbar is as thick as its ARROWS, arrows or no arrows (`width` is ignored),
         # and spends 1 px of that on a `bordercolor` strip either side of the thumb: the strips
         # are painted in the ground's colour and the widget made 2 px wider, so the thumb that
         # shows is the 4 px the spec draws. The thumb's own light/dark edges are its colour.
-        # Two styles, one per ground: "M" on the page, "C" inside the History card.
-        for name, ground in (("M", p["bg"]), ("C", p["surface"])):
+        # Two styles, one per ground: "M" on the layer, "C" inside a card.
+        for name, ground in (("M", p["layer"]), ("C", p["card"])):
             style = f"{name}.Vertical.TScrollbar"
             st.layout(style,     # no arrows: trough + thumb
                       [("Vertical.Scrollbar.trough",
                         {"sticky": "ns", "children": [("Vertical.Scrollbar.thumb",
                                                        {"expand": "1", "sticky": "nswe"})]})])
-            st.configure(style, troughcolor=ground, background=p["border_strong"], bordercolor=ground,
-                         darkcolor=p["border_strong"], lightcolor=p["border_strong"],
+            st.configure(style, troughcolor=ground, background=p["stroke_strong"], bordercolor=ground,
+                         darkcolor=p["stroke_strong"], lightcolor=p["stroke_strong"],
                          gripcount=0,           # clam's thumb draws grip ticks unless told not to
                          arrowsize=self.px(SP[0]) + 2)
             st.map(style, background=[("active", p["muted"])],
@@ -1000,8 +1197,9 @@ class AppWindow:
         wdg.bind("<KeyPress>", lambda e: (setattr(self, "kbd", True), upd()), add="+")
 
     def hairline(self, parent, vertical=False, color=None) -> tk.Frame:
+        """A 1 px rule; by default an inset `divider` on the layer."""
         n = {"width" if vertical else "height": 1}
-        return tk.Frame(parent, bg=color or self.pal["border"], **n)
+        return tk.Frame(parent, bg=color or self.pal["divider"](self.pal["layer"]), **n)
 
     def img(self, key, make) -> tk.PhotoImage:
         if key not in self.imgs:
@@ -1022,25 +1220,48 @@ class AppWindow:
             return buf.getvalue()
         return self.img(("mark", size, color), make)
 
-    def rr(self, w, h, r, fill, ground, border=None, bw=1, bar=None, inner=None) -> tk.PhotoImage:
+    def rr(self, w, h, r, fill, ground, border=None, bw=1, bar=None, inner=None, edge=None,
+           under=None) -> tk.PhotoImage:
         """Cached rounded rect, sizes in device px. Every control's corner comes from here."""
-        return self.img(("rr", w, h, r, fill, ground, border, bw, bar, inner),
-                        lambda: rr_png(w, h, r, fill, border, bw, ground, bar, inner))
+        return self.img(("rr", w, h, r, fill, ground, border, bw, bar, inner, edge, under),
+                        lambda: rr_png(w, h, r, fill, border, bw, ground, bar, inner, edge, under))
 
     def dot(self, box, d, fill, edge=None) -> tk.PhotoImage:
-        """A `d` px dot in a `box` px image, sizes in logical px: the state dots. No `fill` but
-        an `edge` is the hollow one (not connected)."""
+        """A `d` px dot in a `box` px image, sizes in logical px: the state dots. `layer` for
+        the fill with a `stroke_field` edge is the hollow one (not connected)."""
         return self.img(("dot", box, d, fill, edge),
                         lambda: dot_png(self.px(box), self.px(d), fill, edge=edge))
 
-    def up(self, ground, n=1) -> str:
-        """The next step(s) UP the surface ladder from `ground`. A field is one step above what
-        it sits on - `surface` on the window ground, a step lighter again inside a card - so a
-        control never disappears into the surface that happens to be under it."""
-        for i in range(1, 13):
-            if self.pal["s%d" % i] == ground:
-                return self.pal["s%d" % min(12, i + n)]
-        return self.pal["surface"]
+    def icon(self, name, colour, size=ICON, ground=None) -> tk.PhotoImage:
+        """A `GLYPHS` icon in `colour`, `size` logical px, rendered on first use and cached."""
+        return self.img(("ic", name, colour, size, ground),
+                        lambda: icon_png(name, colour, self.px(size), ground))
+
+    # --- keycaps: the raised-key recipe at 20 px --------------------------------------------
+    def kbd_img(self, label, h=H_KBD, w=None) -> tk.PhotoImage:
+        """The cap's image: `ctl` with a hairline and the elevation edge (the "bottom lip"),
+        transparent corners so it sits on the canvas, a card or the layer alike. A single glyph
+        is an h x h square; a word is its width in mono9 plus 6 a side; `w` overrides."""
+        p = self.pal
+        w = w or max(self.px(h), self.mf["mono9"].measure(label) + 2 * self.px(6))
+        return self.rr(w, self.px(h), self.px(R_KBD), p["ctl"], None, p["stroke"](p["ctl"]), 1,
+                       edge=(p["stroke_edge"], p["stroke_top"]))
+
+    def keycap(self, parent, label, h=H_KBD, fg=None, w=None) -> tk.Label:
+        """A decorative keycap (`kbd` is taken: the focus-visible flag): not focusable, not clickable, mono9 `muted` (or `fg`) text
+        centred on its image. Every cap is registered in `caps_all` for the coverage check."""
+        l = tk.Label(parent, text=label, font=self.F["mono9"], fg=fg or self.pal["muted"],
+                     bg=parent["bg"], compound="center", bd=0, padx=0, pady=0,
+                     highlightthickness=0, takefocus=0, image=self.kbd_img(label, h, w))
+        self.caps_all.append(l)
+        return l
+
+    def kbd_chord(self, parent, *labels) -> tk.Frame:
+        """Caps side by side, 4 apart, no `+` glyph between them (Raycast)."""
+        f = tk.Frame(parent, bg=parent["bg"])
+        for i, label in enumerate(labels):
+            self.keycap(f, label).pack(side="left", padx=(self.px(SP[0]), 0) if i else 0)
+        return f
 
     def _corners(self, parent, r, fill, ground, border=None) -> list:
         """Pin the four masks of `corner_pngs` to a frame's corners. Relative placement means
@@ -1056,14 +1277,19 @@ class AppWindow:
         return out
 
     def _card(self, parent, radius=None) -> tk.Frame:
-        """A grouped surface: `surface` fill, 1 px hairline, rounded. The hairline is the outer
-        frame showing through a 1 px margin - a Tk highlight ring cannot be rounded, and place()
-        measures from inside it. Rows go in `.body`."""
+        """A grouped surface: `card` fill, 1 px `stroke` hairline, rounded. The hairline is the
+        outer frame showing through a 1 px margin - a Tk highlight ring cannot be rounded, and
+        place() measures from inside it. In dark a 1 px `card_inset` line lies along the inside
+        of the top edge (placed, so it costs no height); the corner masks are created after
+        `inner` and so sit above it, and the line stops at the arcs. No shadow, no 9-slice,
+        nothing re-renders on resize. Rows go in `.body`."""
         p, ground = self.pal, parent["bg"]
-        outer = tk.Frame(parent, bg=p["border"])
-        inner = tk.Frame(outer, bg=p["surface"])
+        outer = tk.Frame(parent, bg=p["stroke"](ground))
+        inner = tk.Frame(outer, bg=p["card"])
         inner.pack(fill="both", expand=True, padx=1, pady=1)
-        self._corners(outer, self.px(radius or R_CARD), p["surface"], ground, p["border"])
+        if p["card_inset"]:
+            tk.Frame(inner, bg=p["card_inset"], height=1).place(x=0, y=0, relwidth=1.0)
+        self._corners(outer, self.px(radius or R_CARD), p["card"], ground, p["stroke"](ground))
         outer.body = inner
         return outer
 
@@ -1086,7 +1312,7 @@ class AppWindow:
     # --- sidebar -----------------------------------------------------------------------------
     def _sidebar(self) -> tk.Frame:
         p = self.pal
-        s = tk.Frame(self.win, bg=p["surface"], width=self.px(W_SIDE))
+        s = tk.Frame(self.win, bg=p["base"], width=self.px(W_SIDE))
         s.pack_propagate(False)
         lock = self._lockup(s)
         # a 32 px row at y 16, like the view titles across the hairline; where the mark
@@ -1098,25 +1324,25 @@ class AppWindow:
         for name, label in (("history", "History"), ("promptify", "Promptify"), ("settings", "Settings")):
             # the pill IS the row's image; the text sits on a Label placed inside it, inset by
             # the radius so its square background can never eat a rounded corner
-            row = tk.Label(s, bd=0, highlightthickness=0, bg=p["surface"], cursor="hand2",
+            row = tk.Label(s, bd=0, highlightthickness=0, bg=p["base"], cursor="hand2",
                            padx=0, pady=0)
             row.pack(padx=self.px(SP[1]), pady=(0, self.px(2)))
-            l = tk.Label(row, text=label, font=self.F["body"], fg=p["muted"], bg=p["surface"],
+            l = tk.Label(row, text=label, font=self.F["body"], fg=p["muted"], bg=p["base"],
                          anchor="w", padx=0, bd=0, highlightthickness=0)
             l.place(x=self.px(R_CTL), y=0, relwidth=1.0, width=-2 * self.px(R_CTL), relheight=1.0)
             self.nav[name] = (row, l)
-            self._nav_paint(name, p["surface"])
+            self._nav_paint(name, p["base"])
             for wdg in (row, l):
                 wdg.bind("<Button-1>", lambda e, n=name: self.go(n))
                 wdg.bind("<Enter>", lambda e, n=name: self._nav_hover(n, True))
                 wdg.bind("<Leave>", lambda e, n=name: self._nav_hover(n, False))
-        foot = tk.Frame(s, bg=p["surface"])
+        foot = tk.Frame(s, bg=p["base"])
         foot.pack(side="bottom", anchor="w", padx=self.px(SP[3]), pady=self.px(SP[3]))
         made = [("vocab", "vocab.txt"), ("folder", "config folder")]
         for i, (key, text) in enumerate([m for m in made if m[0] in self.links]):
             if i:
-                tk.Label(foot, text="·", font=self.F["meta"], fg=p["border_strong"],
-                         bg=p["surface"]).pack(side="left", padx=self.px(SP[0]))
+                tk.Label(foot, text="·", font=self.F["meta"], fg=p["stroke_field"],
+                         bg=p["base"]).pack(side="left", padx=self.px(SP[0]))
             l = self.link(foot, text, self.links[key])
             l.pack(side="left")
             self.foot_links.append(l)
@@ -1141,7 +1367,7 @@ class AppWindow:
         rise = max(0, m.height() - base)
         base += rise
         x = m.width() + self.px(GAP_MARK)
-        c = tk.Canvas(parent, bg=p["surface"], bd=0, highlightthickness=0,
+        c = tk.Canvas(parent, bg=p["base"], bd=0, highlightthickness=0,
                       width=x + f.measure("murmur"), height=row + rise)
         c.create_image(0, base, anchor="sw", image=m)
         c.create_text(x, base + desc, anchor="sw", text="murmur", font=f, fill=p["muted"])
@@ -1151,14 +1377,14 @@ class AppWindow:
     def _nav_paint(self, name, fill) -> None:
         row, l = self.nav[name]
         row.configure(image=self.rr(self.px(W_SIDE - 2 * SP[1]), self.px(H_CTL), self.px(R_CTL),
-                                    fill, self.pal["surface"]))
+                                    fill, self.pal["base"]))
         l.configure(bg=fill)
 
     def _nav_hover(self, name, on) -> None:
         if name == self.view:
             return
         p = self.pal
-        self._nav_paint(name, p["hover"] if on else p["surface"])
+        self._nav_paint(name, p["sub_hover"](p["base"]) if on else p["base"])
 
     def go(self, name) -> None:
         """Every view stays built and gridded in the one cell; a switch raises the target.
@@ -1170,7 +1396,7 @@ class AppWindow:
         p = self.pal
         for n, (row, l) in self.nav.items():
             sel = n == name
-            self._nav_paint(n, p["selected"] if sel else p["surface"])
+            self._nav_paint(n, p["sub"](p["base"]) if sel else p["base"])
             l.configure(fg=p["ink"] if sel else p["muted"])
         lst = self._list()
         if lst is not None:                    # both lists share the selection: the one shown
@@ -1222,27 +1448,27 @@ class AppWindow:
         f.grid_rowconfigure(1, weight=1)
         f.grid_columnconfigure(0, weight=1)
 
-        head = tk.Frame(f, bg=p["bg"], height=self.px(H_CTL))
+        head = tk.Frame(f, bg=p["layer"], height=self.px(H_CTL))
         head.grid(row=0, column=0, sticky="ew", padx=pad, pady=(self.px(PAD_TOP), pad))
         head.pack_propagate(False)                 # the title row is 32 high with or without a button
-        tk.Label(head, text="History", font=self.F["title"], fg=p["ink"], bg=p["bg"], bd=0, padx=0,
+        tk.Label(head, text="History", font=self.F["title"], fg=p["ink"], bg=p["layer"], bd=0, padx=0,
                  pady=0).pack(side="left")
-        self.count = tk.Label(head, text="", font=self.F["body"], fg=p["muted"], bg=p["bg"], bd=0,
+        self.count = tk.Label(head, text="", font=self.F["body"], fg=p["muted"], bg=p["layer"], bd=0,
                               padx=0, pady=0)
         self.count.pack(side="left", padx=(self.px(SP[2]), 0))
-        self.hdr_r = tk.Frame(head, bg=p["bg"])
+        self.hdr_r = tk.Frame(head, bg=p["layer"])
         self.hdr_r.pack(side="right")
         self.b_clear = _Btn(self, self.hdr_r, "Clear all", self._clear_ask)
         self.b_clear.f.pack(side="right")
-        self.confirm = tk.Frame(head, bg=p["bg"])
-        self.c_label = tk.Label(self.confirm, text="", font=self.F["body"], fg=p["ink"], bg=p["bg"])
+        self.confirm = tk.Frame(head, bg=p["layer"])
+        self.c_label = tk.Label(self.confirm, text="", font=self.F["body"], fg=p["ink"], bg=p["layer"])
         self.c_label.pack(side="left", padx=(0, self.px(SP[2])))
         _Btn(self, self.confirm, "Clear", self._clear_do, kind="danger").f.pack(side="left")
         _Btn(self, self.confirm, "Keep", self._clear_cancel).f.pack(side="left", padx=(self.px(SP[1]), 0))
 
         # no rule under the header: a full-bleed hairline over a list of rounded highlights is
         # the most rigid line on the screen, and the air below the title separates them anyway
-        box = self.box = tk.Frame(f, bg=p["bg"])
+        box = self.box = tk.Frame(f, bg=p["layer"])
         box.grid(row=1, column=0, sticky="nsew")
         self.list = RowList(self, box, on_select=self._select, keys={
             "<Return>": self.copy_selected, "<Control-c>": self.copy_selected,
@@ -1255,14 +1481,14 @@ class AppWindow:
         self.card = self._card(f)
         self.card.grid(row=2, column=0, sticky="ew", padx=self.px(SP[0]), pady=self.px(SP[3]))
         card = self.card.body
-        trow = tk.Frame(card, bg=p["surface"])
+        trow = tk.Frame(card, bg=p["card"])
         trow.pack(fill="x", padx=self.cpad, pady=(self.cpad, 0))
         self.detail = tk.Text(trow, height=1, width=1, wrap="word", relief="flat", bd=0,
-                              highlightthickness=0, bg=p["surface"], fg=p["ink"],
+                              highlightthickness=0, bg=p["card"], fg=p["ink"],
                               font=self.mf["body"], padx=0, pady=0,
                               spacing1=self.px(LH), spacing3=self.px(LH), state="disabled",
-                              cursor="xterm", selectbackground=p["selected"],
-                              selectforeground=p["ink"], inactiveselectbackground=p["selected"])
+                              cursor="xterm", selectbackground=p["sub"](p["card"]),
+                              selectforeground=p["ink"], inactiveselectbackground=p["sub"](p["card"]))
         # no fill: stretched, the width request is ignored and a maximised window gives the
         # transcript ~200-character lines - `_fit_detail` holds it to the body measure
         self.detail.pack(side="left")
@@ -1276,7 +1502,7 @@ class AppWindow:
         self.detail.bind("<Control-Return>", lambda e: (self._edit_toggle(), "break")[1]
                          if self.editing else None)
 
-        act = self.act = tk.Frame(card, bg=p["surface"])
+        act = self.act = tk.Frame(card, bg=p["card"])
         act.pack(fill="x", padx=self.cpad, pady=(self.px(SP[2]), self.cpad))
         self.b_copy = _Btn(self, act, "Copy", self.copy_selected, kind="primary")
         self.b_copy.f.pack(side="left")
@@ -1291,10 +1517,10 @@ class AppWindow:
         self.b_del.f.pack(side="left", padx=(self.px(SP[1]), 0))
         # the status ("Copied", "Deleted · Undo") is meta on the SAME row, after the buttons -
         # never in the body flow, never at the far edge where the eye has to travel for it
-        self.status = tk.Frame(act, bg=p["surface"])
+        self.status = tk.Frame(act, bg=p["card"])
         self.status.pack(side="left", padx=(self.px(SP[2]), 0))
         self.s_text = tk.Label(self.status, text="", font=self.F["meta"], fg=p["muted"],
-                               bg=p["surface"])
+                               bg=p["card"])
         self.s_text.pack(side="left")
         # underlined so the one clickable word in the status line does not read as more meta
         self.s_undo = self.link(self.status, "Undo", self._undo, font=self.F["meta"] + ("underline",))
@@ -1489,23 +1715,23 @@ class AppWindow:
         p, pad = self.pal, self.px(SP[3])
         f.grid_rowconfigure(2, weight=1)
         f.grid_columnconfigure(0, weight=1)
-        head = tk.Frame(f, bg=p["bg"], height=self.px(H_CTL))
+        head = tk.Frame(f, bg=p["layer"], height=self.px(H_CTL))
         head.grid(row=0, column=0, sticky="ew", padx=pad, pady=(self.px(PAD_TOP), self.px(SP[1])))
         head.pack_propagate(False)
-        tk.Label(head, text="Settings", font=self.F["title"], fg=p["ink"], bg=p["bg"], bd=0, padx=0,
+        tk.Label(head, text="Settings", font=self.F["title"], fg=p["ink"], bg=p["layer"], bd=0, padx=0,
                  pady=0).pack(side="left")
-        self.saved = tk.Label(head, text="", font=self.F["body"], fg=p["muted"], bg=p["bg"], bd=0,
+        self.saved = tk.Label(head, text="", font=self.F["body"], fg=p["muted"], bg=p["layer"], bd=0,
                               padx=0, pady=0)
         self.saved.pack(side="right")
-        rule = self.hairline(f, color=p["bg"])
+        rule = self.hairline(f, color=p["layer"])
         rule.grid(row=1, column=0, sticky="ew")
-        box = tk.Frame(f, bg=p["bg"])
+        box = tk.Frame(f, bg=p["layer"])
         box.grid(row=2, column=0, sticky="nsew")
         self.sc, self.ssb, inner = self._scroller(box, rule)
         # the cards start 12 px before E like the row highlights and end 4 px before the pane's
         # right edge, where the thumb's column is; their padding (`cpad`) puts the row labels
         # back on E and the controls on the header's right edge
-        body = tk.Frame(inner, bg=p["bg"])
+        body = tk.Frame(inner, bg=p["layer"])
         body.pack(fill="x", padx=self.px(SP[0]))
         self._appearance(body)
         self._indicator(body)
@@ -1515,7 +1741,7 @@ class AppWindow:
     def _group(self, parent, title, first=False) -> tk.Frame:
         """A settings group is a card; its title (meta, muted: a section label, not a second
         heading) sits above it on the ground, on the same left edge as the row labels."""
-        tk.Label(parent, text=title, font=self.F["meta"], fg=self.pal["muted"], bg=self.pal["bg"],
+        tk.Label(parent, text=title, font=self.F["meta"], fg=self.pal["muted"], bg=self.pal["layer"],
                  bd=0, padx=0, pady=0).pack(
             anchor="w", padx=self.px(SP[2]), pady=(0 if first else self.px(SP[4]), self.px(SP[1])))
         card = self._card(parent)
@@ -1556,7 +1782,7 @@ class AppWindow:
         self.win.unbind_all("<MouseWheel>")
         self.win.destroy()
         self.imgs.clear()
-        for lst in (self.cards, self.primaries, self.foot_links):
+        for lst in (self.cards, self.primaries, self.foot_links, self.caps_all):
             lst.clear()
         self.ctl.clear()
         self.p_memo = None                     # the pane is gone with the old widgets
@@ -1599,7 +1825,7 @@ class AppWindow:
                                padx=0, pady=0,
                                fg=p["ink"] if self.cfg.get("trigger_vk") else p["muted"],
                                image=self.rr(self.px(W_CHIP), self.px(H_CHIP), self.px(6),
-                                             p["hover"], ground, p["border"]))
+                                             p["ctl"], ground, p["stroke"](p["ctl"])))
         self.l_trig.pack(fill="both", expand=True)
         self.b_rm = _Btn(self, grp, "Remove", self.clear_key)
         self.b_change = _Btn(self, grp, "Change…", self.capture_key)
@@ -1651,11 +1877,11 @@ class AppWindow:
         items while the canvas is scrolled out of sight, so a field below the fold would drop
         out of the tab ring until someone scrolled to it."""
         ground, r = parent["bg"], r or self.px(R_CTL)
-        fill = self.up(ground)
+        fill = self.pal["ctl"]
         box = tk.Label(parent, bd=0, highlightthickness=0, bg=ground, padx=0, pady=0)
 
         def paint(state="idle"):
-            border = {"idle": self.pal["border_strong"], "focus": self.pal["ring"],
+            border = {"idle": self.pal["stroke_field"], "focus": self.pal["ring"],
                       "error": self.pal["danger"]}[state]
             box.configure(image=self.rr(w, h, r, fill, ground, border,
                                         1 if state == "idle" else self.px(2)))
@@ -1678,7 +1904,7 @@ class AppWindow:
         box = self._field(parent, w, self.px(H_CTL))
         e = tk.Entry(box, width=width, font=font, bg=box.fill, fg=p["ink"], relief="flat", bd=0,
                      insertbackground=p["ink"], highlightthickness=0, justify="left",
-                     selectbackground=p["selected"], selectforeground=p["ink"])
+                     selectbackground=p["sub"](p["ctl"]), selectforeground=p["ink"])
         e.insert(0, value)
         box.slot(e)
         e.err, e.ph = [False], False
@@ -1718,8 +1944,8 @@ class AppWindow:
         c.bind("<<ComboboxSelected>>", lambda e: (commit(), restart and row.restart(), c.selection_clear()))
 
     def _segment(self, parent, key, options, value, on_pick) -> None:
-        """One rounded container - a `hover` track, no hairline - with the picked option as an
-        inner `selected` pill. Each option is a Label carrying its own SLICE of that one
+        """One rounded container - a `ctl_press` track, no hairline - with the picked option as an
+        inner `ctl` pill. Each option is a Label carrying its own SLICE of that one
         rendered container (see `segment_png`), so the group is still one control and one tab
         stop - the container takes focus (a 2 px `ring` on the track's edge, as a field's) and
         Left/Right move between the options. No separators: with one option always filled they
@@ -1739,16 +1965,16 @@ class AppWindow:
         f.configure(width=sum(ws))
 
         def paint():
-            fills = tuple(p["selected"] if v == value[0] else
-                          p["active"] if i == hover[0] else None for i, (_, v) in enumerate(cells))
+            fills = tuple(p["ctl"] if v == value[0] else
+                          p["ctl_hover"] if i == hover[0] else None for i, (_, v) in enumerate(cells))
             ringed = focus[0] and self.kbd            # focus-visible: keyboard focus only
-            border = p["ring"] if ringed else p["hover"]          # idle: the track's own colour
+            border = p["ring"] if ringed else p["ctl_press"]      # idle: the track's own colour
             bw = self.px(2) if ringed else 1
             for i, (l, val) in enumerate(cells):
                 l.configure(fg=p["ink"] if val == value[0] else p["muted"],
                             image=self.img(("seg", ws, i, fills, ground, border, bw),
                                            lambda i=i, fills=fills: segment_png(
-                                               ws, h, r, i, fills, ground, p["hover"], border, bw)))
+                                               ws, h, r, i, fills, ground, p["ctl_press"], border, bw)))
 
         value = [value]
         f.set = lambda v: (value.__setitem__(0, v), paint())   # set from outside, silently
@@ -1794,11 +2020,11 @@ class AppWindow:
         def paint():
             for i, (l, hx) in enumerate(cells):
                 on, at = hx == cur[0], kb[1] and i == kb[0]
-                halo = p["ink"] if on else p["border_strong"] if at else None
+                halo = p["ink"] if on else p["stroke_field"] if at else None
                 l.configure(image=self.img((hx, "sel" if on else "cur" if at else "off"),
                                            lambda hx=hx, halo=halo:
                                            dot_png(box, d, hx, halo, ring,
-                                                   edge=p["border_strong"])))
+                                                   edge=p["stroke_strong"])))
 
         cells = []
         for hx in PRESETS:
@@ -1806,8 +2032,8 @@ class AppWindow:
             l.pack(side="left")
             cells.append((l, hx))
             l.bind("<Enter>", lambda e, l=l, hx=hx: hx != cur[0] and l.configure(
-                image=self.img((hx, "hov"), lambda hx=hx: dot_png(box, d, hx, p["border_strong"], ring,
-                                                                 edge=p["border_strong"]))))
+                image=self.img((hx, "hov"), lambda hx=hx: dot_png(box, d, hx, p["stroke_field"], ring,
+                                                                 edge=p["stroke_strong"]))))
             l.bind("<Leave>", lambda e: paint())
             l.bind("<Button-1>", lambda e, hx=hx: (setattr(self, "kbd", False),
                                                    dots.focus_set(), pick(hx)))
@@ -1830,7 +2056,7 @@ class AppWindow:
 
         def swatch():      # 16 x 16, r4, the value itself (the one non-token colour on screen)
             sw.configure(image=self.rr(self.px(16), self.px(16), self.px(SP[0]), cur[0], ground,
-                                       p["border_strong"]))
+                                       p["stroke_strong"]))
 
         def pick(v, typed=False):
             hx = norm_hex(v)
@@ -1867,11 +2093,11 @@ class AppWindow:
         c.pack(side="right", padx=(0, self.px(SP[2])))
         self.focus_visible(c, ground)
         r = self.px(14) / 2
-        c.create_line(r, H / 2, W - r, H / 2, fill=p["border_strong"], width=self.px(2))
-        fill = c.create_line(r, H / 2, r, H / 2, fill=p["primary"], width=self.px(2))
-        face = self.up(ground)          # the knob is a step above whatever it slides on
+        c.create_line(r, H / 2, W - r, H / 2, fill=p["stroke_strong"], width=self.px(2))
+        fill = c.create_line(r, H / 2, r, H / 2, fill=p["ring"], width=self.px(2))
+        face = p["ctl"]                 # the knob is raised above whatever it slides on
         knob = c.create_image(r, H / 2, image=self.img(
-            ("knob", face), lambda: dot_png(self.px(18), self.px(14), face, p["border_strong"], 1, 0)))
+            ("knob", face), lambda: dot_png(self.px(18), self.px(14), face, p["stroke_strong"], 1, 0)))
 
         def paint():
             x = r + (val[0] - 0.2) / 0.8 * (W - 2 * r)
@@ -1909,9 +2135,9 @@ class AppWindow:
         self.focus_visible(l, ground)
 
         def paint(hover=False):
-            track = (p["primary_hover"] if hover else p["primary"]) if on[0] else \
-                    (p["ring"] if hover else p["border_strong"])
-            knob = p["on_primary"] if on[0] else self.up(ground)
+            track = (mix(p["ring"], p["ink"], .10) if hover else p["ring"]) if on[0] else \
+                    (p["muted"] if hover else p["stroke_field"])
+            knob = "#ffffff" if on[0] else p["ctl"]
             l.configure(image=self.img((track, knob, on[0]),
                                        lambda: pill_png(w, h, track, knob, on[0])))
 
@@ -1939,7 +2165,7 @@ class AppWindow:
         if app is None:
             self.l_trig.configure(text="loading…", fg=self.pal["muted"])
             return
-        self.l_trig.configure(text="Press a key…", fg=self.pal["primary"])
+        self.l_trig.configure(text="Press a key…", fg=self.pal["ring"])
         app.capture = lambda vk: self.root.after(0, lambda: self._captured(vk))
 
     def _captured(self, vk: int) -> None:
@@ -2032,7 +2258,7 @@ class AppWindow:
         p, pad = self.pal, self.px(SP[3])
         f.grid_rowconfigure(0, weight=1)
         f.grid_columnconfigure(2, weight=1)
-        lp = tk.Frame(f, bg=p["bg"], width=self.px(W_LIST[0]))
+        lp = tk.Frame(f, bg=p["layer"], width=self.px(W_LIST[0]))
         lp.grid(row=0, column=0, sticky="nsew")
         lp.grid_propagate(False)
         self.hairline(f, vertical=True).grid(row=0, column=1, sticky="ns")
@@ -2047,23 +2273,23 @@ class AppWindow:
         f.bind("<Configure>", fit)
         lp.grid_rowconfigure(1, weight=1)
         lp.grid_columnconfigure(0, weight=1)
-        head = tk.Frame(lp, bg=p["bg"], height=self.px(H_CTL))
+        head = tk.Frame(lp, bg=p["layer"], height=self.px(H_CTL))
         head.grid(row=0, column=0, sticky="ew", padx=pad, pady=(self.px(PAD_TOP), pad))
         head.pack_propagate(False)
         # no Tk default border/padding on any Label in this view (2 + 1 px a side): the text
         # sits on E like the rows' and the buttons' glyphs
-        tk.Label(head, text="Dictations", font=self.F["title"], fg=p["ink"], bg=p["bg"], bd=0, padx=0,
+        tk.Label(head, text="Dictations", font=self.F["title"], fg=p["ink"], bg=p["layer"], bd=0, padx=0,
                  pady=0).pack(side="left")
-        self.pcount = tk.Label(head, text="", font=self.F["body"], fg=p["muted"], bg=p["bg"], bd=0,
+        self.pcount = tk.Label(head, text="", font=self.F["body"], fg=p["muted"], bg=p["layer"], bd=0,
                                padx=0, pady=0)
         self.pcount.pack(side="left", padx=(self.px(SP[2]), 0))
-        box = tk.Frame(lp, bg=p["bg"])
+        box = tk.Frame(lp, bg=p["layer"])
         box.grid(row=1, column=0, sticky="nsew")
         self.plist = RowList(self, box, two_line=True, on_select=self._select, keys={
             "<Return>": self._plist_go, "<Double-Button-1>": self._plist_go,
             "<Control-c>": self.copy_selected})
 
-        d = self.dpane = tk.Frame(f, bg=p["bg"])
+        d = self.dpane = tk.Frame(f, bg=p["layer"])
         d.grid(row=0, column=2, sticky="nsew")
         d.grid_rowconfigure(0, weight=1)
         d.grid_columnconfigure(0, weight=1)
@@ -2075,30 +2301,30 @@ class AppWindow:
         """The draft frame: header row 1 (engine dot + name, [target segment], the primary),
         row 2 (the segment, when row 1 cannot hold it), the scroll-only rule, the body canvas."""
         p, pad = self.pal, self.px(SP[3])
-        df = self.draft_f = tk.Frame(parent, bg=p["bg"])
+        df = self.draft_f = tk.Frame(parent, bg=p["layer"])
         df.grid(row=0, column=0, sticky="nsew")
         df.grid_rowconfigure(2, weight=1)
         df.grid_columnconfigure(0, weight=1)
-        head = self.head = tk.Frame(df, bg=p["bg"])
+        head = self.head = tk.Frame(df, bg=p["layer"])
         head.grid(row=0, column=0, sticky="ew", padx=pad, pady=(self.px(PAD_TOP), self.px(SP[1])))
         head.grid_columnconfigure(2, weight=1)
-        eng = tk.Frame(head, bg=p["bg"])
+        eng = tk.Frame(head, bg=p["layer"])
         eng.grid(row=0, column=0, sticky="w")
-        self.eng_dot = tk.Label(eng, bg=p["bg"], bd=0, padx=0, pady=0)
+        self.eng_dot = tk.Label(eng, bg=p["layer"], bd=0, padx=0, pady=0)
         self.eng_dot.pack(side="left")
         # the name's own 8 px pad is the gap after the dot
         self.b_eng = _Btn(self, eng, "Claude Code", self._open_sheet, kind="text", ink=True)
         self.b_eng.f.pack(side="left")
-        self.seg_host = tk.Frame(head, bg=p["bg"])
+        self.seg_host = tk.Frame(head, bg=p["layer"])
         self.p_target = [self.cfg.get("prompt_target") or "code"]
         self.seg = self._segment(self.seg_host, "target", list(promptify.TARGETS), self.p_target[0],
                                  self._set_target)
         self.b_main = _Btn(self, head, "Promptify", self.promptify, kind="primary")
         self.b_main.f.grid(row=0, column=3, sticky="e")
         self.head_rows, self.main_shown = 0, True
-        self.rule = self.hairline(df, color=p["bg"])
+        self.rule = self.hairline(df, color=p["layer"])
         self.rule.grid(row=1, column=0, sticky="ew")
-        box = tk.Frame(df, bg=p["bg"])
+        box = tk.Frame(df, bg=p["layer"])
         box.grid(row=2, column=0, sticky="nsew")
         self.pc, self.psb, self.p_inner = self._scroller(box, self.rule, cap=True)
 
@@ -2109,14 +2335,14 @@ class AppWindow:
         holds the content to the body measure (an 80-character line) with air at the right.
         Returns (canvas, scrollbar, the frame to fill) - the frame has the body's 7/16 padding."""
         p, g = self.pal, self.px(SP[0])
-        c = tk.Canvas(box, bg=p["bg"], highlightthickness=0, yscrollincrement=1, bd=0, width=1, height=1)
+        c = tk.Canvas(box, bg=p["layer"], highlightthickness=0, yscrollincrement=1, bd=0, width=1, height=1)
         c.pack(side="left", fill="both", expand=True)
         # the thumb's column: the outer 4 px of the pane's 16 px right padding, OVER the canvas
         # (a sibling placed on top of it), so the canvas never changes width when the thumb
         # comes and goes and the body's right edge stays the header's. The scrollbar is 2 px
         # wider than the column and 1 px left of it: the column clips clam's `bordercolor`
         # strips (`_ttk`) and the 4 px that show are all thumb.
-        gut = tk.Frame(box, bg=p["bg"], width=g)
+        gut = tk.Frame(box, bg=p["layer"], width=g)
         gut.place(relx=1.0, y=0, anchor="ne", relheight=1.0)
         gut.lift()
         sb = ttk.Scrollbar(gut, orient="vertical", style="M.Vertical.TScrollbar", command=c.yview,
@@ -2125,21 +2351,21 @@ class AppWindow:
         c.configure(yscrollcommand=lambda lo, hi: self._body_scrolled(sb, rule, lo, hi))
         gut.bind("<Enter>", lambda e: c.bind_all("<MouseWheel>", lambda ev: self._wheel(c, ev)))
         gut.bind("<Leave>", lambda e: c.unbind_all("<MouseWheel>"))
-        win = tk.Frame(c, bg=p["bg"])
+        win = tk.Frame(c, bg=p["layer"])
         wid = c.create_window((0, 0), window=win, anchor="nw")
         win.bind("<Configure>", lambda e: c.configure(scrollregion=c.bbox("all")))
         c.bind("<Configure>", lambda e: c.itemconfigure(
             wid, width=min(e.width, self.measure + 2 * self.px(SP[3])) if cap else e.width))
         c.bind("<Enter>", lambda e: c.bind_all("<MouseWheel>", lambda ev: self._wheel(c, ev)))
         c.bind("<Leave>", lambda e: c.unbind_all("<MouseWheel>"))
-        inner = tk.Frame(win, bg=p["bg"])
+        inner = tk.Frame(win, bg=p["layer"])
         inner.pack(fill="both", expand=True, pady=(self.px(7), self.px(SP[3])))
         return c, sb, inner
 
     def _body_scrolled(self, sb, rule, lo, hi) -> None:
         sb.set(lo, hi)
         sb.show(not (float(lo) <= 0.0 and float(hi) >= 1.0))
-        rule.configure(bg=self.pal["border"] if float(lo) > 0.0 else self.pal["bg"])
+        rule.configure(bg=self.pal["divider"](self.pal["layer"]) if float(lo) > 0.0 else self.pal["layer"])
 
     def _wheel(self, c, e) -> None:
         # yscrollincrement=1 makes "units" mean pixels, so one notch moves the same distance in
@@ -2256,9 +2482,9 @@ class AppWindow:
         p = self.pal
         key, spec, est = self._engine_info()
         named = est == "connected" or self.pstate == "error"
-        col = p["danger"] if self.pstate == "error" else p["primary"] if est == "connected" else None
+        col = p["danger"] if self.pstate == "error" else p["ring"] if est == "connected" else None
         self.eng_dot.configure(image=self.dot(8, 6, col) if col else
-                               self.dot(8, 6, p["bg"], edge=p["border_strong"]))
+                               self.dot(8, 6, p["layer"], edge=p["stroke_field"]))
         self.b_eng.text(spec["label"] if named else "No engine", hold=False)
         self.b_eng.mute(not named)
 
@@ -2309,10 +2535,10 @@ class AppWindow:
         """ONE line: the engine and the seconds (the ticker in `_run_draft` keeps them going),
         and Cancel. Header and list do not move."""
         p, label = self.pal, promptify.engine_spec(self.cfg)["label"]
-        row = tk.Frame(self.p_inner, bg=p["bg"])
+        row = tk.Frame(self.p_inner, bg=p["layer"])
         row.pack(fill="x", padx=self.px(SP[3]))
         self.l_draft = tk.Label(row, text=f"Drafting with {label} · 0 s", font=self.F["body"],
-                                fg=p["muted"], bg=p["bg"], bd=0, padx=0, pady=0)
+                                fg=p["muted"], bg=p["layer"], bd=0, padx=0, pady=0)
         self.l_draft.pack(side="left")
         self.b_cancel = _Btn(self, row, "Cancel", self._cancel_draft, kind="text")
         self.b_cancel.f.pack(side="left", padx=(self.px(SP[2]) - self.px(SP[1]), 0))
@@ -2328,7 +2554,7 @@ class AppWindow:
         F["questions"] = list(d.get("questions") or [])
         self.p_target[0] = d.get("target") or self.cfg.get("prompt_target") or "code"
         self.seg.set(self.p_target[0])
-        orow = tk.Frame(inner, bg=p["bg"])
+        orow = tk.Frame(inner, bg=p["layer"])
         orow.pack(fill="x", padx=(pad - px(SP[1]), pad))     # the glyph lands on E
         self.orig_open = False
         self.b_orig = _Btn(self, orow, "Original ›", self._toggle_orig, kind="text",
@@ -2338,7 +2564,7 @@ class AppWindow:
             self._segment(orow, "which", [(f"{i + 1} of {len(F['prompts'])}", i)
                                           for i in range(len(F["prompts"]))], 0, self._switch_prompt)
         self.l_orig = tk.Label(inner, text=it["text"], font=self.F["body"], fg=p["muted"],
-                               bg=p["bg"], anchor="w", justify="left", bd=0, padx=0, pady=0)
+                               bg=p["layer"], anchor="w", justify="left", bd=0, padx=0, pady=0)
         self._wrap(self.l_orig, 2 * pad)
         F["text"] = t = self._textbox(inner, F["prompts"][0], (4, 200))
         t.host.pack(fill="x", padx=(pad - px(2), pad), pady=(px(SP[1]), 0))   # the ring bar before E
@@ -2347,9 +2573,9 @@ class AppWindow:
         vn = d.get("vault_notes") or []
         if vn:
             # the notes the engine saw, clickable into Obsidian
-            crow = tk.Frame(inner, bg=p["bg"])
+            crow = tk.Frame(inner, bg=p["layer"])
             crow.pack(anchor="w", padx=pad, pady=(px(SP[0]), 0))
-            tk.Label(crow, text="Context ·", font=self.F["meta"], fg=p["muted"], bg=p["bg"],
+            tk.Label(crow, text="Context ·", font=self.F["meta"], fg=p["muted"], bg=p["layer"],
                      bd=0, padx=0, pady=0).pack(side="left")
             for n in vn[:3]:
                 self.link(crow, n.get("title") or n.get("path", ""),
@@ -2360,21 +2586,21 @@ class AppWindow:
         self._line(inner, f"Questions · {len(qs)}" if qs else
                    "No questions · the dictation was specific enough.", "meta", pady=(pad, 0))
         for i, q in enumerate(qs):
-            blk = tk.Frame(inner, bg=p["bg"])
+            blk = tk.Frame(inner, bg=p["layer"])
             blk.pack(fill="x", padx=pad, pady=(px(SP[2]) if i == 0 else pad, 0))
-            l = tk.Label(blk, text=q["q"], font=self.F["body"], fg=p["ink"], bg=p["bg"],
+            l = tk.Label(blk, text=q["q"], font=self.F["body"], fg=p["ink"], bg=p["layer"],
                          anchor="w", justify="left", bd=0, padx=0, pady=0)
             l.pack(fill="x")
             self._wrap(l, 0)
             if q.get("why"):
-                w = tk.Label(blk, text=q["why"], font=self.F["meta"], fg=p["muted"], bg=p["bg"],
+                w = tk.Label(blk, text=q["why"], font=self.F["meta"], fg=p["muted"], bg=p["layer"],
                              anchor="w", justify="left", bd=0, padx=0, pady=0)
                 w.pack(fill="x")
                 self._wrap(w, 0)
             # the strip is made before the answer so Tab reaches the chips first
-            strip = tk.Frame(blk, bg=p["bg"], takefocus=1, highlightthickness=0,
+            strip = tk.Frame(blk, bg=p["layer"], takefocus=1, highlightthickness=0,
                              height=px(H_CHIP)) if q.get("options") else None
-            arow = tk.Frame(blk, bg=p["bg"])
+            arow = tk.Frame(blk, bg=p["layer"])
             a = self._uline(arow, "", (1, 3), "Type an answer")
             if strip is not None:
                 self._chips(strip, q["options"], a)
@@ -2382,12 +2608,12 @@ class AppWindow:
             F["answers"].append(a)
             F["chips"].append(strip)
             self._assume(blk, arow, a)     # packs the button, then the expanding field
-        meta = tk.Frame(inner, bg=p["bg"])
+        meta = tk.Frame(inner, bg=p["layer"])
         meta.pack(anchor="w", padx=pad, pady=(px(SP[4]), 0))
         label = promptify.ENGINES.get(d.get("engine"), {}).get("label", d.get("engine", ""))
         for text, font in ((f"Drafted by {label} · ", "meta"), (d.get("model") or "", "mono9"),
                            (f" · {d.get('wall', 0):.0f} s", "meta")):
-            tk.Label(meta, text=text, font=self.F[font], fg=p["muted"], bg=p["bg"], bd=0, padx=0,
+            tk.Label(meta, text=text, font=self.F[font], fg=p["muted"], bg=p["layer"], bd=0, padx=0,
                      pady=0).pack(side="left")
         self.b_update = _Btn(self, inner, "Update prompt", self._update, kind="text")
         self.b_update.f.pack(anchor="w", padx=(pad - px(SP[1]), 0), pady=(px(SP[1]), 0))
@@ -2404,7 +2630,7 @@ class AppWindow:
     # --- fields ------------------------------------------------------------------------------
     def _uline(self, parent, text, lines=(1, 3), placeholder="", font=None, commit=None) -> tk.Text:
         """An underlined field: an unboxed Text over a 2 px band of two stacked hairlines. Idle,
-        `border` over the ground; focused, both `ring` - the band's height never changes, so
+        the 16 % band over the ground; focused, both `ring` - the band's height never changes, so
         focusing shifts nothing. Empty and unfocused it shows `placeholder` in muted under the
         tag "ph", and `.value()` is "" then. Grows with its content between `lines`; a
         one-line field commits on Return. Tab moves on; Ctrl+Return is Update prompt. `.host`
@@ -2413,10 +2639,11 @@ class AppWindow:
         host = tk.Frame(parent, bg=ground)
         t = tk.Text(host, height=lines[0], wrap="word", relief="flat", bd=0, highlightthickness=0,
                     bg=ground, fg=p["ink"], font=font or self.mf["body"], insertbackground=p["ink"],
-                    selectbackground=p["selected"], selectforeground=p["ink"], undo=True,
+                    selectbackground=p["sub"](ground), selectforeground=p["ink"], undo=True,
                     padx=0, pady=0)
         t.pack(fill="x", pady=(self.px(7), self.px(6)))
-        band = [tk.Frame(host, bg=p["border"], height=1), tk.Frame(host, bg=ground, height=1)]
+        rest = mix(ground, "#ffffff" if self.dark else "#000000", .16)    # a field, not a rule
+        band = [tk.Frame(host, bg=rest, height=1), tk.Frame(host, bg=ground, height=1)]
         for b in band:
             b.pack(fill="x")
         t.tag_configure("ph", foreground=p["muted"])
@@ -2450,7 +2677,7 @@ class AppWindow:
 
         def focus(on):
             for b in band:
-                b.configure(bg=p["ring"] if on else (p["border"] if b is band[0] else ground))
+                b.configure(bg=p["ring"] if on else (rest if b is band[0] else ground))
             (hide_ph if on else show_ph)()
             if not on and commit:
                 commit()
@@ -2481,7 +2708,7 @@ class AppWindow:
         host = tk.Frame(parent, bg=ground)
         t = tk.Text(host, height=lines[0], wrap="word", relief="flat", bd=0, highlightthickness=0,
                     bg=ground, fg=p["ink"], font=self.mf["body"], insertbackground=p["ink"],
-                    selectbackground=p["selected"], selectforeground=p["ink"], undo=True,
+                    selectbackground=p["sub"](ground), selectforeground=p["ink"], undo=True,
                     padx=0, pady=0)
         t.host, t.ring = host, tk.Frame(host, bg=ground, width=self.px(2))
         t.ring.pack(side="left", fill="y")
@@ -2518,14 +2745,14 @@ class AppWindow:
         btn.f.pack(side="right", anchor="s", padx=(px(SP[1]), 0), pady=(0, px(2)))
         a.host.pack(side="left", fill="x", expand=True)
         BAR_TEXT = "Assumed · the engine decides and says so · click to answer instead"
-        bar = tk.Label(blk, text=BAR_TEXT, font=self.F["meta"], fg=p["ink"], bg=p["bg"],
+        bar = tk.Label(blk, text=BAR_TEXT, font=self.F["meta"], fg=p["ink"], bg=p["layer"],
                        bd=0, padx=0, pady=0, compound="center", cursor="hand2", takefocus=1,
                        highlightthickness=0)
 
         def paint(e=None):
             w = bar.winfo_width()
             if w > 1:
-                bar.configure(image=self.rr(w, px(H_CTL), px(R_CTL), p["tint"], p["bg"]),
+                bar.configure(image=self.rr(w, px(H_CTL), px(R_CTL), p["tint"], p["layer"]),
                               text=ellipsize(self.mf["meta"], BAR_TEXT, w - 2 * px(SP[2])))
 
         bar.bind("<Configure>", paint)
@@ -2828,23 +3055,23 @@ class AppWindow:
         (`_engine_rows`). No key fields anywhere: each engine signs in on its own, in the
         browser, and murmur only ever reads whether it did (`connect.status`)."""
         p, pad = self.pal, self.px(SP[3])
-        s = self.sheet = tk.Frame(parent, bg=p["bg"])
+        s = self.sheet = tk.Frame(parent, bg=p["layer"])
         s.grid(row=0, column=0, sticky="nsew")
         s.grid_remove()
         self.sheet_open, self.e_rows = False, {}
         s.grid_rowconfigure(2, weight=1)
         s.grid_columnconfigure(0, weight=1)
-        head = tk.Frame(s, bg=p["bg"], height=self.px(H_CTL))
+        head = tk.Frame(s, bg=p["layer"], height=self.px(H_CTL))
         head.grid(row=0, column=0, sticky="ew", padx=(pad - self.px(SP[1]), pad),
                   pady=(self.px(PAD_TOP), self.px(SP[1])))
         head.pack_propagate(False)
         self.b_back = _Btn(self, head, "‹ Draft", self._close_sheet, kind="text")
         self.b_back.f.pack(side="left")
-        tk.Label(head, text="Engines", font=self.F["title"], fg=p["ink"], bg=p["bg"], bd=0, padx=0,
+        tk.Label(head, text="Engines", font=self.F["title"], fg=p["ink"], bg=p["layer"], bd=0, padx=0,
                  pady=0).pack(side="left", padx=(self.px(SP[0]), 0))   # the button's 8 + 4 = 12
-        self.srule = self.hairline(s, color=p["bg"])
+        self.srule = self.hairline(s, color=p["layer"])
         self.srule.grid(row=1, column=0, sticky="ew")
-        box = tk.Frame(s, bg=p["bg"])
+        box = tk.Frame(s, bg=p["layer"])
         box.grid(row=2, column=0, sticky="nsew")
         self.ec, self.esb, self.e_inner = self._scroller(box, self.srule)
 
@@ -2879,7 +3106,7 @@ class AppWindow:
             active = key == promptify.engine_spec(self.cfg)["key"]
             word = "Connected" if err is None else "Usage limit" if "limit" in err.lower() else "Error"
             line = f"{word} · {err} · " if err else f"{word} · "
-            return line + spec["login"], p["danger"] if err else p["primary"], "active" if active else "use"
+            return line + spec["login"], p["danger"] if err else p["ring"], "active" if active else "use"
         if err:                                       # a sign-in that failed says why
             return f"Error · {err}", p["danger"], "connect"
         return f"{self.WORDS.get(state, 'Not connected')} · {spec['login']}", None, "connect"
@@ -2895,39 +3122,39 @@ class AppWindow:
         self.e_rows = {}
         self._line(inner, "The engine writes the prompt. Each signs in on its own; murmur keeps "
                    "no keys.", "meta")
-        rows = tk.Frame(inner, bg=p["bg"])
+        rows = tk.Frame(inner, bg=p["layer"])
         rows.pack(fill="x", padx=pad, pady=(pad, 0))
         for i, key in enumerate(promptify.ORDER):
             spec = promptify.ENGINES[key]
             status, col, action = self._engine_row(key)
             if i:
                 self.hairline(rows).pack(fill="x")
-            blk = tk.Frame(rows, bg=p["bg"])
+            blk = tk.Frame(rows, bg=p["layer"])
             blk.pack(fill="x", pady=px(SP[1]))
-            top = tk.Frame(blk, bg=p["bg"])
+            top = tk.Frame(blk, bg=p["layer"])
             top.pack(fill="x")
             # the action column keeps its width and centres its control on the two text lines
-            right = tk.Frame(top, bg=p["bg"], width=px(W_ACT))
+            right = tk.Frame(top, bg=p["layer"], width=px(W_ACT))
             right.pack(side="right", fill="y")
             right.pack_propagate(False)
-            left = tk.Frame(top, bg=p["bg"])
+            left = tk.Frame(top, bg=p["layer"])
             left.pack(side="left", fill="x", expand=True, padx=(0, px(SP[2])))
-            tk.Label(left, text=spec["label"], font=self.F["body"], fg=p["ink"], bg=p["bg"], bd=0,
+            tk.Label(left, text=spec["label"], font=self.F["body"], fg=p["ink"], bg=p["layer"], bd=0,
                      padx=0, pady=0).pack(anchor="w")
-            st = tk.Frame(left, bg=p["bg"])
+            st = tk.Frame(left, bg=p["layer"])
             st.pack(fill="x", pady=(px(2), 0))
-            tk.Label(st, bg=p["bg"], bd=0, padx=0, pady=0,
-                     image=self.dot(8, 6, col) if col else self.dot(8, 6, p["bg"], edge=p["border_strong"])
+            tk.Label(st, bg=p["layer"], bd=0, padx=0, pady=0,
+                     image=self.dot(8, 6, col) if col else self.dot(8, 6, p["layer"], edge=p["stroke_field"])
                      ).pack(side="left", anchor="n", pady=(px(SP[0]), 0))
-            sl = tk.Label(st, text=status, font=self.F["meta"], fg=p["muted"], bg=p["bg"],
+            sl = tk.Label(st, text=status, font=self.F["meta"], fg=p["muted"], bg=p["layer"],
                           anchor="w", justify="left", bd=0, padx=0, pady=0)
             sl.pack(side="left", fill="x", expand=True, padx=(px(SP[1]), 0))
             self._wrap(sl, px(SP[3]))
-            col_ = tk.Frame(right, bg=p["bg"])
+            col_ = tk.Frame(right, bg=p["layer"])
             col_.place(relx=1.0, rely=0.5, anchor="e")
             row = self.e_rows[key] = {"status": sl, "action": action, "btn": None}
             if action == "active":
-                tk.Label(col_, text="Active", font=self.F["meta"], fg=p["ink"], bg=p["bg"], bd=0,
+                tk.Label(col_, text="Active", font=self.F["meta"], fg=p["ink"], bg=p["layer"], bd=0,
                          padx=0, pady=0).pack(anchor="e")
             else:
                 text, cmd, kind = {"cancel": ("Cancel", self._cancel_login, "text"),
@@ -2956,11 +3183,11 @@ class AppWindow:
         Off by default; turning it on re-shows the disclosure once (vault_ack)."""
         p, px, pad = self.pal, self.px, self.px(SP[3])
         self.hairline(inner).pack(fill="x", padx=pad, pady=(px(SP[4]), 0))
-        blk = tk.Frame(inner, bg=p["bg"])
+        blk = tk.Frame(inner, bg=p["layer"])
         blk.pack(fill="x", padx=pad, pady=(px(SP[2]), 0))
-        left = tk.Frame(blk, bg=p["bg"])
+        left = tk.Frame(blk, bg=p["layer"])
         left.pack(side="left", fill="x", expand=True)
-        tk.Label(left, text="Obsidian vault", font=self.F["body"], fg=p["ink"], bg=p["bg"],
+        tk.Label(left, text="Obsidian vault", font=self.F["body"], fg=p["ink"], bg=p["layer"],
                  bd=0, padx=0, pady=0).pack(anchor="w")
         vp = (self.cfg.get("vault_path") or "").strip()
         if not vp:
@@ -2973,11 +3200,11 @@ class AppWindow:
                 status = f"{Path(vp).name} · indexed {len(idx.get('notes') or [])} notes · {ago_s}"
             else:
                 status = f"{Path(vp).name} · indexing…"
-        l = tk.Label(left, text=status, font=self.F["meta"], fg=p["muted"], bg=p["bg"],
+        l = tk.Label(left, text=status, font=self.F["meta"], fg=p["muted"], bg=p["layer"],
                      anchor="w", justify="left", bd=0, padx=0, pady=0)
         l.pack(anchor="w", pady=(px(SP[0]), 0))
         self._wrap(l, px(120))
-        col = tk.Frame(blk, bg=p["bg"])
+        col = tk.Frame(blk, bg=p["layer"])
         col.pack(side="right")
         if not vp:
             found = vault.known_vaults()
@@ -2995,16 +3222,16 @@ class AppWindow:
         """One dictation stays one prompt unless the speaker turns splitting on."""
         p, px, pad = self.pal, self.px, self.px(SP[3])
         self.hairline(inner).pack(fill="x", padx=pad, pady=(px(SP[4]), 0))
-        blk = tk.Frame(inner, bg=p["bg"])
+        blk = tk.Frame(inner, bg=p["layer"])
         blk.pack(fill="x", padx=pad, pady=(px(SP[2]), 0))
-        right = tk.Frame(blk, bg=p["bg"])
+        right = tk.Frame(blk, bg=p["layer"])
         right.pack(side="right")
-        left = tk.Frame(blk, bg=p["bg"])
+        left = tk.Frame(blk, bg=p["layer"])
         left.pack(side="left", fill="x", expand=True, padx=(0, px(SP[2])))
-        tk.Label(left, text="Split into prompts", font=self.F["body"], fg=p["ink"], bg=p["bg"],
+        tk.Label(left, text="Split into prompts", font=self.F["body"], fg=p["ink"], bg=p["layer"],
                  bd=0, padx=0, pady=0).pack(anchor="w")
         l = tk.Label(left, text="Off, one take is one prompt; on, unrelated asks in a take "
-                     "become separate prompts", font=self.F["meta"], fg=p["muted"], bg=p["bg"],
+                     "become separate prompts", font=self.F["meta"], fg=p["muted"], bg=p["layer"],
                      anchor="w", justify="left", bd=0, padx=0, pady=0)
         l.pack(anchor="w", pady=(px(SP[0]), 0))
         self._wrap(l, px(120))
@@ -3045,9 +3272,9 @@ class AppWindow:
         """Model (active engine only): an underlined mono field, 240 wide or what is left,
         blank = the engine's default; writes cfg["prompt_models"][key]."""
         p, px = self.pal, self.px
-        ml = tk.Frame(blk, bg=p["bg"])
+        ml = tk.Frame(blk, bg=p["layer"])
         ml.pack(fill="x", pady=(px(SP[1]), 0))
-        lab = tk.Label(ml, text="Model", font=self.F["meta"], fg=p["muted"], bg=p["bg"], bd=0, padx=0,
+        lab = tk.Label(ml, text="Model", font=self.F["meta"], fg=p["muted"], bg=p["layer"], bd=0, padx=0,
                        pady=0)
         lab.pack(side="left")
         models = self.cfg.get("prompt_models")
@@ -3077,9 +3304,9 @@ class AppWindow:
         """Claude's fallback: when the browser could not hand the code back to the CLI, it
         shows one to paste. Return submits it."""
         p, px = self.pal, self.px
-        pl = tk.Frame(blk, bg=p["bg"])
+        pl = tk.Frame(blk, bg=p["layer"])
         pl.pack(fill="x", pady=(px(SP[1]), 0))
-        tk.Label(pl, text="Paste code", font=self.F["meta"], fg=p["muted"], bg=p["bg"], bd=0, padx=0,
+        tk.Label(pl, text="Paste code", font=self.F["meta"], fg=p["muted"], bg=p["layer"], bd=0, padx=0,
                  pady=0).pack(side="left")
         fld = self._uline(pl, "", (1, 1), "if the browser did not finish", self.mf["mono"],
                           commit=lambda: fld.value() and login.submit(fld.value()))

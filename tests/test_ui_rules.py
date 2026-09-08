@@ -24,7 +24,8 @@ PARA = ("What you say is typed where your cursor is, and kept here for seven day
 # --- 1. the two contrasts every screen leans on, both palettes -----------------------------
 for dark in (False, True):
     p = W.palette(brand.GREEN, dark)
-    assert W.contrast(p["ring"], p["bg"]) >= 3.0, (dark, "ring on the ground", p["ring"], p["bg"])
+    assert W.contrast(p["ring"], p["layer"]) >= 3.0, (dark, "ring on the layer", p["ring"], p["layer"])
+    assert W.contrast(p["ring"], p["card"]) >= 3.0, (dark, "ring on a card", p["ring"], p["card"])
     assert W.contrast(p["on_primary"], p["primary"]) >= 4.5, (dark, "text on the primary")
 
 # --- 2. every SP-derived spacing the file uses is one of the six ---------------------------
@@ -98,7 +99,7 @@ for theme in ("light", "dark"):
 
     # --- 5. each button kind's focus colour reads against its own fill: the accent ring on the
     # flat kinds, the text colour (an inner ring) on the solid ones
-    fr = tk.Frame(win.views["promptify"], bg=pal["bg"])
+    fr = tk.Frame(win.views["promptify"], bg=pal["layer"])
     for kind in ("primary", "danger", "secondary", "text", "chip"):
         b = W._Btn(win, fr, "x", lambda: None, kind=kind)
         ring = b.fg if kind in ("primary", "danger") else pal["ring"]
@@ -112,7 +113,36 @@ for theme in ("light", "dark"):
     # --- and the things a screenshot would otherwise be the only check of
     # the thumb paints 4 px: clam's 1 px `bordercolor` strip either side is inside `arrowsize`
     assert win.ssb.winfo_reqwidth() == win.px(W.SP[0]) + 2, "the scroll thumb is 4 px + clam's strips"
+
+    # --- 6. keycaps: a word's cap is its mono9 width + 6 a side, a glyph's a 20 px square; the
+    # image is the raised key - `ctl` with the elevation edge along its bottom between the arcs
+    # (the lip) and, in dark, the lit top; caps are decorative and every one is registered
+    at = lambda img, x, y: tuple(int(v) for v in root.tk.splitlist(root.tk.call(img, "get", x, y)))
+    cap, one = win.kbd_img("Ctrl"), win.kbd_img("1")
+    assert cap.width() == win.mf["mono9"].measure("Ctrl") + 2 * win.px(6) and cap.height() == win.px(W.H_KBD)
+    assert one.width() == one.height() == win.px(W.H_KBD)
+    assert at(cap, cap.width() // 2, cap.height() // 2) == W.rgb(pal["ctl"]), theme
+    assert at(cap, cap.width() // 2, cap.height() - 1) == W.rgb(pal["stroke_edge"]), theme
+    assert at(cap, cap.width() // 2, 0) == W.rgb(pal["stroke_top"] if theme == "dark" else pal["stroke"](pal["ctl"])), theme
+    k = win.keycap(win.views["settings"], "Esc")
+    assert k in win.caps_all and k.cget("text") == "Esc" and int(k.cget("takefocus")) == 0
+    assert [c.cget("text") for c in win.kbd_chord(win.views["settings"], "Ctrl", "D").winfo_children()] == ["Ctrl", "D"]
+    assert win.icon("search", pal["muted"]) is win.icon("search", pal["muted"])      # cached, one per key
+    assert win.icon("search", pal["muted"]).width() == win.px(W.ICON)
     win.win.destroy()
 
 root.destroy()
-print("ui rules ok: contrasts, spacing", used, "one primary, measure, focus colours")
+
+# --- 7. icons: every glyph draws in its colour, inside the 16 box's 1 px safe margin --------
+import io
+from PIL import Image
+for name in W.GLYPHS:
+    im = Image.open(io.BytesIO(W.icon_png(name, "#1b1b1b")))
+    a = im.getchannel("A")
+    assert im.size == (16, 16) and a.getextrema()[1] == 255, (name, "blank or faint")
+    l, t, r, b = a.getbbox()
+    assert 1 <= l and 1 <= t and r <= 15 and b <= 15, (name, "past the safe margin", (l, t, r, b))
+    assert {im.getpixel((x, y))[:3] for x in range(16) for y in range(16)
+            if im.getpixel((x, y))[3] == 255} == {(27, 27, 27)}, (name, "not its colour")
+assert Image.open(io.BytesIO(W.icon_png("options", "#1b1b1b", 32))).size == (32, 32)   # the grid scales
+print("ui rules ok: contrasts, spacing", used, "one primary, measure, focus colours, keycaps, icons")
