@@ -772,6 +772,9 @@ def run_app(factory, cfg: dict, cfg_path: Path) -> None:
         holder["app"].on_text = on_text
         holder["app"].on_open = open_window
         holder["app"].run()
+        # build the window now, hidden, so the first triple-tap costs a deiconify (measured
+        # 1.4 s for the build on this laptop)
+        root.after(1500, lambda: (win.prebuild(), log(f"window prebuilt  {since_launch()}")))
 
     def tick() -> None:
         try:

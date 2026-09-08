@@ -830,6 +830,8 @@ class AppWindow:
         self.draft_item = None    # ... the last one (kept name)
         self.last_call = None     # (item, prompts, questions, answers) of the last draft: Try again
         self.p_item = None        # the item the Promptify detail pane shows
+        self.p_memo = None        # what the pane was last built for: go() skips a rebuild
+        self._eng_cache = {}      # engine key -> (connection state, when): the sheet clears it
         self.pstate = "pick"      # ... and in which state (STATES)
         self.p_err = None         # (item, message) after a failed draft, until the next attempt
         self.p_fields = {}        # the draft body's live widgets: prompts, questions, answers...
@@ -840,6 +842,12 @@ class AppWindow:
         return max(1, int(round(n * self.scale)))
 
     # --- lifecycle ---------------------------------------------------------------------------
+    def prebuild(self) -> None:
+        """Build the window while nobody is waiting (run_app calls this once the model is
+        ready): the first triple-tap then costs a deiconify, not the 1.4 s build."""
+        if self.win is None or not self.win.winfo_exists():
+            self._build()
+
     def show(self) -> None:
         if self.win is None or not self.win.winfo_exists():
             self._build()
@@ -866,6 +874,7 @@ class AppWindow:
                   "meta": ("Segoe UI", 9), "mono": ("Cascadia Mono", 10),
                   "mono9": ("Cascadia Mono", 9)}
         w = self.win = tk.Toplevel(self.root)
+        w.withdraw()                                  # built hidden; show() deiconifies
         w.title("murmur")
         if self.icon and Path(self.icon).exists():
             try:
@@ -896,7 +905,8 @@ class AppWindow:
         self.kbd = True                                     # Tab (and the tests) count as keyboard
         # on the toplevel's bindtag, which runs BEFORE the "all" tag that moves focus on Tab -
         # so the FocusIn that follows already sees keyboard mode
-        w.bind("<KeyPress-Tab>", lambda e: setattr(self, "kbd", True), add="+")
+        w.bind("<Tab>", lambda e: (setattr(self, "kbd", True), self._tab(False))[1], add="+")
+        w.bind("<Shift-Tab>", lambda e: (setattr(self, "kbd", True), self._tab(True))[1], add="+")
         w.bind("<Button>", lambda e: setattr(self, "kbd", False), add="+")
         # a card starts 12 px before the pane's text edge E (like a row highlight) and spends
         # 1 px on its hairline, so its padding is 12 minus that px - which puts every line of
@@ -907,7 +917,8 @@ class AppWindow:
             self._dark_titlebar()
         w.grid_columnconfigure(2, weight=1)
         w.grid_rowconfigure(0, weight=1)
-        self._sidebar().grid(row=0, column=0, sticky="ns")
+        self.side = self._sidebar()
+        self.side.grid(row=0, column=0, sticky="ns")
         self.hairline(w, vertical=True).grid(row=0, column=1, sticky="ns")
         content = tk.Frame(w, bg=p["bg"])
         content.grid(row=0, column=2, sticky="nsew")
@@ -1150,10 +1161,11 @@ class AppWindow:
         self._nav_paint(name, p["hover"] if on else p["surface"])
 
     def go(self, name) -> None:
-        """Prepare the target view while it is still hidden, flush the layout, then swap - a
-        frame mutated on screen paints in visible steps (the repaint the user called not
-        flowy). grid/grid_remove, not tkraise: an unmapped frame is skipped by tk_focusNext,
-        a raised-over one is not."""
+        """Every view stays built and gridded in the one cell; a switch raises the target.
+        Measured: 16-25 ms against 90-160 ms for grid_remove/grid, which re-laid the whole
+        subtree out on every switch. The Promptify pane is rebuilt only when what it shows has
+        changed (`p_memo`). Covered views are still in Tk's focus ring, so `_tab` keeps Tab
+        inside the shown view."""
         self.view = name
         p = self.pal
         for n, (row, l) in self.nav.items():
@@ -1164,12 +1176,45 @@ class AppWindow:
         if lst is not None:                    # both lists share the selection: the one shown
             lst.paint()                        # catches up and brings the row into view
         if name == "promptify":
-            self._show(self._state_for(self.sel))
-        self.win.update_idletasks()            # the hidden frame's layout settles off screen
-        for n, v in self.views.items():
-            v.grid() if n == name else v.grid_remove()
+            state = self._state_for(self.sel)
+            if self._pane_key(state) != self.p_memo:
+                self._show(state)
+        self.views[name].tkraise()
         if lst is not None:
             self.win.after_idle(lst.show_sel)
+
+    def _pane_key(self, state) -> tuple:
+        it = self.sel
+        return (state, id(it), (it or {}).get("text"), id((it or {}).get("draft")), self.sheet_open)
+
+    def _in_shown(self, w) -> bool:
+        s = str(w)
+        for r in (str(self.views[self.view]), str(self.side)):
+            if s == r or s.startswith(r + "."):    # "." - a bare prefix would match every sibling
+                return True
+        return False
+
+    def on_screen(self, w) -> bool:
+        """Mapped AND in the shown view or the sidebar: every view is mapped now (a switch is
+        a raise), so `winfo_ismapped` alone also says yes for a covered widget."""
+        return bool(w.winfo_ismapped()) and self._in_shown(w)
+
+    def _tab(self, back: bool):
+        """Focus traversal that never lands in a covered view: step Tk's own ring until the
+        stop is inside the shown view or the sidebar, then take it. Returns "break" only when
+        it moved the focus itself, so a field's own Tab handling still works."""
+        cur = self.win.focus_get()
+        if cur is None:
+            return None
+        nxt = cur
+        for _ in range(300):
+            nxt = nxt.tk_focusPrev() if back else nxt.tk_focusNext()
+            if nxt is None or nxt is cur:
+                return None
+            if self._in_shown(nxt):
+                nxt.focus_set()
+                return "break"
+        return None
 
     # --- history view ------------------------------------------------------------------------
     def _build_history(self, f) -> None:
@@ -1514,6 +1559,7 @@ class AppWindow:
         for lst in (self.cards, self.primaries, self.foot_links):
             lst.clear()
         self.ctl.clear()
+        self.p_memo = None                     # the pane is gone with the old widgets
         self._build()
         self.win.geometry(geo)
         self.show()
@@ -2145,9 +2191,16 @@ class AppWindow:
     # --- the detail pane's states --------------------------------------------------------------
     def _engine_info(self) -> tuple:
         """(key, spec, connection state) of the engine cfg names - from the credential files,
-        no process and no network."""
+        no process and no network. Cached per engine for the session (the status walk costs
+        ~7 ms - a PATH scan - and ran on every view switch); the sheet's actions clear it and a
+        60 s TTL catches a CLI installed while the app runs."""
         spec = promptify.engine_spec(self.cfg)
-        return spec["key"], spec, connect.status(spec["key"])[0]
+        key, now = spec["key"], time.monotonic()
+        hit = self._eng_cache.get(key)
+        if hit is None or now - hit[1] > 60:
+            hit = (connect.status(key)[0], now)
+            self._eng_cache[key] = hit
+        return key, spec, hit[0]
 
     def _state_for(self, it) -> str:
         if it is None:
@@ -2175,6 +2228,7 @@ class AppWindow:
         cur = self.b_main.f.cget("text") if self.main_shown and self.p_item is it else None
         cur = ("Copy prompt" if cur == "Copied" else cur) or ("Copy prompt" if (it or {}).get("draft") else "Promptify")
         self.pstate, self.p_item = state, it
+        self.p_memo = self._pane_key(state)
         self._head_engine()
         main = {"pick": None, "noengine": ("Connect an engine", self._open_sheet),
                 "ack": ("Promptify", self._ack_go), "empty": ("Promptify", self.promptify),
@@ -2795,6 +2849,7 @@ class AppWindow:
         self.ec, self.esb, self.e_inner = self._scroller(box, self.srule)
 
     def _open_sheet(self) -> None:
+        self._eng_cache.clear()
         self.sheet_open = True
         self.draft_f.grid_remove()
         self.sheet.grid()
@@ -3065,6 +3120,7 @@ class AppWindow:
                 elif kind == "error":
                     self.eng_err[key] = text
         if changed:
+            self._eng_cache.clear()
             self._engine_rows()
             self._refresh_engine()
         if self.logins:
@@ -3078,12 +3134,14 @@ class AppWindow:
 
     def _use(self, key) -> None:
         self.cfg["prompt_engine"] = key
+        self._eng_cache.clear()
         self.save()
         self._engine_rows()
         self._refresh_engine()
 
     def _disconnect_openrouter(self) -> None:
         connect.forget_openrouter()
+        self._eng_cache.clear()
         self._engine_rows()
         self._refresh_engine()
 

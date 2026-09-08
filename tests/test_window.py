@@ -306,15 +306,27 @@ for name, w in (("segment", win.ctl["theme"][0][0].master), ("hex", win.ctl["col
                 ("haze", win.ctl["haze"]), ("remove", win.b_rm.f), ("saved", win.saved)):
     assert edge(w) == edge(win.r_mic.right), (name, edge(w), edge(win.r_mic.right))
 
-# the hidden view is unmapped, not merely lowered: Tab must not walk widgets nobody can see
-stop, seen = win.ctl["haze"], []
-for _ in range(20):
-    stop = stop.tk_focusNext()
-    if str(stop) in seen:
+# every view stays gridded (a switch is a raise), so Tab is guarded: from a settings control
+# the ring walks settings and the sidebar only, and a Tab pressed inside a COVERED view lands
+# in the shown one
+win.ctl["haze"].focus_force()
+root.update()
+seen = []
+for _ in range(60):
+    win.win.focus_get().event_generate("<Tab>")
+    root.update()
+    f = str(win.win.focus_get())
+    if f in seen:
         break
-    seen.append(str(stop))
-    assert str(stop).startswith(str(win.views["settings"]) + "."), stop
+    seen.append(f)
+    assert f.startswith(str(win.views["settings"]) + ".") or f.startswith(str(win.side)), f
 assert len(seen) >= 10, seen                             # ... and the whole path is reachable
+assert win.views["settings"].winfo_ismapped() and win.views["history"].winfo_ismapped()
+win.b_copy.f.focus_force()                               # a History widget, covered right now
+root.update()
+win.b_copy.f.event_generate("<Tab>")
+root.update()
+assert win._in_shown(win.win.focus_get()), win.win.focus_get()
 n = len(saves)
 win.ctl["color"]["dots"][3].event_generate("<Button-1>")  # a preset dot
 root.update()
@@ -478,7 +490,7 @@ def settle(pred, n=100):
 
 
 def primaries():
-    return [b for b in win.primaries if b.f.winfo_ismapped()]
+    return [b for b in win.primaries if win.on_screen(b.f)]   # covered views are mapped too
 
 
 PF.draft, PF.available = fake_draft, lambda c: (True, "")
@@ -490,7 +502,8 @@ for dark_ in (False, True):          # the chips' tint holds ink text
 # the view: the same rows, two lines each, at a clamped share of the width; the detail pane
 win.go("promptify")
 root.update()
-assert win.view == "promptify" and win.views["promptify"].winfo_ismapped() and not win.views["history"].winfo_ismapped()
+assert win.view == "promptify" and win.views["promptify"].winfo_ismapped()
+assert win.win.tk.call("winfo", "children", str(win.views["promptify"].master))  # all views live in the cell
 assert win.plist.rows and win.plist.rows[0][0] is hist.items[-1] and win.plist.H == win.px(W.H_ROW2)
 assert win.pcount.cget("text") == str(len(hist.items)) and len(hist.items) >= 10   # 3-day retention pruned the 45
 lp = win.views["promptify"].grid_slaves(row=0, column=0)[0]
@@ -517,11 +530,13 @@ lab = win.p_inner.winfo_children()[0]
 assert lab.cget("text") == "Pick a dictation on the left." and Ep(lab, win.dpane) == px_(16) and bare(lab)
 # no engine: hollow dot, "No engine", the segment gone, Connect an engine
 STATUS.pop("claude")
+win._eng_cache.clear()                                # the fake changed under the cache
 win._select(hist.items[-1])
 root.update()
 assert win.pstate == "noengine" and win.b_main.f.cget("text") == "Connect an engine" and len(primaries()) == 1
 assert win.b_eng.f.cget("text") == "No engine" and not win.seg_host.winfo_ismapped()
 STATUS["claude"] = ("connected", "Max")
+win._eng_cache.clear()                                # the fake changed under the cache
 # first use asks once; "Not now" backs out, "Promptify" remembers and runs
 cfg["prompt_ack"] = False
 win._select(hist.items[-1])
@@ -571,6 +586,7 @@ assert settle(lambda: win.head_rows == 2)
 # frame's idle-time aggregate)
 need = lambda: (win.eng_dot.winfo_reqwidth() + win.b_eng.w + 2 * px_(12) + win.seg.winfo_reqwidth() + win.b_main.w)
 cfg["prompt_engine"], STATUS["codex"] = "codex", ("connected", "ChatGPT")
+win._eng_cache.clear()                                # the fake changed under the cache
 win._refresh_engine()
 root.update()
 assert win.b_eng.f.cget("text") == "Codex"
@@ -588,6 +604,7 @@ assert win.b_eng.f.cget("text") == "Claude Code" and need() > win.dpane.winfo_wi
 assert win.head_rows == 2 and win.seg_host.grid_info()["row"] == 1
 assert edge(win.b_main.f) == edge(win.dpane) - px_(16), (edge(win.b_main.f), edge(win.dpane))
 STATUS.pop("codex")
+win._eng_cache.clear()                                # the fake changed under the cache
 win.win.geometry(f"{win.px(780)}x{win.px(560)}")
 assert settle(lambda: win.head_rows == 2)
 # chips: a chip fills its answer and is the chosen one; typing something else un-chooses it;
@@ -763,10 +780,12 @@ F = win.p_fields
 want = [win.plist, win.b_eng.f, win.seg, win.b_main.f, win.b_orig.f, win.ctl["which"][0][0].master,
         F["text"], F["chips"][0], F["answers"][0], F["assume_ui"][0][0].f, F["answers"][1],
         F["assume_ui"][1][0].f, win.b_update.f, win.plist]
-stop, seen = win.plist, []
+win.plist.focus_force()                              # the guarded ring (Tab), not Tk's raw one:
+root.update()                                        # covered views are mapped and Tk would walk them
+seen = []
 for _ in range(len(want) - 1):
-    stop = stop.tk_focusNext()
-    seen.append(stop)
+    assert win._tab(False) == "break"
+    seen.append(win.win.focus_get())
 assert seen == want[1:], [str(s) for s in seen]
 # Return on an undrafted row drafts it
 win._select(hist.items[-4])
@@ -858,6 +877,7 @@ root.update()
 assert "codex" not in win.logins and win.e_rows["codex"]["action"] == "connect"
 # claude, login expired: Connect, the url arrives, the paste-code fallback, done: connected, still active
 STATUS["claude"] = ("expired", "Login expired")
+win._eng_cache.clear()                                # the fake changed under the cache
 win._engine_rows()
 R = win.e_rows
 assert R["claude"]["action"] == "connect" and R["claude"]["status"].cget("text").startswith("Login expired · ")
@@ -911,6 +931,7 @@ win.eng_err.clear()
 win._engine_rows()
 # Use: the engine becomes active, the header follows; Disconnect (OpenRouter only) forgets its key
 STATUS["openrouter"] = ("connected", "OpenRouter")
+win._eng_cache.clear()                                # the fake changed under the cache
 win._engine_rows()
 R = win.e_rows
 assert R["openrouter"]["action"] == "use" and "disconnect" in R["openrouter"] and "disconnect" not in R["claude"]
@@ -1024,6 +1045,7 @@ assert root.bind_all("<MouseWheel>") != ""
 # the cfg choice beats the constructor's theme override; System hands it back
 win.go("settings")
 root.update()
+assert settle(lambda: win.drafting is None)          # a rebuild waits for a running draft to land
 geo, sel_ = win.win.geometry(), win.sel
 next(l for l, v in win.ctl["theme"] if v == "dark").event_generate("<Button-1>")
 root.update()

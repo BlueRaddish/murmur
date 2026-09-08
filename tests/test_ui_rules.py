@@ -63,7 +63,7 @@ def build(theme):
 
 
 def mapped_primaries(w):
-    return [b for b in w.primaries if b.f.winfo_ismapped()]
+    return [b for b in w.primaries if w.on_screen(b.f)]     # covered views are mapped too
 
 
 for theme in ("light", "dark"):
