@@ -129,6 +129,59 @@ for theme in ("light", "dark"):
     assert [c.cget("text") for c in win.kbd_chord(win.views["settings"], "Ctrl", "D").winfo_children()] == ["Ctrl", "D"]
     assert win.icon("search", pal["muted"]) is win.icon("search", pal["muted"])      # cached, one per key
     assert win.icon("search", pal["muted"]).width() == win.px(W.ICON)
+
+    # --- M6. the sidebar is `base` under a grain (gaussian, sigma 3 / 2.5 - subtle: a 100-sample
+    # mean within 2 of base, nothing past 5 sigma, and it IS noise); the content ground is the
+    # user's white in light, exactly
+    side = win.side
+    tile = side.itemcget(side.find_withtag("frost")[0], "image")
+    b = W.rgb(pal["base"])[0]
+    vals = [int(root.tk.splitlist(root.tk.call(tile, "get", x, y))[0]) for x in range(3, 96, 9) for y in range(3, 96, 9)]
+    assert abs(sum(vals) / len(vals) - b) <= 2 and max(abs(v - b) for v in vals) <= 15, (theme, b, vals[:10])
+    assert len(set(vals)) > 3, (theme, "no grain")
+    assert theme == "dark" or win.views["history"]["bg"] == "#ffffff" == pal["layer"]
+
+    # --- M4. the shortcut-coverage audit, both ways: every keycap on screen names a key that is
+    # bound (a `Ctrl` `F` chord needs a Control-f binding, a lone `Esc` an Escape one), and
+    # every key shortcut in the bind() inventory has a cap on screen. The caps are the Labels
+    # in `caps_all` plus the "cap" text items on the sidebar and the footers (canvases; a
+    # footer chord shares a chord tag, a nav row's is `nav[..]["caps"]`); the bindings are the
+    # toplevel's and the controls' (`bind()` hands them back normalised: <Control-Key-f>,
+    # <Key-Escape>)
+    KEYSYM = {"↵": "Return", "Esc": "Escape", "↑": "Up", "↓": "Down", "←": "Left", "→": "Right",
+              "Del": "Delete", "Space": "space", "Tab": "Tab"}
+    keysym = lambda cap: KEYSYM.get(cap, cap.lower() if cap.isalpha() else cap)
+    bound = set()
+    for wdg in (win.win, win.list, win.plist, win.detail, win.ctl["haze"], win.ctl["opacity"],
+                win.ctl["theme"][0][0].master):
+        bound |= {tuple(s.strip("<>").split("-")) for s in wdg.bind()}
+    has = lambda sym, ctrl: any(s[-1] == sym and (("Control" in s) == ctrl) for s in bound)
+    chords = []
+    for foot in (win.foot_h, win.foot_p, win.foot_s):           # the footers' chords ...
+        c = foot
+        tags = sorted({t for i in c.find_withtag("cap") for t in c.gettags(i) if t[-1].isdigit()})
+        chords += [[c.itemcget(i, "text") for i in c.find_withtag(t)] for t in tags]
+    chords += [[side.itemcget(c, "text") for c in row["caps"] if side.type(c) == "text"][::-1]
+               for row in win.nav.values()]                     # ... and the nav rows' (drawn digit-first)
+    assert len(chords) == 3 + 2 + 3 + 4 + 3, chords               # History view + edit, Promptify, Settings, nav
+    for chord in chords:
+        ctrl, keys = chord[0] == "Ctrl", [c for c in chord if c != "Ctrl"]
+        assert keys, chord
+        for cap in keys:
+            assert has(keysym(cap), ctrl), (theme, "cap without a binding", chord, sorted(bound))
+    drawn = {l.cget("text") for l in win.caps_all} | {
+        c.itemcget(i, "text") for c in (side, win.foot_h, win.foot_p, win.foot_s)
+        for i in c.find_withtag("cap")}
+    assert {"↵", "Ctrl", "C", "Esc", "↑", "↓", "F", "1", "2", "3", "Tab", "Space", "←", "→"} <= drawn, drawn
+    # `Ctrl ,` and `Ctrl W` are the two documented undrawn synonyms (of the Settings row and Esc);
+    # `Ctrl D` and `Del` get their caps with the History action row (build stage 3)
+    CAP = {v: k for k, v in KEYSYM.items()}
+    undrawn = {("Control", "Key", "comma"), ("Control", "Key", "w"), ("Control", "Key", "d"), ("Key", "Delete")}
+    for seq in bound - undrawn:
+        if "Key" not in seq or seq[-1] == "Key" or "Shift" in seq:
+            continue                                            # mouse events, bare <Key>, Tab's shift twin
+        cap = CAP.get(seq[-1], seq[-1].upper())
+        assert cap in drawn and ("Control" not in seq or "Ctrl" in drawn), (theme, "shortcut without a cap", seq)
     win.win.destroy()
 
 root.destroy()

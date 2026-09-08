@@ -143,34 +143,147 @@ assert len(hist.items) == 45 and win.sel is hist.items[-1]        # newest selec
 assert "45 dictations" in win.count.cget("text") and "7 days" in win.count.cget("text")
 assert len(win.rows) == 45 and win.rows[0][0] is hist.items[-1]   # newest first
 
-# --- the sidebar lockup ---------------------------------------------------------------------
-drop = lambda w: (w.nav["history"][0].winfo_rooty()
-                  - w.win.grid_slaves(row=0, column=0)[0].winfo_rooty())
-lock = win.win.grid_slaves(row=0, column=0)[0].pack_slaves()[0]
-im_id, tx_id = lock.find_all()
-assert lock.type(im_id) == "image" and lock.itemcget(tx_id, "text") == "murmur"
-ib, tb, desc = lock.bbox(im_id), lock.bbox(tx_id), win.mf["title"].metrics("descent")
+# --- the sidebar: one canvas, the lockup on it -----------------------------------------------
+side, px_ = win.side, win.px
+assert isinstance(side, tk.Canvas) and win.win.grid_slaves(row=0, column=0) == [side]
+assert side.winfo_width() == px_(W.W_SIDE) and int(side.cget("takefocus")) == 0   # not a tab stop
+im_id, tx_id = side.find_withtag("lock_mark")[0], side.find_withtag("lock_text")[0]
+assert side.type(im_id) == "image" and side.itemcget(tx_id, "text") == "murmur"
+ib, tb, desc = side.bbox(im_id), side.bbox(tx_id), win.mf["title"].metrics("descent")
 assert ib[3] == tb[3] - desc, (ib, tb)                 # the mark's feet on the word's baseline
 assert abs((ib[3] - ib[1]) - 40 / 64 * win.px(W.H_MARK)) <= 1   # cropped to ink, not the box
-assert (lock.coords(tx_id)[0] - lock.coords(im_id)[0]
+assert (side.coords(tx_id)[0] - side.coords(im_id)[0]
         == win.mark(win.px(W.H_MARK), win.pal["muted"]).width() + win.px(W.GAP_MARK))
-# a mark taller than the word must not push the nav down - the overshoot comes out of the top pad
+assert side.coords(im_id)[0] == px_(16)                # the mark on E, like the footer links
+# the grain under everything (the first items), the specular over it, the lockup above both
+frost = side.find_withtag("frost")
+assert frost and frost == side.find_all()[:len(frost)] and im_id > max(frost)
+# a mark taller than the word must not push the nav down - it pokes up into the top pad instead
+nav_y = lambda w: w.side.coords(w.nav["history"]["pill"])[1]
 was, W.H_MARK = W.H_MARK, 40
 tall = W.AppWindow(root, fake_history(2), fresh_cfg(), lambda c: None, theme="light")
 tall.show()
 root.update()
-assert tall.win.grid_slaves(row=0, column=0)[0].pack_slaves()[0].rise > 0   # ... and it happened
-assert drop(tall) == drop(win)
+assert tall.side.rise > 0 and tall.side.bbox(tall.side.find_withtag("lock_mark")[0])[1] < px_(W.PAD_TOP)
+assert nav_y(tall) == nav_y(win)
 tall.win.destroy()
 W.H_MARK = was
-# the nav starts at 64 (16 + a 32 px lockup row + 16), pills 2 apart; the active pill is `selected`
-px_ = win.px
-assert win.nav["history"][0].winfo_y() == px_(W.PAD_TOP) + px_(W.H_CTL) + px_(16)
-assert win.nav["promptify"][0].winfo_y() == win.nav["history"][0].winfo_y() + px_(W.H_CTL) + px_(2)
-pill = lambda fill: str(win.rr(px_(W.W_SIDE - 2 * W.SP[1]), px_(W.H_CTL), px_(W.R_CTL), fill, win.pal["base"]))
-assert win.nav["history"][0].cget("image") == pill(win.pal["sub"](win.pal["base"]))
-assert win.nav["settings"][0].cget("image") == pill(win.pal["base"])
-print("lockup ok")
+# the nav starts at 64 (16 + a 32 px lockup row + 16), 36 px rows 4 apart. A row is ONE image
+# per state (pill + icon + the chord's cap boxes composed over the row's own slice of the
+# grain, so it is opaque: four alpha blits per row cost 3 ms a switch, an opaque blit nothing)
+# plus its label and cap texts: the active row's pill `sub` on base, the grain running on at
+# its corners; an idle row's just the grain, the icon and the boxes (still the hit area); the
+# bar 10 under the active pill's top; every row's Ctrl-digit chord right-aligned 8 inside the
+# pill and never touching the label
+assert nav_y(win) == px_(W.PAD_TOP) + px_(W.H_CTL) + px_(16)
+assert side.coords(win.nav["promptify"]["pill"])[1] == nav_y(win) + px_(W.H_NAV) + px_(4)
+assert side.itemcget(win.nav["history"]["pill"], "image") == str(win._nav_img("history", "sel"))
+assert side.itemcget(win.nav["settings"]["pill"], "image") == str(win._nav_img("settings", "idle"))
+assert side.itemcget(win.nav["history"]["label"], "fill") == win.pal["ink"] and side.itemcget(win.nav["settings"]["label"], "fill") == win.pal["muted"]
+assert side.coords(win.nav_bar)[1] == nav_y(win) + px_(10) and side.coords(win.nav_bar)[0] == px_(8) + px_(4)
+pix = lambda img, x, y: tuple(int(v) for v in root.tk.splitlist(root.tk.call(str(img), "get", x, y)))
+opaque = lambda img, x, y: int(root.tk.call(str(img), "transparency", "get", x, y)) == 0
+wd, wc, w_pill = win.kbd_img("1").width(), win.kbd_img("Ctrl").width(), px_(W.W_SIDE - 16)
+sel, idle = win._nav_img("history", "sel"), win._nav_img("history", "idle")
+assert sel.width() == idle.width() == w_pill and sel.height() == px_(W.H_NAV)
+assert all(opaque(im, x, y) for im in (sel, idle) for x, y in ((0, 0), (px_(60), px_(4)), (w_pill - 1, px_(W.H_NAV) - 1)))
+assert pix(sel, px_(60), px_(4)) == W.rgb(win.pal["sub"](win.pal["base"]))          # the pill ...
+assert pix(sel, 0, 0) == pix(idle, 0, 0) and abs(pix(idle, 0, 0)[0] - W.rgb(win.pal["base"])[0]) <= 16   # ... its corner the grain
+assert pix(idle, px_(60), px_(4)) != W.rgb(win.pal["sub"](win.pal["base"])) or pix(idle, px_(60), px_(5)) != W.rgb(win.pal["sub"](win.pal["base"]))
+assert pix(sel, w_pill - px_(8) - wd // 2, px_(W.H_NAV) // 2) == W.rgb(win.pal["ctl"]) == pix(idle, w_pill - px_(8) - wd // 2, px_(W.H_NAV) // 2)   # the digit's cap
+assert any(pix(sel, px_(12) + dx, px_(18) + dy) == W.rgb(win.pal["ink"]) for dx in range(px_(16)) for dy in range(-px_(6), px_(7)))   # the icon, in ink
+for i, name in enumerate(("history", "promptify", "settings"), 1):
+    caps = [side.itemcget(c, "text") for c in win.nav[name]["caps"]]
+    assert caps == [str(i), "Ctrl"] and all(side.type(c) == "text" for c in win.nav[name]["caps"]), caps
+    x_digit, x_ctrl = (side.coords(c)[0] for c in win.nav[name]["caps"])
+    assert x_digit + wd / 2 == px_(8) + w_pill - px_(8) and x_ctrl + wc / 2 + px_(4) == x_digit - wd / 2
+    lab_r = side.coords(win.nav[name]["label"])[0] + win.mf["body"].measure(side.itemcget(win.nav[name]["label"], "text"))
+    assert x_ctrl - wc / 2 - lab_r >= px_(8), name
+# the sidebar's grain: gaussian noise around `base`, subtle (sigma 3 / 2.5: a 100-sample mean
+# within 2 of base, nothing past 5 sigma, and it IS noise), one tile repeated; the footer links
+# hang from the bottom edge
+tile = side.itemcget(frost[0], "image")
+b = W.rgb(win.pal["base"])[0]
+vals = [int(root.tk.splitlist(root.tk.call(tile, "get", x, y))[0]) for x in range(3, 96, 9) for y in range(3, 96, 9)]
+assert abs(sum(vals) / len(vals) - b) <= 2 and max(abs(v - b) for v in vals) <= 15 and len(set(vals)) > 3, (b, vals[:10])
+assert len(win.foot_links) == 2 and [side.itemcget(i, "text") for i in win.foot_links] == ["vocab.txt", "config folder"]
+assert all(side.bbox(i)[3] == side.winfo_height() - px_(16) for i in win.foot_links)
+print("sidebar ok")
+
+# the idle pill is a fully transparent image and STILL the row's hit area (a canvas hit-tests an
+# image by its bounding box): a real click 2 px inside the pill's corner, on nothing drawn
+side.event_generate("<Button-1>", x=px_(8) + 2, y=win.nav["settings"]["y"] + 2)
+root.update()
+assert win.view == "settings" and side.find_withtag("current") == (win.nav["settings"]["pill"],)
+# hover by geometry: the blend frame now, the full hover 40 ms on, idle at once on leave; the
+# pointer crossing from the pill onto the label inside one row repaints nothing
+side.event_generate("<Motion>", x=px_(8) + 2, y=win.nav["promptify"]["y"] + 2)
+root.update()
+pr = win.nav["promptify"]
+assert side.itemcget(pr["pill"], "image") == str(win._nav_img("promptify", "blend")) and ("blend", "promptify") in win.jobs
+assert side.cget("cursor") == "hand2" and side.itemcget(pr["label"], "fill") == win.pal["ink"]
+assert upd(lambda: side.itemcget(pr["pill"], "image") == str(win._nav_img("promptify", "hover")))
+assert ("blend", "promptify") not in win.jobs
+side.event_generate("<Motion>", x=px_(8) + px_(48), y=win.nav["promptify"]["y"] + px_(18))   # onto the label
+root.update()
+assert side.itemcget(pr["pill"], "image") == str(win._nav_img("promptify", "hover")) and ("blend", "promptify") not in win.jobs
+side.event_generate("<Leave>")
+root.update()
+assert side.itemcget(pr["pill"], "image") == str(win._nav_img("promptify", "idle")) and side.cget("cursor") == ""
+assert side.itemcget(pr["label"], "fill") == win.pal["muted"]
+win.motion = False                                       # reduced motion: no blend frame
+side.event_generate("<Motion>", x=px_(8) + 2, y=win.nav["promptify"]["y"] + 2)
+root.update()
+assert side.itemcget(pr["pill"], "image") == str(win._nav_img("promptify", "hover")) and ("blend", "promptify") not in win.jobs
+side.event_generate("<Leave>")
+win.motion = True
+# a click while the blend frame is still due: the row is selected and STAYS selected
+side.event_generate("<Motion>", x=px_(8) + 2, y=win.nav["history"]["y"] + 2)
+side.event_generate("<Button-1>", x=px_(8) + 2, y=win.nav["history"]["y"] + 2)
+assert win.view == "history" and ("blend", "history") not in win.jobs
+assert upd(lambda: "slide" not in win.jobs, n=30)
+assert side.itemcget(win.nav["history"]["pill"], "image") == str(win._nav_img("history", "sel"))
+side.event_generate("<Leave>")
+root.update()
+assert side.itemcget(win.nav["history"]["pill"], "image") == str(win._nav_img("history", "sel"))
+# the bar slides after the switch (3 frames from 40 ms), and the switch itself stays in budget:
+# min of nine so a busy CPU cannot fail it, a regression can
+win.go("settings")
+assert "slide" in win.jobs and side.coords(win.nav_bar)[1] == nav_y(win) + px_(10)   # not yet moved
+root.update()
+assert upd(lambda: "slide" not in win.jobs, n=30) and side.coords(win.nav_bar)[1] == win.nav["settings"]["y"] + px_(10)
+win.motion = False
+win.go("history")
+assert "slide" not in win.jobs and side.coords(win.nav_bar)[1] == nav_y(win) + px_(10)   # snapped
+win.motion = True
+ts = []
+for v in ("promptify", "settings", "history") * 3:
+    t0 = time.perf_counter()
+    win.go(v)
+    root.update()
+    ts.append(time.perf_counter() - t0)
+assert min(ts) <= 0.15, ts
+upd(lambda: "slide" not in win.jobs, n=30)
+# the keyboard reaches every view: Ctrl+1/2/3, Ctrl+, for Settings, Ctrl+W hides (a key event
+# goes to the focus window, so the window has to hold it - `tall` took it when it was destroyed)
+win.win.focus_force()
+root.update()
+win.win.event_generate("<Control-Key-2>")
+root.update()
+assert win.view == "promptify"
+win.win.event_generate("<Control-comma>")
+root.update()
+assert win.view == "settings"
+win.win.event_generate("<Control-Key-1>")
+root.update()
+assert win.view == "history"
+win.win.event_generate("<Control-w>")
+root.update()
+assert not win.win.winfo_viewable()
+win.show()
+root.update()
+upd(lambda: "slide" not in win.jobs, n=30)
+print("nav ok")
 
 win.go("settings")
 root.update()
@@ -232,9 +345,33 @@ assert len(win.detail.get("1.0", "end")) > 1300
 # one text edge: the card starts 12 before E and its text lands on E, like the rows
 E = lambda w: w.winfo_rootx() - win.views["history"].winfo_rootx()
 assert E(win.card) == px_(4) and E(win.detail) == px_(16), (E(win.card), E(win.detail))
-# the status is meta, on the actions row right after Delete - never at the far edge
-assert (win.status.winfo_x() == win.b_del.f.winfo_x() + win.b_del.f.winfo_width() + px_(12)
+# the status is meta in the footer's flash slot (`.right`, at the pane's right edge), the
+# footer the view's last row at 28 and the view's full width; "Copied" wears the check (it
+# goes with the flash), "Editing" does not and swaps the footer's hints for the edit strip
+assert (win.status is win.foot_h.right and win.status.master is win.foot_h and win.foot_h.grid_info()["row"] == 4
         and W.tkfont.Font(root, font=win.s_text.cget("font")).actual("size") == 10)
+assert win.foot_h.winfo_height() == px_(W.H_FOOT) and win.foot_h.winfo_width() == win.views["history"].winfo_width()
+assert win.foot_h.right.winfo_x() + win.foot_h.right.winfo_width() == win.foot_h.winfo_width() - px_(16)
+# the footer is one canvas - the hints are items, a Label per cap cost ~0.3 ms per view
+# switch (an HWND each): the words that are showing, in order; the caps carry the tag "cap"
+hint_words = lambda foot: [foot.itemcget(i, "text") for i in foot.find_all()
+                           if foot.type(i) == "text" and "cap" not in foot.gettags(i)
+                           and foot.itemcget(i, "state") != "hidden"]
+assert hint_words(win.foot_h) == ["move", "filter", "close"]
+assert isinstance(win.foot_h, tk.Canvas) and len(win.foot_h.find_withtag("cap")) == 8   # 5 view + 3 edit
+assert min(foot.bbox("view")[0] for foot in (win.foot_h, win.foot_p, win.foot_s)) >= px_(16) - 1   # hints from E
+win._edit_toggle()
+root.update()
+assert win.s_text.cget("text") == "Editing" and hint_words(win.foot_h) == ["save", "cancel"]
+assert not win.s_text.icon.winfo_ismapped()
+win._edit_abort()
+win._select(win.sel)
+root.update()
+assert hint_words(win.foot_h) == ["move", "filter", "close"] and win.s_text.cget("text") == ""
+win.copy_selected()
+root.update()
+assert win.s_text.cget("text") == "Copied" and win.s_text.icon.winfo_ismapped()
+assert win.s_text.icon.winfo_x() < win.s_text.winfo_x()                    # the check before the word
 # the height rule: 45 rows cannot fit, so the card shows at most 6 lines and its own thumb; a
 # one-line dictation gets one line and no thumb; a window under 480 tall allows 3
 root.update()
@@ -275,6 +412,25 @@ assert win.confirm.winfo_ismapped() and "Clear 45 dictations?" == win.c_label.cg
 win._clear_cancel()
 root.update()
 assert not win.confirm.winfo_ismapped() and win.b_clear.f.winfo_ismapped()
+# Esc, one step at a time: the confirm goes first (the window stays), then, with nothing left
+# to undo, the window hides ("Esc close" in the footer is true); Ctrl+F lands in History
+win._clear_ask()
+root.update()
+win.list.focus_force()
+root.update()
+win._escape()
+root.update()
+assert not win.confirm.winfo_ismapped() and win.win.winfo_viewable()
+win._escape()
+root.update()
+assert not win.win.winfo_viewable()
+win.show()
+root.update()
+win.go("settings")
+win.win.event_generate("<Control-f>")
+root.update()
+assert win.view == "history"
+upd(lambda: "slide" not in win.jobs, n=30)
 print("history view ok")
 
 # --- settings -------------------------------------------------------------------------------
@@ -297,6 +453,29 @@ assert Es_r(win.cards[0]) == win.views["settings"].winfo_width() - px_(4), Es_r(
 assert Es_r(win.ssb.master) == win.views["settings"].winfo_width() and win.ssb.master.winfo_width() == px_(4)
 srule = win.views["settings"].grid_slaves(row=1)[0]
 assert srule.cget("bg") == win.pal["layer"]
+# the footer is the last row; the Saved flash lives in its right slot, with the check
+assert win.foot_s.grid_info()["row"] == 3 and win.saved.master is win.foot_s.right
+assert hint_words(win.foot_s) == ["next", "toggle", "adjust", "close"]
+win.save()
+root.update()
+assert win.saved.cget("text") == "Saved" and win.saved.icon.winfo_ismapped()
+assert upd(lambda: win.saved.cget("text") == "" and not win.saved.icon.winfo_ismapped(), n=120)
+# at 600 wide the footer keeps its 28 px and the pane's width, the flash slot its place at the
+# pane's right edge (the real hints still fit there); hints that do NOT fit run on under the
+# slot and clip at the canvas edge - never a wrap, never a taller footer
+win.win.geometry(f"{px_(600)}x{px_(400)}")
+edge = lambda w: w.winfo_rootx() + w.winfo_width()
+assert upd(lambda: win.foot_s.winfo_width() == win.views["settings"].winfo_width() < px_(600) - px_(W.W_SIDE))
+assert win.foot_s.winfo_height() == px_(W.H_FOOT) and win.foot_s.bbox("view")[2] <= win.foot_s.right.winfo_x()
+assert edge(win.foot_s.right) == edge(win.r_mic.right), (edge(win.foot_s.right), edge(win.r_mic.right))
+wide = win._footer(win.views["settings"], [(("Ctrl", "Space"), "a hint that runs on and on")] * 6)
+wide.grid(row=5, column=0, sticky="ew")
+assert upd(lambda: wide.winfo_width() == win.foot_s.winfo_width())
+assert wide.bbox("view")[2] > wide.winfo_width() and wide.winfo_height() == px_(W.H_FOOT)
+assert edge(wide.right) == edge(win.foot_s.right)
+wide.destroy()
+win.win.geometry(f"{px_(780)}x{px_(560)}")
+assert upd(lambda: win.foot_s.winfo_width() == win.views["settings"].winfo_width() > px_(500))
 win.sc.yview_moveto(1.0)
 root.update()
 assert srule.cget("bg") == win.pal["divider"](win.pal["layer"])

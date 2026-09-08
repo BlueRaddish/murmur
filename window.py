@@ -363,6 +363,21 @@ def _png(img) -> bytes:
     return buf.getvalue()
 
 
+def compose_png(w: int, h: int, parts: list) -> bytes:
+    """Several PNGs (already at device px) alpha-composited in order onto one transparent
+    w x h box - a nav row's grain, pill, icon and cap boxes as ONE image (`_nav_img`). Tk
+    blends every partial-alpha image it draws by reading the surface back first (~0.2 ms a
+    draw, measured 2026-09-08), so a row of four such images repainted on every view switch
+    cost 3 ms; one opaque image costs nothing of that."""
+    from PIL import Image
+    im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    for x, y, png in parts:
+        im.alpha_composite(Image.open(io.BytesIO(png)).convert("RGBA"), (x, y))
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue()
+
+
 def dot_png(box: int, d: int, fill: str, ring: str = None, ring_w: int = 2, gap: int = 2,
             edge: str = None, core: tuple = None) -> bytes:
     """A filled circle of diameter d centred in a transparent box; `edge` is its own hairline
@@ -1006,8 +1021,12 @@ class AppWindow:
         self.imgs = {}            # Tk drops an image nobody references
         self.jobs = {}            # named after() ids, so a second flash cancels the first
         self.ctl = {}             # the settings controls, by cfg key (the tests drive these)
-        self.foot_links = []      # sidebar footer links, one per entry in `links`
+        self.foot_links = []      # sidebar footer links (canvas text items), one per entry in `links`
         self.caps_all = []        # every keycap Label (`keycap`): the shortcut-coverage check reads it
+        self.motion = True        # Windows' client-area animation setting, read in _build
+        self.nav_bar = None       # the sidebar's 3 x 16 indicator bar (a canvas item) once built
+        self.nav_over = None      # the nav row name / footer link item under the pointer
+        self.filter = None        # the History filter field once it exists (Ctrl+F, Esc clears)
         self.cards = []           # the settings group cards, top to bottom
         self.primaries = []       # every primary _Btn, so a check can count the ones on screen
         self.undo = None          # (index, item) while the undo offer stands
@@ -1101,6 +1120,16 @@ class AppWindow:
         # 1 px on its hairline, so its padding is 12 minus that px - which puts every line of
         # text inside it back on E, cards or no cards
         self.cpad = self.px(SP[2]) - 1
+        # reduced motion: the nav bar snaps and a hover skips its blend frame when Windows'
+        # client-area animation is off (SPI_GETCLIENTAREAANIMATION); unreadable means on
+        self.motion = True
+        try:
+            import ctypes
+            anim = ctypes.c_int(1)
+            if ctypes.windll.user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(anim), 0):
+                self.motion = bool(anim.value)
+        except Exception:
+            pass
         self._ttk()
         if self.dark:
             self._dark_titlebar()
@@ -1125,6 +1154,13 @@ class AppWindow:
         w.bind("<Up>", lambda e: self._nav_key(-1))
         w.bind("<Down>", lambda e: self._nav_key(1))
         w.bind("<Control-Return>", lambda e: self.view == "promptify" and self._update())   # Update prompt
+        # the views by number (the caps on the nav rows); Settings on the platform's Ctrl+, and
+        # close on Ctrl+W (undrawn synonyms of the Settings row and Esc); the filter on Ctrl+F
+        for i, name in enumerate(("history", "promptify", "settings"), 1):
+            w.bind(f"<Control-Key-{i}>", lambda e, n=name: self.go(n))
+        w.bind("<Control-comma>", lambda e: self.go("settings"))
+        w.bind("<Control-w>", lambda e: self.hide())
+        w.bind("<Control-f>", lambda e: self._focus_filter())
         self.go(self.view)
 
     def _ttk(self) -> None:
@@ -1238,14 +1274,20 @@ class AppWindow:
                         lambda: icon_png(name, colour, self.px(size), ground))
 
     # --- keycaps: the raised-key recipe at 20 px --------------------------------------------
-    def kbd_img(self, label, h=H_KBD, w=None) -> tk.PhotoImage:
+    def kbd_png(self, label, h=H_KBD, w=None, ground=None) -> bytes:
         """The cap's image: `ctl` with a hairline and the elevation edge (the "bottom lip"),
-        transparent corners so it sits on the canvas, a card or the layer alike. A single glyph
-        is an h x h square; a word is its width in mono9 plus 6 a side; `w` overrides."""
+        transparent corners so it sits on the grain, a card or the layer alike - or opaque on
+        `ground` where the ground is known (a footer): Tk blends a partial-alpha image by
+        reading the surface back first, ~0.2 ms per draw. A single glyph is an h x h square;
+        a word is its width in mono9 plus 6 a side; `w` overrides. Bytes, for `compose_png`."""
         p = self.pal
         w = w or max(self.px(h), self.mf["mono9"].measure(label) + 2 * self.px(6))
-        return self.rr(w, self.px(h), self.px(R_KBD), p["ctl"], None, p["stroke"](p["ctl"]), 1,
-                       edge=(p["stroke_edge"], p["stroke_top"]))
+        return rr_png(w, self.px(h), self.px(R_KBD), p["ctl"], p["stroke"](p["ctl"]), 1, ground,
+                      edge=(p["stroke_edge"], p["stroke_top"]))
+
+    def kbd_img(self, label, h=H_KBD, w=None, ground=None) -> tk.PhotoImage:
+        """`kbd_png` as a cached PhotoImage (one per label, size and ground)."""
+        return self.img(("kbd", label, h, w, ground), lambda: self.kbd_png(label, h, w, ground))
 
     def keycap(self, parent, label, h=H_KBD, fg=None, w=None) -> tk.Label:
         """A decorative keycap (`kbd` is taken: the focus-visible flag): not focusable, not clickable, mono9 `muted` (or `fg`) text
@@ -1302,102 +1344,324 @@ class AppWindow:
         l.bind("<Button-1>", lambda e: cmd())
         return l
 
-    def flash(self, label, text, ms=2000) -> None:
-        label.configure(text=text)
-        job = self.jobs.pop(id(label), None)
+    def _cancel(self, key) -> None:
+        """Drop a named after() job, if one is pending."""
+        job = self.jobs.pop(key, None)
         if job:
             self.win.after_cancel(job)
-        self.jobs[id(label)] = self.win.after(ms, lambda: label.configure(text=""))
 
-    # --- sidebar -----------------------------------------------------------------------------
-    def _sidebar(self) -> tk.Frame:
+    def _say(self, label, text, icon=None) -> None:
+        """Write a status label. A footer's flash label has a sibling icon Label (`label.icon`,
+        `_flash_slot`) that shows before the text only while `icon` names a glyph - so a
+        "Deleted ·" written after a "Copied" never keeps the check."""
+        label.configure(text=text)
+        ic = getattr(label, "icon", None)
+        if ic is not None:
+            if icon:
+                ic.configure(image=self.icon(icon, self.pal["ring"]))
+                ic.pack(side="left", before=label, padx=(0, self.px(SP[0])))
+            else:
+                ic.pack_forget()
+
+    def flash(self, label, text, ms=2000, icon=None) -> None:
+        self._say(label, text, icon)
+        self._cancel(id(label))
+        self.jobs[id(label)] = self.win.after(ms, lambda: self._say(label, ""))
+
+    def _flash_slot(self, parent) -> tk.Label:
+        """A footer's flash: a meta muted Label with a hidden check icon (`ring`) before it,
+        reachable as `.icon` for `_say`/`flash`."""
         p = self.pal
-        s = tk.Frame(self.win, bg=p["base"], width=self.px(W_SIDE))
-        s.pack_propagate(False)
-        lock = self._lockup(s)
-        # a 32 px row at y 16, like the view titles across the hairline; where the mark
-        # overshoots that row the canvas grows upward and the top pad gives the same height
-        # straight back, so the nav below starts at 64 whatever the mark's size
-        lock.pack(anchor="w", padx=self.px(SP[3]),
-                  pady=(self.px(PAD_TOP) - lock.rise, self.px(SP[3])))
-        self.nav = {}
-        for name, label in (("history", "History"), ("promptify", "Promptify"), ("settings", "Settings")):
-            # the pill IS the row's image; the text sits on a Label placed inside it, inset by
-            # the radius so its square background can never eat a rounded corner
-            row = tk.Label(s, bd=0, highlightthickness=0, bg=p["base"], cursor="hand2",
-                           padx=0, pady=0)
-            row.pack(padx=self.px(SP[1]), pady=(0, self.px(2)))
-            l = tk.Label(row, text=label, font=self.F["body"], fg=p["muted"], bg=p["base"],
-                         anchor="w", padx=0, bd=0, highlightthickness=0)
-            l.place(x=self.px(R_CTL), y=0, relwidth=1.0, width=-2 * self.px(R_CTL), relheight=1.0)
-            self.nav[name] = (row, l)
-            self._nav_paint(name, p["base"])
-            for wdg in (row, l):
-                wdg.bind("<Button-1>", lambda e, n=name: self.go(n))
-                wdg.bind("<Enter>", lambda e, n=name: self._nav_hover(n, True))
-                wdg.bind("<Leave>", lambda e, n=name: self._nav_hover(n, False))
-        foot = tk.Frame(s, bg=p["base"])
-        foot.pack(side="bottom", anchor="w", padx=self.px(SP[3]), pady=self.px(SP[3]))
-        made = [("vocab", "vocab.txt"), ("folder", "config folder")]
-        for i, (key, text) in enumerate([m for m in made if m[0] in self.links]):
-            if i:
-                tk.Label(foot, text="·", font=self.F["meta"], fg=p["stroke_field"],
-                         bg=p["base"]).pack(side="left", padx=self.px(SP[0]))
-            l = self.link(foot, text, self.links[key])
-            l.pack(side="left")
-            self.foot_links.append(l)
-        return s
+        l = tk.Label(parent, text="", font=self.F["meta"], fg=p["muted"], bg=parent["bg"],
+                     bd=0, padx=0, pady=0)
+        l.pack(side="left")
+        l.icon = tk.Label(parent, bg=parent["bg"], bd=0, padx=0, pady=0,
+                          image=self.icon("check", p["ring"]))
+        return l
 
-    def _lockup(self, parent) -> tk.Canvas:
-        """mark + "murmur" on ONE baseline. Both in `muted`: up here the identity is chrome, the
-        same weight as the word it sits next to, so "History" still reads louder and the accent
-        stays reserved for the primary action.
+    def _footer(self, parent, hints, edit_hints=None) -> tk.Canvas:
+        """The keyboard-hint strip at the foot of a view: a 28 px row under a `divider` rule,
+        hints from E (a cap chord + a meta muted word, 16 apart), the flash slot `.right` at
+        the right edge. A hint names only keys NOT already drawn beside an action on that view
+        (complementary).
 
-        A Canvas because only a canvas can share a baseline between a PNG and a text: both are
-        anchored "sw", the image on the baseline itself (mark() has cropped its margins away) and
-        the text one descent below it, which is where a "sw" text hangs its box. The mark's left
-        edge at x=0 puts it on the same left edge as the nav labels below. The word sits where
-        a title Label sits in its 32 px row (line box centred), so the two share a baseline
-        across the hairline; `rise` is how far a tall mark pokes above that row."""
-        p, f = self.pal, self.mf["title"]
-        m = self.mark(self.px(H_MARK), brand.GREEN)      # the mark in the brand green (user's ask
-        # 2026-08-29: "the logo should be green, not just gray"); the word stays muted chrome
-        lh, desc, row = f.metrics("linespace"), f.metrics("descent"), self.px(H_CTL)
-        base = (row - lh) // 2 + lh - desc                # the baseline's y inside the row
-        rise = max(0, m.height() - base)
-        base += rise
-        x = m.width() + self.px(GAP_MARK)
-        c = tk.Canvas(parent, bg=p["base"], bd=0, highlightthickness=0,
-                      width=x + f.measure("murmur"), height=row + rise)
-        c.create_image(0, base, anchor="sw", image=m)
-        c.create_text(x, base + desc, anchor="sw", text="murmur", font=f, fill=p["muted"])
-        c.rise = rise
+        The footer IS one canvas - the rule a line item, the caps their `kbd_img` + a mono9
+        text item tagged "cap" (the coverage check reads those) grouped by a chord tag
+        (`view0`, `edit1`...), the words text items - and not a strip of cap Labels: on Windows
+        every widget is its own HWND and a raise-based view switch pays ~0.3 ms per HWND in
+        the raised stack (measured 2026-09-08: 40 empty Frames = +13 ms), so a footer of ~25
+        Labels and Frames cost more than the whole switch did before it. With `edit_hints` a
+        second item set is drawn and `.hints("view"|"edit")` shows one and hides the other.
+        `.right` is a Frame PLACED over the canvas at its right edge, so in a narrow window the
+        hints run on under it and clip there - the flash slot stays."""
+        p, px = self.pal, self.px
+        c = tk.Canvas(parent, bg=p["layer"], height=px(H_FOOT), highlightthickness=0, bd=0)
+        rule = c.create_line(0, 0, 1, 0, fill=p["divider"](p["layer"]))
+        c.bind("<Configure>", lambda e: c.coords(rule, 0, 0, e.width, 0))
+        c.right = tk.Frame(c, bg=p["layer"])
+        c.right.place(relx=1.0, x=-px(SP[3]), y=1, relheight=1.0, height=-1, anchor="ne")
+        cy = px(H_FOOT) // 2
+        for which, items in (("view", hints), ("edit", edit_hints or ())):
+            x = px(SP[3])
+            for k, (caps, word) in enumerate(items):
+                x += px(SP[3]) if k else 0
+                for j, cap in enumerate(caps):
+                    x += px(SP[0]) if j else 0
+                    img = self.kbd_img(cap, ground=p["layer"])
+                    c.create_image(x, cy, anchor="w", image=img, tags=(which,))
+                    c.create_text(x + img.width() // 2, cy, text=cap, font=self.F["mono9"],
+                                  fill=p["muted"], tags=(which, "cap", f"{which}{k}"))
+                    x += img.width()
+                x += px(SP[1])
+                c.create_text(x, cy, anchor="w", text=word, font=self.F["meta"], fill=p["muted"],
+                              tags=(which,))
+                x += self.mf["meta"].measure(word)
+        c.hints = lambda which="view": [c.itemconfigure(k, state="normal" if k == which else "hidden")
+                                        for k in ("view", "edit")]
+        c.hints()
         return c
 
-    def _nav_paint(self, name, fill) -> None:
-        row, l = self.nav[name]
-        row.configure(image=self.rr(self.px(W_SIDE - 2 * SP[1]), self.px(H_CTL), self.px(R_CTL),
-                                    fill, self.pal["base"]))
-        l.configure(bg=fill)
+    def filter_text(self) -> str:
+        """The History filter's text, lower-cased; "" without the field."""
+        return self.filter.value().strip().lower() if self.filter is not None else ""
+
+    def _focus_filter(self) -> None:
+        """Ctrl+F from any view: the History view, with the caret in the filter field."""
+        self.go("history")
+        if self.filter is not None:
+            self.filter.focus_set()
+
+    # --- sidebar -----------------------------------------------------------------------------
+    def _sidebar(self) -> tk.Canvas:
+        """ONE canvas: grain tiles under everything, the specular band, the lockup, three nav
+        rows, the indicator bar, the footer links - every one a canvas item, so the grain shows
+        through each transparent PNG corner and hover is an `itemconfigure`. Stacking is
+        creation order.
+
+        The lockup: mark + "murmur" on ONE baseline (both anchored "sw", the text one descent
+        lower - where a "sw" text hangs its box). The word sits where a title Label sits in a
+        32 px row at y 16, so it shares a baseline with the view titles across the rule; a mark
+        taller than that row pokes UP into the top pad by `rise` (kept on `side.rise`) and the
+        nav below starts at 64 whatever the mark's size. The mark in the brand green (the user's
+        ask 2026-08-29), the word muted: up here the identity is chrome.
+
+        A nav row is ONE image item (`_nav_img`: the row's slice of the grain, the pill, the
+        icon and the chord's two cap boxes composed per state - in idle just the grain, the
+        icon and the boxes) plus its label and cap-digit text items. The image is the row's
+        hit area in every state, so the whole 176 x 36 row is clickable; a canvas hit-tests an
+        image by its bounding box whatever its alpha (checked with a real click on a fully
+        transparent one, 2026-09-08). Hover is tracked by geometry on <Motion> rather than
+        per-item <Enter>/<Leave>: crossing from the pill onto the label inside one row would
+        otherwise leave-then-enter the row and replay the blend frame as a dip."""
+        p, px, F = self.pal, self.px, self.F
+        base = p["base"]
+        s = self.side = tk.Canvas(self.win, bg=base, width=px(W_SIDE), highlightthickness=0, bd=0,
+                                  takefocus=0)
+        # 1. the grain, tiled once to the screen's height (the canvas clips; a taller monitor
+        # later gets more rows from `_side_resized`)
+        tile = px(96)
+        s.grain = grain_png(tile, base, p["grain"])   # the bytes too: `_nav_img` bakes the grain in
+        s.tile = self.img(("grain", tile, base, p["grain"]), lambda: s.grain)
+        s.tiled = 0
+        self._side_tiles(s, self.win.winfo_screenheight() + tile)
+        # 2. the light on the top: white at .40 / .045 fading to nothing over 120 px
+        s.spec = specular_png(px(W_SIDE), px(120), p["specular"])
+        s.create_image(0, 0, anchor="nw", image=self.img(("spec", px(W_SIDE), px(120), p["specular"]),
+                                                         lambda: s.spec))
+        # 3. the lockup
+        f = self.mf["title"]
+        m = self.mark(px(H_MARK), brand.GREEN)
+        lh, desc, row = f.metrics("linespace"), f.metrics("descent"), px(H_CTL)
+        base_y0 = (row - lh) // 2 + lh - desc             # the baseline's y inside the title row
+        s.rise = max(0, m.height() - base_y0)
+        base_y = px(PAD_TOP) + base_y0
+        s.create_image(px(SP[3]), base_y, anchor="sw", image=m, tags="lock_mark")
+        s.create_text(px(SP[3]) + m.width() + px(GAP_MARK), base_y + desc, anchor="sw",
+                      text="murmur", font=F["title"], fill=p["muted"], tags="lock_text")
+        # 4. the nav rows: the row image (the hit area), label, the Ctrl-digit chord's texts at
+        # the right; the chord's boxes are the same for every row (a digit's cap is a square)
+        x, w, h = px(SP[1]), px(W_SIDE - 2 * SP[1]), px(H_NAV)
+        y0 = px(PAD_TOP) + px(H_CTL) + px(SP[3])
+        wd, wc, cap_y = self.kbd_img("1").width(), self.kbd_img("Ctrl").width(), (h - px(H_KBD)) // 2
+        x_d = w - px(SP[1]) - wd                          # right-aligned, 8 inside the pill
+        x_c = x_d - px(SP[0]) - wc
+        self.nav_boxes = [(x_c, cap_y, self.kbd_png("Ctrl")), (x_d, cap_y, self.kbd_png("1"))]
+        self.nav = {}
+        for i, (name, label, glyph) in enumerate((("history", "History", "history"),
+                                                  ("promptify", "Promptify", "sparkle"),
+                                                  ("settings", "Settings", "options"))):
+            y, tag = y0 + i * (h + px(SP[0])), "nav_" + name
+            self.nav[name] = row = dict(y=y, glyph=glyph, state="idle")
+            row["pill"] = s.create_image(x, y, anchor="nw", image=self._nav_img(name, "idle"), tags=(tag,))
+            row["label"] = s.create_text(x + px(40), y + h // 2, anchor="w", text=label,
+                                         font=F["body"], fill=p["muted"], tags=(tag,))
+            row["caps"] = tuple(s.create_text(x + cx + cw // 2, y + h // 2, text=text, font=F["mono9"],
+                                              fill=p["muted"], tags=(tag, "cap"))
+                                for cx, cw, text in ((x_d, wd, str(i + 1)), (x_c, wc, "Ctrl")))
+            self._nav_img(name, "sel")                   # rendered now, not on the first switch
+            s.tag_bind(tag, "<Button-1>", lambda e, n=name: self.go(n))
+        # 5. the indicator bar: its own item, so go() can `coords` it; (36 - 16) / 2 = 10 down
+        self.nav_bar = s.create_image(x + px(SP[0]), self.nav[self.view]["y"] + px(10), anchor="nw",
+                                      image=self.rr(px(3), px(16), max(1, px(1.5)), p["ring"], None))
+        # 6. the footer links, hung from the bottom edge (`_side_resized` sets their y)
+        made = [("vocab", "vocab.txt"), ("folder", "config folder")]
+        lx, s.foot = px(SP[3]), []
+        for i, (key, text) in enumerate([m for m in made if m[0] in self.links]):
+            if i:                                    # the dot, 4 px of air either side
+                s.foot.append(s.create_text(lx + px(SP[0]), 0, anchor="sw", text="·", font=F["meta"],
+                                            fill=p["stroke_field"]))
+                lx += self.mf["meta"].measure("·") + 2 * px(SP[0])
+            item = s.create_text(lx, 0, anchor="sw", text=text, font=F["meta"], fill=p["muted"],
+                                 tags=("link_" + key,))
+            s.tag_bind("link_" + key, "<Button-1>", lambda e, fn=self.links[key]: fn())
+            s.foot.append(item)
+            self.foot_links.append(item)
+            lx += self.mf["meta"].measure(text)
+        s.bind("<Configure>", lambda e: self._side_resized(e.height))
+        s.bind("<Motion>", lambda e: self._side_track(self._nav_at(e.x, e.y) or self._link_at(e.x, e.y)))
+        s.bind("<Leave>", lambda e: self._side_track(None))
+        return s
+
+    def _side_tiles(self, s, height) -> None:
+        """Grain tiles from `s.tiled` down to `height`, under everything already drawn."""
+        tile = self.px(96)
+        while s.tiled < height:
+            for x in range(0, self.px(W_SIDE), tile):
+                s.create_image(x, s.tiled, anchor="nw", image=s.tile, tags=("frost",))
+            s.tiled += tile
+        s.tag_lower("frost")
+
+    def _side_resized(self, height) -> None:
+        s = self.side
+        if height > s.tiled:                             # a monitor taller than the one at build
+            self._side_tiles(s, height)
+        for item in s.foot:
+            s.coords(item, s.coords(item)[0], height - self.px(SP[3]))
+
+    def _nav_at(self, x, y):
+        """The nav row whose pill holds (x, y), or None."""
+        px = self.px
+        if px(SP[1]) <= x < px(W_SIDE - SP[1]):
+            for name, row in self.nav.items():
+                if row["y"] <= y < row["y"] + px(H_NAV):
+                    return name
+        return None
+
+    def _link_at(self, x, y):
+        """The footer link item under (x, y), or None."""
+        for item in self.foot_links:
+            x0, y0, x1, y1 = self.side.bbox(item)
+            if x0 <= x < x1 and y0 <= y < y1:
+                return item
+        return None
+
+    def _side_track(self, over) -> None:
+        """The pointer moved: `over` is a nav row name, a link item id or None. Only a CHANGE
+        does anything - the row lights (through its blend), the old one goes idle at once,
+        links swap ink/muted, the cursor follows."""
+        if over == self.nav_over:
+            return
+        was, self.nav_over = self.nav_over, over
+        for target, on in ((was, False), (over, True)):
+            if isinstance(target, str):
+                self._nav_hover(target, on)
+            elif target is not None:
+                self.side.itemconfigure(target, fill=self.pal["ink" if on else "muted"])
+        self.side.configure(cursor="hand2" if over is not None else "")
+
+    def _nav_img(self, name, state) -> tk.PhotoImage:
+        """A nav row's one image for `state` in idle / blend / hover / sel: the pill (none in
+        idle; `sub_hover`, its 50 % blend with base, `sub`), the icon (`ink` when lit, else
+        `muted`) and the chord's cap boxes, composed OVER the row's own slice of the grain and
+        the specular - so the image is opaque (an opaque image skips Tk's read-back blend, the
+        last ~1 ms of a switch) and pixel-for-pixel what the transparent one would show: the
+        grain runs on under the pill's corners. Cached per (row, state)."""
+        p, px, row, s = self.pal, self.px, self.nav[name], self.side
+        w, h, base = px(W_SIDE - 2 * SP[1]), px(H_NAV), p["base"]
+        gx, gy, tile = px(SP[1]), row["y"], px(96)
+
+        def make():
+            from PIL import Image
+            under = Image.new("RGBA", (w, h))
+            grain = Image.open(io.BytesIO(s.grain))
+            for ty in range(gy // tile * tile, gy + h, tile):
+                for tx in range(0, gx + w, tile):
+                    under.paste(grain, (tx - gx, ty - gy))
+            spec = Image.open(io.BytesIO(s.spec)).convert("RGBA")
+            if gy < spec.height:
+                under.alpha_composite(spec.crop((gx, gy, gx + w, gy + h)))
+            buf = io.BytesIO()
+            under.save(buf, "PNG")
+            fill = {"idle": None, "hover": p["sub_hover"](base), "sel": p["sub"](base),
+                    "blend": mix(base, p["sub_hover"](base), .5)}[state]
+            parts = [(0, 0, buf.getvalue())]
+            if fill:
+                parts.append((0, 0, rr_png(w, h, px(R_CTL), fill)))
+            parts.append((px(12), (h - px(ICON)) // 2,
+                          icon_png(row["glyph"], p["ink"] if fill else p["muted"], px(ICON))))
+            return compose_png(w, h, parts + self.nav_boxes)
+        return self.img(("nav", name, state), make)
+
+    def _nav_paint(self, name, state) -> None:
+        """`state` in idle / blend / hover / sel: the row's image and the label's colour (ink
+        whenever the row is lit). A row already in that state is left alone - an
+        `itemconfigure` damages the row and the canvas repaints it."""
+        row, p, s = self.nav[name], self.pal, self.side
+        if row["state"] == state:
+            return
+        row["state"] = state
+        s.itemconfigure(row["pill"], image=self._nav_img(name, state))
+        s.itemconfigure(row["label"], fill=p["ink"] if state != "idle" else p["muted"])
 
     def _nav_hover(self, name, on) -> None:
+        """Hover in two frames (Fluent's 83 ms): the 50 % blend now, the full hover 40 ms
+        later; leaving is instant. The selected row does not hover; reduced motion snaps."""
+        self._cancel(("blend", name))
         if name == self.view:
             return
-        p = self.pal
-        self._nav_paint(name, p["sub_hover"](p["base"]) if on else p["base"])
+        if not on:
+            self._nav_paint(name, "idle")
+        elif not self.motion:
+            self._nav_paint(name, "hover")
+        else:
+            self._nav_paint(name, "blend")
+            self.jobs[("blend", name)] = self.win.after(
+                40, lambda: (self.jobs.pop(("blend", name), None), self._nav_paint(name, "hover")))
+
+    def _slide_bar(self, y0, y1) -> None:
+        """The indicator's slide: three frames over 150 ms after a 40 ms delay (the switch has
+        painted by then), ease-out (0.2, 0, 0, 1) sampled at .55 / .88 / 1."""
+        self._cancel("slide")
+        x = self.side.coords(self.nav_bar)[0]
+        ys = [round(y0 + (y1 - y0) * k) for k in (.55, .88, 1.0)]
+
+        def step(i=0):
+            self.side.coords(self.nav_bar, x, ys[i])
+            if i + 1 < len(ys):
+                self.jobs["slide"] = self.win.after(50, lambda: step(i + 1))
+            else:
+                self.jobs.pop("slide", None)
+        self.jobs["slide"] = self.win.after(40, step)
 
     def go(self, name) -> None:
         """Every view stays built and gridded in the one cell; a switch raises the target.
         Measured: 16-25 ms against 90-160 ms for grid_remove/grid, which re-laid the whole
         subtree out on every switch. The Promptify pane is rebuilt only when what it shows has
         changed (`p_memo`). Covered views are still in Tk's focus ring, so `_tab` keeps Tab
-        inside the shown view."""
+        inside the shown view. The nav: three `itemconfigure` rows and the bar's `coords` (or
+        one `after` that starts its slide) - nothing else is added to a switch."""
         self.view = name
-        p = self.pal
-        for n, (row, l) in self.nav.items():
-            sel = n == name
-            self._nav_paint(n, p["sub"](p["base"]) if sel else p["base"])
-            l.configure(fg=p["ink"] if sel else p["muted"])
+        self._cancel(("blend", name))          # a hover frame due on the row just selected
+        for n in self.nav:
+            self._nav_paint(n, "sel" if n == name else "idle")
+        if isinstance(self.nav_over, str) and self.nav_over != name:
+            self._nav_paint(self.nav_over, "hover")       # the pointer is still on that row
+        x, y0 = self.side.coords(self.nav_bar)
+        y1 = self.nav[name]["y"] + self.px(10)
+        if y0 != y1 and self.motion:
+            self._slide_bar(y0, y1)
+        elif y0 != y1:
+            self.side.coords(self.nav_bar, x, y1)
         lst = self._list()
         if lst is not None:                    # both lists share the selection: the one shown
             lst.paint()                        # catches up and brings the row into view
@@ -1444,8 +1708,10 @@ class AppWindow:
 
     # --- history view ------------------------------------------------------------------------
     def _build_history(self, f) -> None:
+        """Rows: 0 head · 1 (the filter field, when it lands) · 2 the list · 3 the transcript
+        card · 4 the footer."""
         p, pad = self.pal, self.px(SP[3])
-        f.grid_rowconfigure(1, weight=1)
+        f.grid_rowconfigure(2, weight=1)
         f.grid_columnconfigure(0, weight=1)
 
         head = tk.Frame(f, bg=p["layer"], height=self.px(H_CTL))
@@ -1469,7 +1735,7 @@ class AppWindow:
         # no rule under the header: a full-bleed hairline over a list of rounded highlights is
         # the most rigid line on the screen, and the air below the title separates them anyway
         box = self.box = tk.Frame(f, bg=p["layer"])
-        box.grid(row=1, column=0, sticky="nsew")
+        box.grid(row=2, column=0, sticky="nsew")
         self.list = RowList(self, box, on_select=self._select, keys={
             "<Return>": self.copy_selected, "<Control-c>": self.copy_selected,
             "<Double-Button-1>": self.copy_selected, "<Delete>": self.delete_selected,
@@ -1479,7 +1745,7 @@ class AppWindow:
         # the selected transcript and its two actions are ONE grouped surface, from E - 12 to
         # the pane's right - 4 like the row highlights above it; its text lands on E like theirs
         self.card = self._card(f)
-        self.card.grid(row=2, column=0, sticky="ew", padx=self.px(SP[0]), pady=self.px(SP[3]))
+        self.card.grid(row=3, column=0, sticky="ew", padx=self.px(SP[0]), pady=self.px(SP[3]))
         card = self.card.body
         trow = tk.Frame(card, bg=p["card"])
         trow.pack(fill="x", padx=self.cpad, pady=(self.cpad, 0))
@@ -1515,13 +1781,13 @@ class AppWindow:
         self.b_edit.f.pack(side="left", padx=(self.px(SP[1]), 0))
         self.b_del = _Btn(self, act, "Delete", self.delete_selected)
         self.b_del.f.pack(side="left", padx=(self.px(SP[1]), 0))
-        # the status ("Copied", "Deleted · Undo") is meta on the SAME row, after the buttons -
-        # never in the body flow, never at the far edge where the eye has to travel for it
-        self.status = tk.Frame(act, bg=p["card"])
-        self.status.pack(side="left", padx=(self.px(SP[2]), 0))
-        self.s_text = tk.Label(self.status, text="", font=self.F["meta"], fg=p["muted"],
-                               bg=p["card"])
-        self.s_text.pack(side="left")
+        # the footer: the keys this view answers to that no action already shows, and at its
+        # right the status ("✓ Copied", "Deleted · Undo", "Editing") in the flash slot
+        self.foot_h = self._footer(f, [(("↑", "↓"), "move"), (("Ctrl", "F"), "filter"), (("Esc",), "close")],
+                                   edit_hints=[(("Ctrl", "↵"), "save"), (("Esc",), "cancel")])
+        self.foot_h.grid(row=4, column=0, sticky="ew")
+        self.status = self.foot_h.right
+        self.s_text = self._flash_slot(self.status)
         # underlined so the one clickable word in the status line does not read as more meta
         self.s_undo = self.link(self.status, "Undo", self._undo, font=self.F["meta"] + ("underline",))
 
@@ -1565,7 +1831,7 @@ class AppWindow:
             lh = self.mf["body"].metrics("linespace") + 2 * px(LH)
             chrome = 2 + 2 * self.cpad + px(SP[2]) + px(H_CTL)      # hairlines, padding, gap, actions
             room = (H - px(PAD_TOP) - px(H_CTL) - px(SP[3]) - len(self.history.items) * self.list.H
-                    - px(SP[3]) - chrome - px(SP[3]))
+                    - px(SP[3]) - chrome - px(SP[3]) - px(H_FOOT))
             fit = room // lh
             cap = fit if fit >= 3 else (6 if H >= px(480) else 3)
             h = max(1, min(lines, cap))
@@ -1589,27 +1855,30 @@ class AppWindow:
             self.editing = True
             self.b_edit.text("Save", hold=False)
             self.s_undo.pack_forget()
-            self.s_text.configure(text="Editing · Ctrl+Enter saves · Esc cancels")
+            self._say(self.s_text, "Editing")        # the footer's edit strip names the keys
+            self.foot_h.hints("edit")
             self.detail.configure(state="normal")
             self.detail.focus_set()
             return
         text = " ".join(self.detail.get("1.0", "end-1c").split())
         it, self.editing = self.sel, False
         self.b_edit.text("Edit", hold=False)
-        self.s_text.configure(text="")
+        self._say(self.s_text, "")
+        self.foot_h.hints("view")
         if text and text != it["text"]:
             it["text"] = text
             had = it.pop("draft", None) is not None
             self.history.save()
             self.refresh()
             self.s_undo.pack_forget()
-            self.flash(self.s_text, "Saved · draft cleared" if had else "Saved")
+            self.flash(self.s_text, "Saved · draft cleared" if had else "Saved", icon="check")
         self._select(it)
 
     def _edit_abort(self) -> None:
         self.editing = False
         self.b_edit.text("Edit", hold=False)
-        self.s_text.configure(text="")
+        self._say(self.s_text, "")
+        self.foot_h.hints("view")
 
     def _select(self, it) -> None:
         """The one selection, shared by both lists; the History card and the Promptify detail
@@ -1657,7 +1926,7 @@ class AppWindow:
         import pyperclip
         pyperclip.copy(self.sel["text"])
         self.s_undo.pack_forget()
-        self.flash(self.s_text, "Copied")
+        self.flash(self.s_text, "Copied", icon="check")
 
     def delete_selected(self) -> None:
         i = self._idx()
@@ -1668,17 +1937,15 @@ class AppWindow:
         self.sel = None
         self.undo = (i, item)
         self.refresh()
-        self.s_text.configure(text="Deleted ·")
+        self._say(self.s_text, "Deleted ·")
         self.s_undo.pack(side="left", padx=(self.px(SP[0]), 0))
-        job = self.jobs.pop(id(self.s_text), None)
-        if job:
-            self.win.after_cancel(job)
+        self._cancel(id(self.s_text))
         self.jobs[id(self.s_text)] = self.win.after(8000, self._undo_expire)   # the offer lapses
 
     def _undo_expire(self) -> None:
         self.undo = None
         self.s_undo.pack_forget()
-        self.s_text.configure(text="")
+        self._say(self.s_text, "")
 
     def _undo(self) -> None:
         if not getattr(self, "undo", None):
@@ -1720,9 +1987,11 @@ class AppWindow:
         head.pack_propagate(False)
         tk.Label(head, text="Settings", font=self.F["title"], fg=p["ink"], bg=p["layer"], bd=0, padx=0,
                  pady=0).pack(side="left")
-        self.saved = tk.Label(head, text="", font=self.F["body"], fg=p["muted"], bg=p["layer"], bd=0,
-                              padx=0, pady=0)
-        self.saved.pack(side="right")
+        # the footer: the keys the controls answer to; the Saved flash in its right slot
+        self.foot_s = self._footer(f, [(("Tab",), "next"), (("Space",), "toggle"),
+                                       (("←", "→"), "adjust"), (("Esc",), "close")])
+        self.foot_s.grid(row=3, column=0, sticky="ew")
+        self.saved = self._flash_slot(self.foot_s.right)
         rule = self.hairline(f, color=p["layer"])
         rule.grid(row=1, column=0, sticky="ew")
         box = tk.Frame(f, bg=p["layer"])
@@ -1786,6 +2055,7 @@ class AppWindow:
             lst.clear()
         self.ctl.clear()
         self.p_memo = None                     # the pane is gone with the old widgets
+        self.nav_bar = self.nav_over = None    # canvas items of the old sidebar
         self._build()
         self.win.geometry(geo)
         self.show()
@@ -1921,6 +2191,8 @@ class AppWindow:
                 e.configure(fg=p["ink"])
                 e.ph = False
         e.value = lambda: "" if e.ph else e.get()
+        # empty the field (Esc on the History filter); the placeholder comes back unless focused
+        e.clear = lambda: (hide_ph(), e.delete(0, "end"), e is not self.win.focus_get() and show_ph())
         e.paint = lambda error=None: (e.err.__setitem__(0, e.err[0] if error is None else error),
                                       box.paint("error" if e.err[0] else
                                                 "focus" if e is self.win.focus_get() else "idle"))
@@ -2230,7 +2502,7 @@ class AppWindow:
         cfg is the live dict the app reads, so headset/retention apply at once."""
         self.on_save(self.cfg)
         if self.win is not None and self.win.winfo_exists():
-            self.flash(self.saved, "Saved", 1500)
+            self.flash(self.saved, "Saved", 1500, icon="check")
 
     @staticmethod
     def _list_mics():
@@ -2296,6 +2568,10 @@ class AppWindow:
         d.bind("<Configure>", lambda e: self._layout_head())
         self._build_draft(d)
         self._build_sheet(d)
+        # the footer runs under both panes; its right slot stays empty - "Copied" is the
+        # primary's own relabel
+        self.foot_p = self._footer(f, [(("↵",), "promptify"), (("Ctrl", "C"), "copy"), (("Esc",), "back")])
+        self.foot_p.grid(row=1, column=0, columnspan=3, sticky="ew")
 
     def _build_draft(self, parent) -> None:
         """The draft frame: header row 1 (engine dot + name, [target segment], the primary),
@@ -3031,9 +3307,11 @@ class AppWindow:
         return True
 
     def _escape(self) -> None:
-        """Esc: the sheet closes; a draft in progress is cancelled; a field - or anything in the
-        Promptify detail pane, chip strips and header buttons included - hands focus back to
-        the view's list; the Clear confirm is kept."""
+        """Esc, one step back at a time: the sheet closes; a draft in progress is cancelled; a
+        field - or anything in the Promptify detail pane, chip strips and header buttons
+        included - hands focus back to the view's list; the Clear confirm is dismissed; the
+        History filter is cleared; and with nothing left to undo the window hides (the footers'
+        "Esc close")."""
         if self.view == "promptify":
             if self.sheet_open:
                 self._close_sheet()
@@ -3046,7 +3324,14 @@ class AppWindow:
                                                   or str(f).startswith(str(self.dpane) + ".")):
             lst.focus_set()
             return
-        self._clear_cancel()
+        if self.confirm.winfo_ismapped():
+            self._clear_cancel()
+            return
+        if self.filter_text():
+            self.filter.clear()
+            self.list.draw()
+            return
+        self.hide()
 
     # --- the engines sheet -------------------------------------------------------------------
     def _build_sheet(self, parent) -> None:
