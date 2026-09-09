@@ -35,6 +35,18 @@ assert used, "no SP-derived spacing found"
 for i in used:
     assert W.SP[i] in SPACING, (f"SP[{i}]", W.SP[i], "is not in", sorted(SPACING))
 
+# --- §4. every timed callback is a NAMED job: `_rebuild` cancels `self.jobs`, so an after()
+# whose id is not stored there would outlive the window it was scheduled for. Three documented
+# exceptions: the idle fits of `_uline` / `_textbox` guard themselves (`winfo_exists`), and the
+# hotkey thread's marshal into Tk (`root.after(0, ...)`) belongs to no window
+FREE = {"self.win.after_idle(fit)",
+        "app.capture = lambda vk: self.root.after(0, lambda: self._captured(vk))"}
+timed = [(n, l.strip()) for n, l in enumerate(src.splitlines(), 1) if re.search(r"\.after(_idle)?\(", l)]
+assert len(timed) >= 15, ("the after() inventory shrank", len(timed))
+for n, line in timed:
+    assert "jobs[" in line or line in FREE, ("an after() outside self.jobs", n, line)
+assert W.MOTION_FAST // 2 in (40, 41, 42) and W.MOTION_NORMAL // 3 == 50   # the frame gaps §4 names
+
 # --- a window, no real engine ---------------------------------------------------------------
 sys.modules["pyperclip"] = types.SimpleNamespace(copy=lambda s: None)
 C.status = lambda key, home=None, appdir=None: ("connected", "Max") if key == "claude" else ("none", "")

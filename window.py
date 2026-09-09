@@ -214,7 +214,8 @@ W_ACT = 80                          # the engines sheet's action column
 ICON = 16                           # icon box (14 inside a chip, 10 for the draft mark in a row)
 WIN = (780, 560)
 WIN_MIN = (600, 400)
-MOTION_FAST, MOTION_NORMAL = 83, 150    # ms: hover blend / slides
+MOTION_FAST, MOTION_NORMAL = 83, 150    # ms (Fluent): a hover's two frames span FAST, the bar's
+                                        # three frames NORMAL - a frame is the span over the count
 # the body measure: an 80-character line of body text is as wide as a prompt or a transcript
 # gets. (`width=80` on a Text is 80 "0"s, which is ~100 average characters - too wide.)
 SAMPLE80 = "The quick brown fox jumps over the lazy dog while the band plays on by the pier."
@@ -660,11 +661,12 @@ class _Btn:
         self.f.configure(image=img, fg=fg)
 
     def _set(self, state) -> None:
-        """Hover on a secondary, text or chip button comes in two frames (Fluent's 83 ms): the
-        50 % blend now, the full hover 40 ms later (`ui.jobs[("blend", id)]`, so a rebuild
-        cancels it); only from idle - a release after a press paints hover at once - and only
-        with motion on. Every other change, leaving included, is instant and drops a pending
-        frame. The frame skips a button destroyed in the meantime (a rebuilt pane)."""
+        """Hover on a secondary, text or chip button comes in two frames over `MOTION_FAST`
+        (Fluent's 83 ms): the 50 % blend now, the full hover half of that later
+        (`ui.jobs[("blend", id)]`, so a rebuild cancels it); only from idle - a release after a
+        press paints hover at once - and only with motion on. Every other change, leaving
+        included, is instant and drops a pending frame, so a button never holds more than one.
+        The frame skips a button destroyed in the meantime (a rebuilt pane)."""
         if not self.on:
             return
         ui, key = self.ui, ("blend", id(self.f))
@@ -673,8 +675,8 @@ class _Btn:
                 and self.kind in ("secondary", "text", "chip")):
             self.state = "blend"
             self._paint()
-            ui.jobs[key] = ui.win.after(40, lambda: (ui.jobs.pop(key, None),
-                                                     self.f.winfo_exists() and self._set("hover")))
+            ui.jobs[key] = ui.win.after(MOTION_FAST // 2, lambda: (
+                ui.jobs.pop(key, None), self.f.winfo_exists() and self._set("hover")))
             return
         self.state = state
         self._paint()
@@ -1711,8 +1713,9 @@ class AppWindow:
         s.itemconfigure(row["label"], fill=p["ink"] if state != "idle" else p["muted"])
 
     def _nav_hover(self, name, on) -> None:
-        """Hover in two frames (Fluent's 83 ms): the 50 % blend now, the full hover 40 ms
-        later; leaving is instant. The selected row does not hover; reduced motion snaps."""
+        """Hover in two frames over `MOTION_FAST` (Fluent's 83 ms): the 50 % blend now, the
+        full hover half of that later; leaving is instant and drops a frame still due. The
+        selected row does not hover; reduced motion snaps."""
         self._cancel(("blend", name))
         if name == self.view:
             return
@@ -1722,12 +1725,13 @@ class AppWindow:
             self._nav_paint(name, "hover")
         else:
             self._nav_paint(name, "blend")
-            self.jobs[("blend", name)] = self.win.after(
-                40, lambda: (self.jobs.pop(("blend", name), None), self._nav_paint(name, "hover")))
+            self.jobs[("blend", name)] = self.win.after(MOTION_FAST // 2, lambda: (
+                self.jobs.pop(("blend", name), None), self._nav_paint(name, "hover")))
 
     def _slide_bar(self, y0, y1) -> None:
-        """The indicator's slide: three frames over 150 ms after a 40 ms delay (the switch has
-        painted by then), ease-out (0.2, 0, 0, 1) sampled at .55 / .88 / 1."""
+        """The indicator's slide: three frames over `MOTION_NORMAL` (150 ms) after a 40 ms
+        delay (the switch has painted by then - the slide is chrome after the switch, never on
+        its path), ease-out (0.2, 0, 0, 1) sampled at .55 / .88 / 1."""
         self._cancel("slide")
         x = self.side.coords(self.nav_bar)[0]
         ys = [round(y0 + (y1 - y0) * k) for k in (.55, .88, 1.0)]
@@ -1735,7 +1739,7 @@ class AppWindow:
         def step(i=0):
             self.side.coords(self.nav_bar, x, ys[i])
             if i + 1 < len(ys):
-                self.jobs["slide"] = self.win.after(50, lambda: step(i + 1))
+                self.jobs["slide"] = self.win.after(MOTION_NORMAL // 3, lambda: step(i + 1))
             else:
                 self.jobs.pop("slide", None)
         self.jobs["slide"] = self.win.after(40, step)
@@ -1767,8 +1771,8 @@ class AppWindow:
             if self._pane_key(state) != self.p_memo:
                 self._show(state)
         self.views[name].tkraise()
-        if lst is not None:
-            self.win.after_idle(lst.show_sel)
+        if lst is not None:                    # named like every job, so `_rebuild` cancels it
+            self.jobs["show_sel"] = self.win.after_idle(lst.show_sel)
 
     def _pane_key(self, state) -> tuple:
         it = self.sel
@@ -2813,17 +2817,32 @@ class AppWindow:
         self.b_eng = _Btn(self, eng, "Claude Code", self._open_sheet, kind="text", ink=True)
         self.b_eng.f.pack(side="left")
         self.eng_label = "Claude Code"       # the full name; `_layout_head` may show it shorter
-        # a chevron after the name says the control opens something (the sheet); it lights with
-        # the name - the two are one control under the pointer
+        # a chevron after the name says the control opens something (the sheet). The dot, the
+        # name and the chevron are ONE control under the pointer: the name lights (through its
+        # blend) and the chevron goes ink together, and both stay lit while the pointer is
+        # anywhere inside `eng`'s box - the 4 px gap included, so crossing from the name to the
+        # chevron never dips through idle and replays the blend. A Leave's coordinates are the
+        # pointer's, relative to the widget that lost it: that says whether it left the box.
         self.eng_chev = tk.Label(eng, image=self.icon("chev", p["muted"]), bg=p["layer"], bd=0,
                                  padx=0, pady=0, cursor="hand2")
         self.eng_chev.pack(side="left", padx=(self.px(SP[0]), 0))
         chev = lambda on: self.eng_chev.configure(image=self.icon("chev", p["ink" if on else "muted"]))
+
+        def inside(e) -> bool:
+            w = e.widget
+            x, y = e.x + (0 if w is eng else w.winfo_x()), e.y + (0 if w is eng else w.winfo_y())
+            return 0 <= x < eng.winfo_width() and 0 <= y < eng.winfo_height()
+
+        def lit(on):
+            chev(on)
+            if not on:
+                self.b_eng._set("idle")
+            elif self.b_eng.state not in ("blend", "hover"):     # lit already: no replayed frame
+                self.b_eng._set("hover")
         self.eng_chev.bind("<Button-1>", lambda e: self._open_sheet())
-        self.eng_chev.bind("<Enter>", lambda e: (chev(True), self.b_eng._set("hover")))
-        self.eng_chev.bind("<Leave>", lambda e: (chev(False), self.b_eng._set("idle")))
-        self.b_eng.f.bind("<Enter>", lambda e: chev(True), add="+")
-        self.b_eng.f.bind("<Leave>", lambda e: chev(False), add="+")
+        for wdg in (eng, self.eng_dot, self.b_eng.f, self.eng_chev):   # the name's own hover
+            wdg.bind("<Enter>", lambda e: lit(True))                     # bindings give way
+            wdg.bind("<Leave>", lambda e: lit(inside(e)))
         self.seg_host = tk.Frame(head, bg=p["layer"])
         self.p_target = [self.cfg.get("prompt_target") or "code"]
         # the target as an icon and a short word (`>_ Code`, `globe Web`): the engine's name is

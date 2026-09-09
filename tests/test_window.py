@@ -269,6 +269,8 @@ for v in ("promptify", "settings", "history") * 3:
     root.update()
     ts.append(time.perf_counter() - t0)
 assert min(ts) <= 0.15, ts
+print(f"switch: min-of-9 {min(ts) * 1000:.1f} ms, all {[round(t * 1000) for t in ts]} (budget 150)")
+assert "show_sel" in win.jobs                              # the switch's one idle job is named
 upd(lambda: "slide" not in win.jobs, n=30)
 # the keyboard reaches every view: Ctrl+1/2/3, Ctrl+, for Settings, Ctrl+W hides (a key event
 # goes to the focus window, so the window has to hold it - `tall` took it when it was destroyed)
@@ -411,6 +413,38 @@ assert bp.state == "idle" and ("blend", id(bp.f)) not in win.jobs     # leaving 
 win.b_copy.f.event_generate("<Enter>")
 assert win.b_copy.state == "hover"                                    # a primary never blends
 win.b_copy.f.event_generate("<Leave>")
+# a hover storm: 20 chips entered, left and entered again five times over with no frame in
+# between - every button holds AT MOST one pending frame, and the job in `jobs` IS the one Tk
+# holds (`after info`: nothing orphaned outside `jobs`, which `_rebuild` cancels); leaving
+# drops it, and under reduced motion nothing is scheduled at all
+fr = tk.Frame(win.views["history"], bg=win.pal["layer"])
+fr.place(x=0, y=0)
+chips = [W._Chip(win, fr, f"chip {i}", lambda: None) for i in range(20)]
+for i, c in enumerate(chips):
+    c.f.place(x=i * px_(30), y=0)
+root.update()
+pending = lambda: set(root.tk.splitlist(root.tk.call("after", "info")))
+blends = lambda: {k: v for k, v in win.jobs.items() if isinstance(k, tuple) and k[0] == "blend"}
+before = pending()
+for _ in range(5):
+    for c in chips:
+        c.f.event_generate("<Enter>")
+        c.f.event_generate("<Leave>")
+        c.f.event_generate("<Enter>")
+new = pending() - before
+assert len(blends()) == 20 and all(c.state == "blend" for c in chips)
+assert new == set(blends().values()), (len(new), len(blends()))    # one frame per chip, none orphaned
+for c in chips:
+    c.f.event_generate("<Leave>")
+assert not blends() and pending() == before and all(c.state == "idle" for c in chips)
+win.motion = False
+for c in chips:
+    c.f.event_generate("<Enter>")
+assert pending() == before and all(c.state == "hover" for c in chips)
+for c in chips:
+    c.f.event_generate("<Leave>")
+win.motion = True
+fr.destroy()
 assert win.foot_h.winfo_height() == px_(W.H_FOOT) and win.foot_h.winfo_width() == win.views["history"].winfo_width()
 assert win.foot_h.right.winfo_x() + win.foot_h.right.winfo_width() == win.foot_h.winfo_width() - px_(16)
 # the footer is one canvas - the hints are items, a Label per cap cost ~0.3 ms per view
@@ -949,19 +983,37 @@ eq = tpix(1, px_(12) + 8, iy + 8)                                          # the
 assert eq != W.rgb(win.pal["ctl_press"]) and all(min(a, b) <= v <= max(a, b) for v, a, b in zip(eq, W.rgb(win.pal["muted"]), W.rgb(win.pal["ctl_press"])))
 assert tpix(0, tcell(0).winfo_width() // 2, px_(W.R_IN)) == W.rgb(win.pal["stroke"](win.pal["ctl"]))   # the key's hairline
 assert tpix(0, tcell(0).winfo_width() // 2, h_seg - 1 - px_(W.R_IN)) == W.rgb(win.pal["stroke_edge"])   # ... and bottom edge
-# the chevron after the engine name opens the sheet like the name; it lights with the name
-assert win.eng_chev.master is win.b_eng.f.master and win.eng_chev.winfo_x() == win.b_eng.f.winfo_x() + win.b_eng.f.winfo_width() + px_(4)
-assert win.eng_chev.cget("image") == str(win.icon("chev", win.pal["muted"]))
+# the chevron after the engine name opens the sheet like the name. The dot, the name and the
+# chevron are one control under the pointer: they light together (the name through its blend)
+# and stay lit while the pointer is anywhere in the control's box - the 4 px gap between them
+# included, so crossing name -> chevron never dips through idle - and go idle the moment it
+# leaves the box (a Leave carries the pointer's position relative to the widget that lost it)
+chev_is = lambda tok: win.eng_chev.cget("image") == str(win.icon("chev", win.pal[tok]))
+eng = win.eng_chev.master
+assert eng is win.b_eng.f.master and win.eng_chev.winfo_x() == win.b_eng.f.winfo_x() + win.b_eng.f.winfo_width() + px_(4)
+assert chev_is("muted")
 win.eng_chev.event_generate("<Enter>")
 root.update()
-assert win.eng_chev.cget("image") == str(win.icon("chev", win.pal["ink"])) and win.b_eng.state in ("blend", "hover")
-win.eng_chev.event_generate("<Leave>")
-root.update()
-assert win.eng_chev.cget("image") == str(win.icon("chev", win.pal["muted"])) and win.b_eng.state == "idle"
+assert chev_is("ink") and win.b_eng.state == "blend" and ("blend", id(win.b_eng.f)) in win.jobs
+assert upd(lambda: win.b_eng.state == "hover")
+win.eng_chev.event_generate("<Leave>", x=-2, y=px_(8))          # into the gap: still the control
+eng.event_generate("<Enter>", x=win.eng_chev.winfo_x() - 2, y=px_(16))
+assert win.b_eng.state == "hover" and ("blend", id(win.b_eng.f)) not in win.jobs and chev_is("ink")
+eng.event_generate("<Leave>", x=win.b_eng.f.winfo_x() + 4, y=px_(16))   # onto the name
 win.b_eng.f.event_generate("<Enter>")
-assert win.eng_chev.cget("image") == str(win.icon("chev", win.pal["ink"]))
-win.b_eng.f.event_generate("<Leave>")
-assert win.eng_chev.cget("image") == str(win.icon("chev", win.pal["muted"]))
+assert win.b_eng.state == "hover" and chev_is("ink")            # no replayed frame
+win.b_eng.f.event_generate("<Leave>", x=px_(20), y=-1)         # out of the box's top: idle at once
+assert win.b_eng.state == "idle" and chev_is("muted") and ("blend", id(win.b_eng.f)) not in win.jobs
+win.b_eng.f.event_generate("<Enter>")                          # from the name: the chevron lights
+assert chev_is("ink") and win.b_eng.state == "blend"
+win.b_eng.f.event_generate("<Leave>", x=win.b_eng.f.winfo_width(), y=px_(16))   # the gap again
+assert chev_is("ink") and win.b_eng.state == "blend"
+win.eng_chev.event_generate("<Leave>", x=px_(8), y=px_(40))     # below the box: idle, frame dropped
+assert win.b_eng.state == "idle" and chev_is("muted") and ("blend", id(win.b_eng.f)) not in win.jobs
+win.eng_dot.event_generate("<Enter>")                          # the dot is the control too
+assert chev_is("ink") and win.b_eng.state == "blend"
+win.eng_dot.event_generate("<Leave>", x=-1, y=0)
+assert chev_is("muted") and win.b_eng.state == "idle"
 # pick: nothing selected, no primary at all
 win._select(None)
 root.update()
@@ -1605,8 +1657,10 @@ root.update()
 assert cfg["theme"] == "dark" and win.dark and W.lum(win.pal["layer"]) < 0.1 and win.win.winfo_exists()
 assert win.view == "settings" and win.sel is sel_ and win.win.geometry().split("+")[0] == geo.split("+")[0]
 # the rebuilt controls carry the dark tokens: the toggle (haze is on now) a dark `ring` track
-# and the trigger cap the lit top; no job of the old window survives (the slide, the breathing)
-assert not any(k in win.jobs for k in ("slide", "skel", "track", "breathe")) and not any(isinstance(k, tuple) and k[0] == "toggle" for k in win.jobs)
+# and the trigger cap the lit top; no job of the old window survives (the slide in flight, a
+# hover frame, the breathing, the Saved flash): the only job left is the switch's idle one
+assert not any(k in win.jobs for k in ("slide", "skel", "track", "breathe")) and not any(isinstance(k, tuple) and k[0] in ("toggle", "blend") for k in win.jobs)
+assert set(win.jobs) <= {"show_sel"}, set(win.jobs)
 assert cfg["haze"] is True and ipx(win.ctl["haze"].cget("image"), px_(8), px_(10)) == W.rgb(win.pal["ring"])
 assert ipx(win.l_trig.cget("image"), px_(44), 0) == W.rgb(win.pal["stroke_top"]) and win.pal["stroke_top"] is not None
 assert ipx(win.l_trig.cget("image"), px_(44), px_(12)) == W.rgb(win.pal["ctl"])
