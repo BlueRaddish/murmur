@@ -165,14 +165,18 @@ for theme in ("light", "dark"):
                for row in win.nav.values()]                     # ... the nav rows' (drawn digit-first) ...
     chords += [[win.act.itemcget(i, "text") for i in win.act.find_withtag(name)]   # ... and the card's
                for name in ("copy", "prompt", "edit", "del")]   # action row (one canvas, a tag per chord)
-    assert len(chords) == 3 + 2 + 3 + 4 + 3 + 4, chords           # History view + edit, Promptify, Settings, nav, card
+    win._show("draft")                                            # ... and the draft's Update prompt chord
+    root.update()
+    chords += [[win.p_foot.itemcget(i, "text") for i in win.p_foot.find_withtag("update")]]
+    assert len(chords) == 3 + 2 + 3 + 4 + 3 + 4 + 1, chords       # History view + edit, Promptify, Settings, nav, card, draft
+    assert chords[-1] == ["Ctrl", "↵"], chords[-1]
     for chord in chords:
         ctrl, keys = chord[0] == "Ctrl", [c for c in chord if c != "Ctrl"]
         assert keys, chord
         for cap in keys:
             assert has(keysym(cap), ctrl), (theme, "cap without a binding", chord, sorted(bound))
     drawn = {l.cget("text") for l in win.caps_all} | {
-        c.itemcget(i, "text") for c in (side, win.foot_h, win.foot_p, win.foot_s, win.act)
+        c.itemcget(i, "text") for c in (side, win.foot_h, win.foot_p, win.foot_s, win.act, win.p_foot)
         for i in c.find_withtag("cap")}
     assert {"↵", "Ctrl", "C", "D", "Del", "Esc", "↑", "↓", "F", "1", "2", "3", "Tab", "Space", "←", "→"} <= drawn, drawn
     # `Ctrl ,` and `Ctrl W` are the two documented undrawn synonyms (of the Settings row and Esc)

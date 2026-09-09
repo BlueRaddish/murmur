@@ -601,15 +601,42 @@ assert srule.cget("bg") == win.pal["layer"]
 assert win.ctl["color"]["entry"].master.winfo_width() == px_(96) == win.e_lang.master.winfo_width()
 assert win.e_days.master.winfo_width() == px_(64)
 assert win.r_mic.right.winfo_children()[0].winfo_width() == px_(200)
-# the segment: a `ctl_press` track with no hairline, the picked cell a `ctl` key
-seg_img = lambda i: win.ctl["theme"][i][0].cget("image")
+# the segment: a `ctl_press` track with no hairline, the picked cell the raised `ctl` key (its
+# hairline round it, the `stroke_edge` line along its bottom); the cells are canvases carrying
+# their slice as `.i_bg` and their label as `.i_text` - no icons on the theme segment
+cell = lambda i: win.ctl["theme"][i][0]
+seg_img = lambda i: cell(i).itemcget(cell(i).i_bg, "image")
 i_on = next(i for i, (l, v) in enumerate(win.ctl["theme"]) if v == "system")
 i_off = next(i for i, (l, v) in enumerate(win.ctl["theme"]) if v == "dark")
 pix = lambda i, x, y: tuple(int(v) for v in root.tk.splitlist(root.tk.call(seg_img(i), "get", x, y)))
 h_seg = win.px(W.H_CTL)
-assert pix(i_on, win.ctl["theme"][i_on][0].winfo_width() // 2, h_seg // 2) == W.rgb(win.pal["ctl"])
-assert pix(i_off, win.ctl["theme"][i_off][0].winfo_width() // 2, h_seg // 2) == W.rgb(win.pal["ctl_press"])
-assert pix(i_off, win.ctl["theme"][i_off][0].winfo_width() // 2, 0) == W.rgb(win.pal["ctl_press"])   # no hairline
+assert isinstance(cell(0), tk.Canvas) and cell(0).i_icon is None and cell(0).itemcget(cell(0).i_text, "text") == "System"
+assert cell(i_on).winfo_width() == win.mf["body"].measure("System") + 2 * px_(12)
+assert pix(i_on, cell(i_on).winfo_width() // 2, h_seg // 2) == W.rgb(win.pal["ctl"])
+assert pix(i_off, cell(i_off).winfo_width() // 2, h_seg // 2) == W.rgb(win.pal["ctl_press"])
+assert pix(i_off, cell(i_off).winfo_width() // 2, 0) == W.rgb(win.pal["ctl_press"])   # no hairline
+assert pix(i_on, cell(i_on).winfo_width() // 2, h_seg - 1 - px_(W.R_IN)) == W.rgb(win.pal["stroke_edge"])   # the key's bottom edge
+assert pix(i_on, cell(i_on).winfo_width() // 2, px_(W.R_IN)) == W.rgb(win.pal["stroke"](win.pal["ctl"]))   # its hairline (light: no lit top)
+assert cell(i_on).itemcget(cell(i_on).i_text, "fill") == win.pal["ink"] and cell(i_off).itemcget(cell(i_off).i_text, "fill") == win.pal["muted"]
+# a field is the raised recipe with an UNDERLINE for its state - `stroke_field` 1 px at rest,
+# `ring` 2 px focused - and the 1 px `stroke(ctl)` outline in both; the icon field (the
+# History filter) carries its glyph in the same image and changes it with the state too
+fld = win.e_lang.master
+fpix = lambda y: tuple(int(v) for v in root.tk.splitlist(root.tk.call(fld.cget("image"), "get", fld.winfo_width() // 2, y)))
+assert fpix(h_seg - 1) == W.rgb(win.pal["stroke_field"]) and fpix(0) == W.rgb(win.pal["stroke"](win.pal["ctl"]))
+assert fpix(h_seg // 2) == W.rgb(win.pal["ctl"])
+img_idle = fld.cget("image")
+win.e_lang.focus_force()
+root.update()
+assert fpix(h_seg - 1) == fpix(h_seg - 2) == W.rgb(win.pal["ring"]) and fpix(0) == W.rgb(win.pal["stroke"](win.pal["ctl"]))
+win.e_days.focus_force()
+root.update()
+assert fld.cget("image") == img_idle
+f_idle = win.filter.master.cget("image")
+win.filter.master.paint("focus")
+assert win.filter.master.cget("image") != f_idle
+win.filter.master.paint()
+assert win.filter.master.cget("image") == f_idle
 
 # one right edge: every control column, the trigger row's button group and the header agree
 edge = lambda w: w.winfo_rootx() + w.winfo_width()
@@ -834,6 +861,34 @@ root.update()
 assert win.sel is hist.items[-1] and win.pstate == "empty"
 assert win.b_main.f.cget("text") == "Promptify" and len(primaries()) == 1
 assert win.b_eng.f.cget("text") == "Claude Code" and win.seg_host.winfo_ismapped() and win.head_rows == 2
+# the target segment says `>_ Code` / `globe Web` (icon + short word; the engine's name is
+# already in the control before it): canvas cells 12 + 16 + 6 + text + 12 wide, the icon in
+# the slice image, the text after it; `promptify.TARGETS` keeps the long labels
+tcell = lambda i: win.ctl["target"][i][0]
+assert [v for _, v in win.ctl["target"]] == [v for _, v in PF.TARGETS] == ["code", "chat"]
+assert [tcell(i).itemcget(tcell(i).i_text, "text") for i in range(2)] == ["Code", "Web"]
+assert tcell(0).winfo_width() == 2 * px_(12) + px_(16) + px_(6) + win.mf["body"].measure("Code")
+assert tcell(0).coords(tcell(0).i_text)[0] == px_(12) + px_(16) + px_(6) and tcell(0).itemcget(tcell(0).i_text, "anchor") == "w"
+tpix = lambda i, x, y: tuple(int(v) for v in root.tk.splitlist(root.tk.call(tcell(i).itemcget(tcell(i).i_bg, "image"), "get", x, y)))
+iy = (h_seg - px_(16)) // 2                                                # the icon box's top
+assert tpix(0, px_(12) + 10, iy + 12) == W.rgb(win.pal["ink"])            # the term glyph's underscore, ink (picked)
+eq = tpix(1, px_(12) + 8, iy + 8)                                          # the globe's equator (unpicked): muted over the track
+assert eq != W.rgb(win.pal["ctl_press"]) and all(min(a, b) <= v <= max(a, b) for v, a, b in zip(eq, W.rgb(win.pal["muted"]), W.rgb(win.pal["ctl_press"])))
+assert tpix(0, tcell(0).winfo_width() // 2, px_(W.R_IN)) == W.rgb(win.pal["stroke"](win.pal["ctl"]))   # the key's hairline
+assert tpix(0, tcell(0).winfo_width() // 2, h_seg - 1 - px_(W.R_IN)) == W.rgb(win.pal["stroke_edge"])   # ... and bottom edge
+# the chevron after the engine name opens the sheet like the name; it lights with the name
+assert win.eng_chev.master is win.b_eng.f.master and win.eng_chev.winfo_x() == win.b_eng.f.winfo_x() + win.b_eng.f.winfo_width() + px_(4)
+assert win.eng_chev.cget("image") == str(win.icon("chev", win.pal["muted"]))
+win.eng_chev.event_generate("<Enter>")
+root.update()
+assert win.eng_chev.cget("image") == str(win.icon("chev", win.pal["ink"])) and win.b_eng.state in ("blend", "hover")
+win.eng_chev.event_generate("<Leave>")
+root.update()
+assert win.eng_chev.cget("image") == str(win.icon("chev", win.pal["muted"])) and win.b_eng.state == "idle"
+win.b_eng.f.event_generate("<Enter>")
+assert win.eng_chev.cget("image") == str(win.icon("chev", win.pal["ink"]))
+win.b_eng.f.event_generate("<Leave>")
+assert win.eng_chev.cget("image") == str(win.icon("chev", win.pal["muted"]))
 # pick: nothing selected, no primary at all
 win._select(None)
 root.update()
@@ -873,12 +928,24 @@ F = win.p_fields
 assert F["text"].get("1.0", "end").strip() == "Do the thing." and len(F["answers"]) == 2
 assert win.sel["draft"]["prompts"] == ["Do the thing.", "Second ask."]
 assert win.b_main.f.cget("text") == "Copy prompt" and win.b_main.on and len(primaries()) == 1
-meta = [w.cget("text") for w in win.p_inner.winfo_children()[-2].winfo_children()]
+# the foot of the draft is one canvas: the "Drafted by" line as text items (the model id in
+# mono), Update prompt placed 8 under it with its `Ctrl` `↵` chord 8 after - all on E
+foot = win.p_foot
+assert foot is win.p_inner.winfo_children()[-1] and isinstance(foot, tk.Canvas)
+meta = [foot.itemcget(i, "text") for i in win.meta_items]
 assert meta == ["Drafted by Claude Code · ", "sonnet", " · 0 s"], meta
 root.update()
-mlabs = win.p_inner.winfo_children()[-2].winfo_children()
-assert Ep(mlabs[0], win.dpane) == px_(16) and all(bare(l) for l in mlabs)
-assert mlabs[1].winfo_x() == mlabs[0].winfo_x() + mlabs[0].winfo_width()   # no holes around the model id
+mx = lambda i: foot.coords(win.meta_items[i])[0]
+assert Ep(foot, win.dpane) + mx(0) == px_(16) and all(foot.itemcget(i, "anchor") == "w" for i in win.meta_items)
+assert mx(1) == mx(0) + win.mf["meta"].measure(meta[0]) and mx(2) == mx(1) + win.mf["mono9"].measure("sonnet")   # no holes around the model id
+assert "Cascadia" in foot.itemcget(win.meta_items[1], "font") and "Segoe" in foot.itemcget(win.meta_items[0], "font")
+lh_meta = win.mf["meta"].metrics("linespace")
+assert win.b_update.f.master is foot and (win.b_update.f.winfo_x(), win.b_update.f.winfo_y()) == (0, lh_meta + px_(8))
+assert Ep(win.b_update.f, win.dpane) + win.b_update.pad == px_(16)
+assert [foot.itemcget(i, "text") for i in win.caps_update] == ["Ctrl", "↵"]
+cap_imgs = [i for i in foot.find_withtag("caps") if foot.type(i) == "image"]
+assert foot.coords(cap_imgs[0])[0] == win.b_update.w + px_(8) and foot.coords(cap_imgs[0])[1] == lh_meta + px_(8) + px_(16)
+assert foot.winfo_height() == lh_meta + px_(8) + px_(32)
 q_l = F["chips"][0].master.winfo_children()[0]
 assert q_l.cget("text") == "How many?" and Ep(q_l, win.dpane) == px_(16) and bare(q_l)
 # the body's thumb lives in the pane's right padding: the prompt ends where the primary does
@@ -896,7 +963,8 @@ assert settle(lambda: win.head_rows == 2)
 # ... and re-decided the moment the engine name changes, with no resize to prompt it: a window
 # that holds Codex's header on one row but not Claude Code's (the parts are measured, not the
 # frame's idle-time aggregate)
-need = lambda: (win.eng_dot.winfo_reqwidth() + win.b_eng.w + 2 * px_(12) + win.seg.winfo_reqwidth() + win.b_main.w)
+need = lambda: (win.eng_dot.winfo_reqwidth() + win.b_eng.w + px_(4) + win.eng_chev.winfo_reqwidth() + 2 * px_(12)
+                + win.seg.winfo_reqwidth() + win.b_main.w)
 cfg["prompt_engine"], STATUS["codex"] = "codex", ("connected", "ChatGPT")
 win._eng_cache.clear()                                # the fake changed under the cache
 win._refresh_engine()
@@ -919,6 +987,17 @@ STATUS.pop("codex")
 win._eng_cache.clear()                                # the fake changed under the cache
 win.win.geometry(f"{win.px(780)}x{win.px(560)}")
 assert settle(lambda: win.head_rows == 2)
+# at 600 wide the engine name and the primary cannot share the row: the name ellipsizes to
+# what is left beside the primary (the full name kept in `eng_label`), the segment on row 2;
+# back at 780 the full name returns
+win.win.geometry(f"{win.px(600)}x{win.px(400)}")
+assert settle(lambda: win.dpane.winfo_width() < px_(300) and win.b_eng.f.cget("text").endswith("…"))
+assert win.eng_label == "Claude Code" and win.head_rows == 2 and win.seg_host.grid_info()["row"] == 1
+eng_w = win.eng_dot.winfo_reqwidth() + px_(4) + win.eng_chev.winfo_reqwidth() + win.b_eng.w
+assert eng_w + px_(12) + win.b_main.w <= win.dpane.winfo_width() - 2 * px_(16)
+assert edge(win.b_main.f) == edge(win.dpane) - px_(16)
+win.win.geometry(f"{win.px(780)}x{win.px(560)}")
+assert settle(lambda: win.b_eng.f.cget("text") == "Claude Code" and win.head_rows == 2)
 # chips: a chip fills its answer and is the chosen one; typing something else un-chooses it;
 # the strip is ONE tab stop with a cursor
 strip, a0 = F["chips"][0], F["answers"][0]
@@ -1056,10 +1135,53 @@ win.promptify()
 root.update()
 assert win.pstate == "drafting" and not win.b_main.on and win.b_main.f.cget("text") == "Promptify"
 assert win.l_draft.cget("text").startswith("Drafting with Claude Code · ") and win.b_cancel.f.winfo_ismapped()
+# the track and the three skeleton bars come only after 300 ms (a fast draft never flashes
+# them), above the line on E: bars at 1.0 / .85 / .60 of the prompt's measure, the 64 px
+# `ring` bar running along the 2 px track (`jobs["track"]`, 16 ms steps)
+assert "skel" in win.jobs and "track" not in win.jobs and not win.track.winfo_ismapped()
+assert not any(l.winfo_ismapped() for l in win.skel)
+assert settle(lambda: win.track.winfo_ismapped())
+assert "skel" not in win.jobs and "track" in win.jobs and win.skel_at is not None
+assert all(l.winfo_ismapped() for l in win.skel) and len(win.skel) == 3
+ws = [int(root.tk.call("image", "width", l.cget("image"))) for l in win.skel]
+sk_w = min(win.measure, win.p_inner.winfo_width() - 2 * px_(16))
+assert ws == [round(sk_w * k) for k in (1.0, .85, .60)] and win.skel[0].winfo_height() == px_(12)
+assert Ep(win.track, win.dpane) == Ep(win.skel[0], win.dpane) == px_(16) and win.track.winfo_height() == px_(2)
+assert win.skel[0].winfo_y() == win.track.winfo_y() + px_(2) + px_(12) and win.l_draft.master.winfo_y() == win.skel[2].winfo_y() + px_(12) + px_(16)
+x0 = win.track.coords(win.track.bar)[0]
+assert settle(lambda: win.track.coords(win.track.bar)[0] != x0, n=10)   # it moves
+assert win.track.itemcget(win.track.bar, "fill") == win.pal["ring"]
 win._escape()
 root.update()
 assert win.pstate == "empty" and win.b_main.on and win.drafting is None and "tick" not in win.jobs
+assert "skel" not in win.jobs and "track" not in win.jobs and win.skel_at is None
 assert settle(lambda: not win.draft_thread.is_alive())      # the worker saw the flag and left
+# reduced motion: the skeleton still comes, the bar sits still at the track's start
+win.motion = False
+win.promptify()
+assert settle(lambda: win.track.winfo_ismapped())
+assert "track" not in win.jobs and win.track.coords(win.track.bar)[0] == 0
+win._escape()
+win.motion = True
+assert settle(lambda: not win.draft_thread.is_alive())
+# a draft that lands while the skeleton has shown < 300 ms waits the rest (`_after_skel`), a
+# frame of bars would read as a glitch; none showing, or reduced motion, it lands at once
+held = []
+win.skel_at = _time.monotonic()
+win._after_skel(lambda: held.append(1))
+assert not held and "skel_hold" in win.jobs
+assert settle(lambda: held == [1]) and "skel_hold" not in win.jobs
+win.skel_at = _time.monotonic()
+win._after_skel(lambda: held.append(2))
+assert held == [1] and "skel_hold" in win.jobs
+win.motion = False
+win._after_skel(lambda: held.append(3))                     # reduced motion: no hold
+assert held[-1] == 3
+win.motion = True
+win.skel_at = None
+win._after_skel(lambda: held.append(4))                     # nothing showing: no hold
+assert held[-1] == 4 and settle(lambda: 2 in held)
+win.jobs.pop("skel_hold", None)
 # an engine that cannot run: the no-engine state, no call
 PF.available = lambda c: (False, "Claude Code is not connected")
 n_calls = len(calls)
@@ -1080,6 +1202,9 @@ assert win.b_main.f.cget("text") == "Try again" and win.eng_err["claude"].starts
 assert win.b_eng.f.cget("text") == "Claude Code" and win.eng_dot.cget("image") == str(win.dot(8, 6, win.pal["danger"]))
 labels = [w.cget("text") for w in win.p_inner.winfo_children() if isinstance(w, tk.Label)]
 assert labels[0] == "Couldn’t draft — Codex hit its usage limit (resets 14:00)" and labels[1].startswith("Pick another engine")
+# ... the second line is an action, a text button that opens the sheet, on E like the line
+assert win.b_pick.kind == "text" and win.b_pick.cmd == win._open_sheet and win.b_pick.f.master is win.p_inner
+assert Ep(win.b_pick.f, win.dpane) + win.b_pick.pad == px_(16)
 PF.draft = fake_draft
 win._retry()
 assert win.pstate == "drafting" and not win.b_main.on and win.b_main.f.cget("text") == "Try again"   # stays, faded
@@ -1142,6 +1267,14 @@ c.chosen(True)
 assert c.w == w1 + win.px(12) and c.f.itemcget(c.i_dot, "state") == "normal"
 c.chosen(False)
 assert c.w == w1 and c.f.itemcget(c.i_dot, "state") == "hidden"
+# an icon chip (a Context note): the dot's slot shows the 14 px glyph always, the text 20
+# after it, and chosen() does nothing to it
+ci = W._Chip(win, fr, "an option", lambda: None, icon="note")
+assert ci.w == w1 + win.px(14) + win.px(6) and ci.f.itemcget(ci.i_dot, "state") == "normal"
+assert ci.f.itemcget(ci.i_dot, "image") == str(win.icon("note", win.pal["ink"], 14)) and win.icon("note", win.pal["ink"], 14).width() == px_(14)
+assert ci.f.coords(ci.i_text)[0] == ci.pad + px_(14) + px_(6) and ci.f.coords(ci.i_dot)[0] == px_(7)
+ci.chosen(True)
+assert ci.w == w1 + win.px(14) + win.px(6) and not ci.is_chosen
 win.primaries.remove(b)
 fr.destroy()
 print("promptify view ok")
@@ -1314,7 +1447,16 @@ d_["vault_ctx"] = "<vault_context>ctx</vault_context>"
 win._show("draft")
 root.update()
 labels = [w2 for w in win.p_inner.winfo_children() for w2 in ([w] + list(w.winfo_children()))]
-assert any(isinstance(w, tk.Label) and w.cget("text") == "Context ·" for w in labels)
+ctx = next(w for w in labels if isinstance(w, tk.Label) and w.cget("text") == "Context ·")
+# ... as note chips (icon + title) 8 after the label, each opening its note
+chips_c = win.p_fields["context"]
+assert [c.label for c in chips_c] == ["x"] and all(c.icon == "note" and c.f.master is ctx.master for c in chips_c)
+assert chips_c[0].f.winfo_x() == ctx.winfo_x() + ctx.winfo_width() + px_(8) and chips_c[0].h == px_(24)
+opened = []
+win._open_note = lambda path: opened.append(path)
+chips_c[0].cmd()
+assert opened == ["1-Projects/x/README.md"]
+del win._open_note
 win.p_fields["answers"][0].set("five")
 win._update()
 for _ in range(100):

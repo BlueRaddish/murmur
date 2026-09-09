@@ -721,10 +721,12 @@ class _Chip(_Btn):
     """A question's option: a 24 px pill on the accent tint. The CHOSEN chip - the one whose
     text is the answer - carries a 6 px primary dot before its text, so a chip is a Canvas: a
     compound Label centres its text over the image and cannot start it after a dot. Chips are
-    not tab stops; their strip is (`_chips`), and the ring goes on the one under its cursor."""
+    not tab stops; their strip is (`_chips`), and the ring goes on the one under its cursor.
+    With `icon` (a glyph name, drawn at 14 px in the text's colour) the dot's slot shows the
+    icon instead, always - a Context note chip - and `chosen()` does nothing to it."""
 
-    def __init__(self, ui, parent, text, cmd):
-        self.label, self.is_chosen = text, False
+    def __init__(self, ui, parent, text, cmd, icon=None):
+        self.label, self.is_chosen, self.icon = text, False, icon
         super().__init__(ui, parent, text, cmd, kind="chip")
 
     def _widget(self, parent, text, font) -> tk.Widget:
@@ -735,17 +737,23 @@ class _Chip(_Btn):
         self.i_text = c.create_text(self.pad, self.h // 2, anchor="w", text=text, font=font)
         return c
 
+    def _lead(self) -> int:
+        """What sits before the text: an icon 14 + gap 6, the chosen dot 6 + gap 6, or nothing."""
+        return self.ui.px(14) + self.ui.px(6) if self.icon else self.ui.px(SP[2]) if self.is_chosen else 0
+
     def _size(self) -> None:
-        self.w = (self.ui.mf["body"].measure(self.label) + 2 * self.pad
-                  + (self.ui.px(SP[2]) if self.is_chosen else 0))   # dot 6 + gap 6 before the text
+        self.w = self.ui.mf["body"].measure(self.label) + 2 * self.pad + self._lead()
 
     def _draw(self, img, fg) -> None:
         c = self.f
         c.configure(width=self.w, height=self.h)
         c.itemconfigure(self.i_pill, image=img)
         c.itemconfigure(self.i_text, fill=fg)
-        c.coords(self.i_text, self.pad + (self.ui.px(SP[2]) if self.is_chosen else 0), self.h // 2)
-        c.itemconfigure(self.i_dot, state="normal" if self.is_chosen else "hidden")
+        c.coords(self.i_text, self.pad + self._lead(), self.h // 2)
+        if self.icon:
+            c.itemconfigure(self.i_dot, state="normal", image=self.ui.icon(self.icon, fg, 14))
+        else:
+            c.itemconfigure(self.i_dot, state="normal" if self.is_chosen else "hidden")
 
     def text(self, s, hold=True) -> None:
         self.label = s
@@ -754,6 +762,8 @@ class _Chip(_Btn):
         self._paint()
 
     def chosen(self, on) -> None:
+        if self.icon:
+            return
         if on != self.is_chosen:
             self.is_chosen = bool(on)
             self.fill = self.ui.pal["tint_hover" if on else "tint"]
@@ -1102,6 +1112,7 @@ class AppWindow:
         self.undo = None          # (index, item) while the undo offer stands
         self.drafting = None      # the item a draft is being written for, while the worker runs
         self.draft_item = None    # ... the last one (kept name)
+        self.skel_at = None       # when the drafting skeleton appeared (a landed draft waits its 300 ms)
         self.last_call = None     # (item, prompts, questions, answers) of the last draft: Try again
         self.p_item = None        # the item the Promptify detail pane shows
         self.p_memo = None        # what the pane was last built for: go() skips a rebuild
@@ -2287,22 +2298,24 @@ class AppWindow:
         A Canvas + create_window would look identical and be wrong: Tk unmaps a canvas's window
         items while the canvas is scrolled out of sight, so a field below the fold would drop
         out of the tab ring until someone scrolled to it."""
-        ground, r = parent["bg"], r or self.px(R_CTL)
-        fill = self.pal["ctl"]
+        p, ground, r = self.pal, parent["bg"], r or self.px(R_CTL)
+        fill, border = p["ctl"], p["stroke"](p["ctl"])
         box = tk.Label(parent, bd=0, highlightthickness=0, bg=ground, padx=0, pady=0)
 
-        def face(border, bw):
+        # the Fluent TextBox: the raised recipe's outline stays 1 px in every state, and the
+        # UNDERLINE between the arcs is the cue - `stroke_field` 1 px at rest (a field, not a
+        # button, at a squint), `ring` 2 px focused, `danger` 2 px in error
+        def face(under):
             if not icon:
-                return self.rr(w, h, r, fill, ground, border, bw)
+                return self.rr(w, h, r, fill, ground, border, 1, under=under)
             ic = self.px(ICON)
-            return self.img(("field", w, h, r, fill, ground, border, bw, icon), lambda: compose_png(
-                w, h, [(0, 0, rr_png(w, h, r, fill, border, bw, ground)),
-                       (self.px(SP[1]), (h - ic) // 2, icon_png(icon, self.pal["muted"], ic))]))
+            return self.img(("field", w, h, r, fill, ground, border, icon, under), lambda: compose_png(
+                w, h, [(0, 0, rr_png(w, h, r, fill, border, 1, ground, under=under)),
+                       (self.px(SP[1]), (h - ic) // 2, icon_png(icon, p["muted"], ic))]))
 
         def paint(state="idle"):
-            border = {"idle": self.pal["stroke_field"], "focus": self.pal["ring"],
-                      "error": self.pal["danger"]}[state]
-            box.configure(image=face(border, 1 if state == "idle" else self.px(2)))
+            box.configure(image=face({"idle": (p["stroke_field"], 1), "focus": (p["ring"], self.px(2)),
+                                      "error": (p["danger"], self.px(2))}[state]))
         box.paint, box.fill = paint, fill
         x = self.px(SP[1]) + self.px(ICON) + self.px(SP[1]) if icon else r
         box.slot = lambda child: child.place(x=x, y=1, relwidth=1.0, width=-(x + r),
@@ -2364,38 +2377,59 @@ class AppWindow:
         c.bind("<FocusOut>", lambda e: box.paint())
         c.bind("<<ComboboxSelected>>", lambda e: (commit(), restart and row.restart(), c.selection_clear()))
 
-    def _segment(self, parent, key, options, value, on_pick) -> None:
-        """One rounded container - a `ctl_press` track, no hairline - with the picked option as an
-        inner `ctl` pill. Each option is a Label carrying its own SLICE of that one
-        rendered container (see `segment_png`), so the group is still one control and one tab
-        stop - the container takes focus (a 2 px `ring` on the track's edge, as a field's) and
-        Left/Right move between the options. No separators: with one option always filled they
-        would never be seen anyway."""
+    def _segment(self, parent, key, options, value, on_pick, icons=None) -> None:
+        """One rounded container - a `ctl_press` track, no hairline - with the picked option as
+        the raised key (`ctl`, its hairline and elevation edge: the one cell that is "up") and
+        the hovered one an inset pill. Each option is a Canvas carrying its own SLICE of that
+        one rendered container (see `segment_png`) as `.i_bg`, its label as `.i_text` and, with
+        `icons` ({value: glyph}), a 16 px icon before the label - so the group is still one
+        control and one tab stop: the container takes focus (a 2 px `ring` on the track's edge,
+        as a field's) and Left/Right move between the options. No separators: with one option
+        always filled they would never be seen anyway.
+
+        The icon is composed INTO the slice image (`.i_icon` is None): a partial-alpha image
+        item costs the canvas a read-back blend on every paint, and this control repaints on
+        every Promptify switch. Cell width 12 + [16 + 6] + text + 12."""
         p, ground = self.pal, parent["bg"]
+        icons = icons or {}
         f = tk.Frame(parent, bg=ground, height=self.px(H_CTL), highlightthickness=0, takefocus=1)
         f.pack(side="right")
         f.pack_propagate(False)
-        h, r = self.px(H_CTL), self.px(R_CTL)
-        ws = tuple(self.mf["body"].measure(t) + 2 * self.px(SP[2]) for t, _ in options)
+        h, r, pad, ic, gap = self.px(H_CTL), self.px(R_CTL), self.px(SP[2]), self.px(ICON), self.px(6)
+        ws = tuple(2 * pad + (ic + gap if v in icons else 0) + self.mf["body"].measure(t) for t, v in options)
         cells, focus, hover = [], [False], [None]
         for i, (text, val) in enumerate(options):
-            l = tk.Label(f, text=text, font=self.F["body"], cursor="hand2", bd=0, bg=ground,
-                         compound="center", highlightthickness=0, fg=p["muted"], padx=0, pady=0)
-            l.pack(side="left")
-            cells.append((l, val))
+            c = tk.Canvas(f, width=ws[i], height=h, bg=ground, highlightthickness=0, bd=0, cursor="hand2")
+            c.pack(side="left")
+            c.i_bg = c.create_image(0, 0, anchor="nw")
+            c.i_icon = None
+            c.i_text = (c.create_text(pad + ic + gap, h // 2, anchor="w", text=text, font=self.F["body"])
+                        if val in icons else
+                        c.create_text(ws[i] // 2, h // 2, text=text, font=self.F["body"]))
+            cells.append((c, val))
         f.configure(width=sum(ws))
+        key_up = (p["ctl"], p["stroke"](p["ctl"]), p["stroke_edge"], p["stroke_top"])
+        # the hovered cell in dark stays darker than the key's lit top, so the key still reads
+        # as the one that is up
+        hov_fill = mix(p["ctl_press"], "#ffffff", .03) if self.dark else p["ctl_hover"]
+
+        def slice_(i, fills, border, bw, icon, fg):
+            png = lambda: segment_png(ws, h, r, i, fills, ground, p["ctl_press"], border, bw, self.px(R_IN))
+            if not icon:
+                return self.img(("seg", ws, i, fills, ground, border, bw), png)
+            return self.img(("seg", ws, i, fills, ground, border, bw, icon, fg), lambda: compose_png(
+                ws[i], h, [(0, 0, png()), (pad, (h - ic) // 2, icon_png(icon, fg, ic))]))
 
         def paint():
-            fills = tuple(p["ctl"] if v == value[0] else
-                          p["ctl_hover"] if i == hover[0] else None for i, (_, v) in enumerate(cells))
+            fills = tuple(key_up if v == value[0] else
+                          hov_fill if i == hover[0] else None for i, (_, v) in enumerate(cells))
             ringed = focus[0] and self.kbd            # focus-visible: keyboard focus only
             border = p["ring"] if ringed else p["ctl_press"]      # idle: the track's own colour
             bw = self.px(2) if ringed else 1
-            for i, (l, val) in enumerate(cells):
-                l.configure(fg=p["ink"] if val == value[0] else p["muted"],
-                            image=self.img(("seg", ws, i, fills, ground, border, bw),
-                                           lambda i=i, fills=fills: segment_png(
-                                               ws, h, r, i, fills, ground, p["ctl_press"], border, bw)))
+            for i, (c, val) in enumerate(cells):
+                fg = p["ink"] if val == value[0] else p["muted"]
+                c.itemconfigure(c.i_text, fill=fg)
+                c.itemconfigure(c.i_bg, image=slice_(i, fills, border, bw, icons.get(val), fg))
 
         value = [value]
         f.set = lambda v: (value.__setitem__(0, v), paint())   # set from outside, silently
@@ -2410,10 +2444,10 @@ class AppWindow:
             hover[0] = i
             paint()
 
-        for i, (l, val) in enumerate(cells):
-            l.bind("<Enter>", lambda e, i=i: hov(i))
-            l.bind("<Leave>", lambda e: hov(None))
-            l.bind("<Button-1>", lambda e, v=val: (setattr(self, "kbd", False), pick(v)))
+        for i, (c, val) in enumerate(cells):
+            c.bind("<Enter>", lambda e, i=i: hov(i))
+            c.bind("<Leave>", lambda e: hov(None))
+            c.bind("<Button-1>", lambda e, v=val: (setattr(self, "kbd", False), pick(v)))
         step = lambda d: (setattr(self, "kbd", True),
                           pick(cells[(next(i for i, c in enumerate(cells) if c[1] == value[0])
                                       + d) % len(cells)][1]))
@@ -2740,10 +2774,26 @@ class AppWindow:
         # the name's own 8 px pad is the gap after the dot
         self.b_eng = _Btn(self, eng, "Claude Code", self._open_sheet, kind="text", ink=True)
         self.b_eng.f.pack(side="left")
+        self.eng_label = "Claude Code"       # the full name; `_layout_head` may show it shorter
+        # a chevron after the name says the control opens something (the sheet); it lights with
+        # the name - the two are one control under the pointer
+        self.eng_chev = tk.Label(eng, image=self.icon("chev", p["muted"]), bg=p["layer"], bd=0,
+                                 padx=0, pady=0, cursor="hand2")
+        self.eng_chev.pack(side="left", padx=(self.px(SP[0]), 0))
+        chev = lambda on: self.eng_chev.configure(image=self.icon("chev", p["ink" if on else "muted"]))
+        self.eng_chev.bind("<Button-1>", lambda e: self._open_sheet())
+        self.eng_chev.bind("<Enter>", lambda e: (chev(True), self.b_eng._set("hover")))
+        self.eng_chev.bind("<Leave>", lambda e: (chev(False), self.b_eng._set("idle")))
+        self.b_eng.f.bind("<Enter>", lambda e: chev(True), add="+")
+        self.b_eng.f.bind("<Leave>", lambda e: chev(False), add="+")
         self.seg_host = tk.Frame(head, bg=p["layer"])
         self.p_target = [self.cfg.get("prompt_target") or "code"]
-        self.seg = self._segment(self.seg_host, "target", list(promptify.TARGETS), self.p_target[0],
-                                 self._set_target)
+        # the target as an icon and a short word (`>_ Code`, `globe Web`): the engine's name is
+        # already in the control before it; `promptify.TARGETS` keeps the long labels for the
+        # prompt's own text
+        self.seg = self._segment(self.seg_host, "target", [(TARGET_UI[v][1], v) for _, v in promptify.TARGETS],
+                                 self.p_target[0], self._set_target,
+                                 icons={v: TARGET_UI[v][0] for _, v in promptify.TARGETS})
         self.b_main = _Btn(self, head, "Promptify", self.promptify, kind="primary")
         self.b_main.f.grid(row=0, column=3, sticky="e")
         self.head_rows, self.main_shown = 0, True
@@ -2809,7 +2859,14 @@ class AppWindow:
         # the parts, not their frames: a Label's request is known at once, a frame's aggregate
         # only after Tk's next idle pass - and no <Configure> follows a re-labelled engine name
         # to make good a decision taken on the stale one
-        need = (self.eng_dot.winfo_reqwidth() + self.b_eng.w + 2 * self.px(SP[2])
+        eng = self.eng_dot.winfo_reqwidth() + self.px(SP[0]) + self.eng_chev.winfo_reqwidth()
+        # when even the engine control and the primary cannot share the row (a 600 px window),
+        # the name gives way: ellipsized to what is left beside the primary
+        room = w - 2 * self.px(SP[3]) - eng - self.px(SP[2]) - self.b_main.w - 2 * self.b_eng.pad
+        label = ellipsize(self.mf["body"], self.eng_label, room)
+        if self.b_eng.f.cget("text") != label:
+            self.b_eng.text(label, hold=False)
+        need = (eng + self.b_eng.w + 2 * self.px(SP[2])
                 + self.seg.winfo_reqwidth() + self.b_main.w)        # counted even while hidden
         rows = 1 if need <= w - 2 * self.px(SP[3]) else 2
         if rows != self.head_rows:
@@ -2910,10 +2967,15 @@ class AppWindow:
         col = p["danger"] if self.pstate == "error" else p["ring"] if est == "connected" else None
         self.eng_dot.configure(image=self.dot(8, 6, col) if col else
                                self.dot(8, 6, p["layer"], edge=p["stroke_field"]))
-        self.b_eng.text(spec["label"] if named else "No engine", hold=False)
+        self.eng_label = spec["label"] if named else "No engine"
+        self.b_eng.text(self.eng_label, hold=False)
         self.b_eng.mute(not named)
+        self.eng_chev.configure(image=self.icon("chev", p["muted"]))   # rest: muted, named or not
 
     def _clear_body(self) -> None:
+        for key in ("skel", "track"):            # the drafting body's pending skeleton / its loop
+            self._cancel(key)
+        self.skel_at = None
         for w in self.p_inner.winfo_children():
             w.destroy()
         self.p_inner.unbind("<Configure>")       # the wrap bindings of the labels just destroyed
@@ -2953,20 +3015,79 @@ class AppWindow:
     def _body_error(self, it) -> None:
         msg = self.p_err[1] if self.p_err else "the engine did not answer."
         self._line(self.p_inner, f"Couldn’t draft — {msg}", "body")
-        self._line(self.p_inner, "Pick another engine above, or try again.", "meta",
-                   pady=(self.px(SP[0]), 0))
+        # the way out is an action, not advice: the sheet, one click away (Try again is the
+        # primary in the header)
+        self.b_pick = _Btn(self, self.p_inner, "Pick another engine", self._open_sheet, kind="text")
+        self.b_pick.f.pack(anchor="w", padx=(self.px(SP[3]) - self.px(SP[1]), 0), pady=(self.px(SP[0]), 0))
 
     def _body_drafting(self, it) -> None:
-        """ONE line: the engine and the seconds (the ticker in `_run_draft` keeps them going),
-        and Cancel. Header and list do not move."""
-        p, label = self.pal, promptify.engine_spec(self.cfg)["label"]
-        row = tk.Frame(self.p_inner, bg=p["layer"])
-        row.pack(fill="x", padx=self.px(SP[3]))
+        """A 2 px track with a 64 px `ring` bar running along it and three skeleton bars where
+        the prompt will be, then the line - the engine and the seconds (the ticker in
+        `_run_draft` keeps them going) - and Cancel, all on one left edge. The track and the
+        skeleton appear only after 300 ms (`jobs["skel"]`): a draft that lands sooner never
+        flashes them, and once shown they stay >= 300 ms (`_after_skel`). Header and list do
+        not move."""
+        p, px, pad, label = self.pal, self.px, self.px(SP[3]), promptify.engine_spec(self.cfg)["label"]
+        inner = self.p_inner
+        self.track = tk.Canvas(inner, height=px(2), bg=p["layer"], highlightthickness=0, bd=0, width=1)
+        self.track.bar = self.track.create_rectangle(0, 0, px(64), px(2), fill=p["ring"], outline="")
+        # the bars are as wide as the prompt's measure (or the pane), re-rendered only when
+        # that width changes - the `hl` pattern
+        self.skel = [tk.Label(inner, bg=p["layer"], bd=0, padx=0, pady=0) for _ in range(3)]
+
+        def fit(e=None):
+            w = min(self.measure, inner.winfo_width() - 2 * pad)
+            if w > 1 and w != getattr(self, "skel_w", None):
+                self.skel_w = w
+                for l, k in zip(self.skel, (1.0, .85, .60)):
+                    l.configure(image=self.rr(round(w * k), px(SP[2]), px(SP[0]), p["sub"](p["layer"]), p["layer"]))
+        self.skel_w = None
+        inner.bind("<Configure>", fit, add="+")
+        fit()
+        row = tk.Frame(inner, bg=p["layer"])
+        row.pack(fill="x", padx=pad)
         self.l_draft = tk.Label(row, text=f"Drafting with {label} · 0 s", font=self.F["body"],
                                 fg=p["muted"], bg=p["layer"], bd=0, padx=0, pady=0)
         self.l_draft.pack(side="left")
         self.b_cancel = _Btn(self, row, "Cancel", self._cancel_draft, kind="text")
-        self.b_cancel.f.pack(side="left", padx=(self.px(SP[2]) - self.px(SP[1]), 0))
+        self.b_cancel.f.pack(side="left", padx=(px(SP[2]) - px(SP[1]), 0))
+        self.skel_at = None
+        self.jobs["skel"] = self.win.after(300, lambda: self._skel_show(row))
+
+    def _skel_show(self, row) -> None:
+        """300 ms in: the track and the skeleton bars above the line, and the bar's run."""
+        self.jobs.pop("skel", None)
+        if not row.winfo_exists():
+            return
+        pad = self.px(SP[3])
+        self.track.pack(fill="x", padx=pad, before=row)
+        for l in self.skel:
+            l.pack(anchor="w", padx=pad, pady=(self.px(SP[2]), 0), before=row)
+        row.pack_configure(pady=(pad, 0))
+        self.skel_at = time.monotonic()
+        if self.motion:
+            self._track_step(0)
+
+    def _track_step(self, i) -> None:
+        """One of 75 `coords` steps 16 ms apart: the 64 px bar crosses the track and wraps -
+        a linear 1.2 s loop (`jobs["track"]`)."""
+        c = self.track
+        if not c.winfo_exists():
+            return
+        w, b = c.winfo_width(), self.px(64)
+        x = -b + (w + b) * i / 75
+        c.coords(c.bar, x, 0, x + b, self.px(2))
+        self.jobs["track"] = self.win.after(16, lambda: self._track_step((i + 1) % 75))
+
+    def _after_skel(self, fn) -> None:
+        """Run `fn` (the body swap a landed draft wants) now - or, when the skeleton has shown
+        for less than 300 ms, after the rest of it: bars that flash for a frame read as a
+        glitch, a beat reads as work done."""
+        left = .3 - (time.monotonic() - self.skel_at) if self.skel_at else 0
+        if left > 0 and self.motion:
+            self.jobs["skel_hold"] = self.win.after(int(left * 1000), lambda: (self.jobs.pop("skel_hold", None), fn()))
+        else:
+            fn()
 
     def _body_draft(self, it) -> None:
         """The draft: the dictation folded behind "Original ›" (the work was made FROM it), the
@@ -2992,20 +3113,29 @@ class AppWindow:
                                bg=p["layer"], anchor="w", justify="left", bd=0, padx=0, pady=0)
         self._wrap(self.l_orig, 2 * pad)
         F["text"] = t = self._textbox(inner, F["prompts"][0], (4, 200))
+        # the document: a 1 px `divider` rule above and below the prompt, from E to the right
+        # edge. The rules are the host's own ground showing 1 px past the Text (whose 8 px of
+        # inner pady keep the lines off the letters); the ring bar spans them at E - 2, so at
+        # rest each rule starts on E. Two hairline Frames would draw the same and cost the
+        # Promptify switch two HWNDs.
+        t.host.configure(bg=p["divider"](p["layer"]))
+        t.configure(pady=px(SP[1]))
+        t.pack_configure(pady=1)
         t.host.pack(fill="x", padx=(pad - px(2), pad), pady=(px(SP[1]), 0))   # the ring bar before E
         if d.get("notes"):
             self._line(inner, "Notes · " + d["notes"], "meta", pady=(px(SP[2]), 0))
         vn = d.get("vault_notes") or []
         if vn:
-            # the notes the engine saw, clickable into Obsidian
+            # the notes the engine saw, as note chips 8 apart, clickable into Obsidian
             crow = tk.Frame(inner, bg=p["layer"])
             crow.pack(anchor="w", padx=pad, pady=(px(SP[0]), 0))
             tk.Label(crow, text="Context ·", font=self.F["meta"], fg=p["muted"], bg=p["layer"],
                      bd=0, padx=0, pady=0).pack(side="left")
-            for n in vn[:3]:
-                self.link(crow, n.get("title") or n.get("path", ""),
-                          lambda path=n.get("path", ""): self._open_note(path)).pack(
-                    side="left", padx=(self.px(SP[1]), 0))
+            F["context"] = [_Chip(self, crow, n.get("title") or n.get("path", ""),
+                                  lambda path=n.get("path", ""): self._open_note(path), icon="note")
+                            for n in vn[:3]]
+            for c in F["context"]:
+                c.f.pack(side="left", padx=(px(SP[1]), 0))
         qs = F["questions"]
         self.hairline(inner).pack(fill="x", padx=pad, pady=(px(SP[4]), 0))
         self._line(inner, f"Questions · {len(qs)}" if qs else
@@ -3033,15 +3163,26 @@ class AppWindow:
             F["answers"].append(a)
             F["chips"].append(strip)
             self._assume(blk, arow, a)     # packs the button, then the expanding field
-        meta = tk.Frame(inner, bg=p["layer"])
-        meta.pack(anchor="w", padx=pad, pady=(px(SP[4]), 0))
+        # the foot: the "Drafted by" meta line (its model id in mono), 8 under it Update prompt
+        # with its chord `Ctrl` `↵` 8 after (so the footer need not list it). ONE canvas - the
+        # texts and the caps are items, the button is placed on it (the History action row's
+        # pattern): a Frame of four Labels is an HWND each, and a raise-based switch pays
+        # ~0.3 ms per HWND in the raised view
+        lh = self.mf["meta"].metrics("linespace")
+        foot = self.p_foot = tk.Canvas(inner, bg=p["layer"], highlightthickness=0, bd=0, width=1,
+                                       height=lh + px(SP[1]) + px(H_CTL))
+        foot.pack(fill="x", padx=(pad - px(SP[1]), 0), pady=(px(SP[4]), 0))
         label = promptify.ENGINES.get(d.get("engine"), {}).get("label", d.get("engine", ""))
+        x, self.meta_items = px(SP[1]), []           # the button's own 8 px pad puts both on E
         for text, font in ((f"Drafted by {label} · ", "meta"), (d.get("model") or "", "mono9"),
                            (f" · {d.get('wall', 0):.0f} s", "meta")):
-            tk.Label(meta, text=text, font=self.F[font], fg=p["muted"], bg=p["layer"], bd=0, padx=0,
-                     pady=0).pack(side="left")
-        self.b_update = _Btn(self, inner, "Update prompt", self._update, kind="text")
-        self.b_update.f.pack(anchor="w", padx=(pad - px(SP[1]), 0), pady=(px(SP[1]), 0))
+            self.meta_items.append(foot.create_text(x, lh // 2, anchor="w", text=text, font=self.F[font],
+                                                    fill=p["muted"]))
+            x += self.mf[font].measure(text)
+        self.b_update = _Btn(self, foot, "Update prompt", self._update, kind="text")
+        self.b_update.f.place(x=0, y=lh + px(SP[1]))
+        self.caps_update = self._chord_items(foot, self.b_update.w + px(SP[1]), lh + px(SP[1]) + px(H_CTL) // 2,
+                                             ("Ctrl", "↵"), ("cap", "caps", "update"), ("caps",))[1]
 
     def _toggle_orig(self) -> None:
         self.orig_open = not self.orig_open
@@ -3341,6 +3482,8 @@ class AppWindow:
         job = self.jobs.pop("tick", None)
         if job:
             self.win.after_cancel(job)
+        for key in ("skel", "track"):        # a skeleton still due, or the bar's run
+            self._cancel(key)
         self.drafting = None
 
     def _cancel_draft(self) -> None:
@@ -3356,8 +3499,8 @@ class AppWindow:
         self._stop_draft()
         self.eng_err[promptify.engine_spec(self.cfg)["key"]] = msg
         self.p_err = (it, msg)
-        if self.view == "promptify" and self.sel is it:
-            self._show("error")
+        # the swap waits out a skeleton shown < 300 ms; by then the pane may show another row
+        self._after_skel(lambda: self.view == "promptify" and self.sel is it and self._show("error"))
 
     def _draft_done(self, it, res) -> None:
         if not (self.win and self.win.winfo_exists()):
@@ -3368,9 +3511,12 @@ class AppWindow:
         self.eng_err.pop(res.get("engine"), None)
         self.list.draw()                    # the dot
         self.plist.draw()
-        if self.view == "promptify" and self.sel is it:
-            self._show("draft")
-            self.b_main.f.focus_set()       # ... which now says Copy prompt
+
+        def show():                         # after a skeleton's 300 ms, if one is showing
+            if self.view == "promptify" and self.sel is it:
+                self._show("draft")
+                self.b_main.f.focus_set()   # ... which now says Copy prompt
+        self._after_skel(show)
 
     def _retry(self) -> None:
         """Try again: the same call that failed - and the engine's failure marker goes first."""
