@@ -716,11 +716,17 @@ dots, mid = win.ctl["color"]["dots"], px_(22) // 2
 assert all(d.winfo_width() == px_(22) == d.winfo_height() for d in dots)
 assert ipx(dots[3].cget("image"), mid, mid) == W.rgb(W.PRESETS[3]) and ipx(dots[3].cget("image"), mid, 1) == W.rgb(win.pal["ink"])
 assert ipx(dots[2].cget("image"), mid, mid) == W.rgb(W.PRESETS[2]) and ipx(dots[2].cget("image"), mid, px_(4)) == W.rgb(win.pal["stroke_strong"])
+# focus-visible on the strip: the click focused it with NO ring (the halo already shows the
+# pick; `kbd` is False), the arrow key brings the ring back - the strip's own <Right> binding
+# used to shadow the ring's <KeyPress>, and its <FocusIn> replaced the ring's
+strip_c = dots[0].master
+assert win.win.focus_get() is strip_c and not win.kbd and strip_c.cget("highlightcolor") == strip_c.cget("bg")
 dots[0].master.focus_force()
 root.update()
 assert ipx(dots[3].cget("image"), mid, 1) == W.rgb(win.pal["ink"])            # the cursor followed the pick
 dots[0].master.event_generate("<Right>")
 assert ipx(dots[4].cget("image"), mid, 1) == W.rgb(win.pal["stroke_field"])   # ... and moved
+assert win.kbd and strip_c.cget("highlightcolor") == win.pal["ring"]
 
 n, e = len(saves), win.ctl["color"]["entry"]
 e.focus_force()
@@ -795,6 +801,11 @@ knob = next(i for i in sl.find_all() if sl.type(i) == "image")
 kc = px_(20) // 2
 assert ipx(sl.itemcget(knob, "image"), kc, kc) == W.rgb(win.pal["ring"]) and ipx(sl.itemcget(knob, "image"), kc, kc + px_(7)) == W.rgb(win.pal["ctl"])
 assert sl.coords(knob)[1] == sl.coords(lines[0])[1] and sl.coords(knob)[0] == sl.coords(lines[1])[2]   # on the track, at the fill's end
+# ... and its ring: none after the click that focused it, back on an arrow key (a step, saved)
+assert win.win.focus_get() is sl and sl.cget("highlightcolor") == sl.cget("bg")
+n = len(saves)
+sl.event_generate("<Left>")
+assert sl.cget("highlightcolor") == win.pal["ring"] and len(saves) == n + 1
 
 n = len(saves)
 win.e_days.focus_force()
@@ -1260,6 +1271,17 @@ win.promptify()
 root.update()
 assert win.pstate == "drafting" and not win.b_main.on and win.b_main.f.cget("text") == "Promptify"
 assert win.l_draft.cget("text").startswith("Drafting with Claude Code · ") and win.b_cancel.f.winfo_ismapped()
+# the footer's `↵ promptify` hint names the primary and fades with it - its cap re-rendered
+# 45 % toward the layer (fill, hairline, lip), its glyph and word in `disabled` - while the
+# next hint (`Ctrl C copy`) stays muted; the swap back restores it (below, after Esc)
+hint = lambda k: win.foot_p.find_withtag(f"view{k}h")
+fills = lambda k: {win.foot_p.itemcget(i, "fill") for i in hint(k) if win.foot_p.type(i) == "text"}
+cap_im = lambda k: [win.foot_p.itemcget(i, "image") for i in hint(k) if win.foot_p.type(i) == "image"]
+assert len(hint(0)) == 3 and fills(0) == {win.pal["disabled"]} and fills(1) == {win.pal["muted"]}
+faded = win.kbd_img("↵", ground=win.pal["layer"], fade=True)
+assert cap_im(0) == [str(faded)] and cap_im(1) == [str(win.kbd_img("Ctrl", ground=win.pal["layer"])), str(win.kbd_img("C", ground=win.pal["layer"]))]
+assert ipx(faded, faded.width() // 2, faded.height() // 2) == W.rgb(W.mix(win.pal["ctl"], win.pal["layer"], .45))
+assert ipx(faded, faded.width() // 2, faded.height() - 1) == W.rgb(W.mix(win.pal["stroke_edge"], win.pal["layer"], .45))
 # the track and the three skeleton bars come only after 300 ms (a fast draft never flashes
 # them), above the line on E: bars at 1.0 / .85 / .60 of the prompt's measure, the 64 px
 # `ring` bar running along the 2 px track (`jobs["track"]`, 16 ms steps)
@@ -1280,6 +1302,7 @@ win._escape()
 root.update()
 assert win.pstate == "empty" and win.b_main.on and win.drafting is None and "tick" not in win.jobs
 assert "skel" not in win.jobs and "track" not in win.jobs and win.skel_at is None
+assert fills(0) == {win.pal["muted"]} and cap_im(0) == [str(win.kbd_img("↵", ground=win.pal["layer"]))]   # the hint is back
 assert settle(lambda: not win.draft_thread.is_alive())      # the worker saw the flag and left
 # reduced motion: the skeleton still comes, the bar sits still at the track's start
 win.motion = False
@@ -1671,6 +1694,8 @@ assert cfg["theme"] == "system" and not win.dark               # the override sa
 win.hide()
 root.update()
 assert root.bind_all("<MouseWheel>") == "", "wheel binding leaked past hide()"
+win._cancel_all()            # the Saved flash is still due: a timer must not outlive its window
+assert win.jobs == {}
 win.win.destroy()
 
 # --- other builds ---------------------------------------------------------------------------

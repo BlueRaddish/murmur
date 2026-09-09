@@ -28,6 +28,36 @@ for dark in (False, True):
     assert W.contrast(p["ring"], p["card"]) >= 3.0, (dark, "ring on a card", p["ring"], p["card"])
     assert W.contrast(p["on_primary"], p["primary"]) >= 4.5, (dark, "text on the primary")
 
+# --- §6. the dark-parity table, pinned: every derived token is the ALPHA formula over the
+# surface it sits on (`mix()`), the accent OKLCH at the brand hue; a palette edit that drifts
+# one of these fails here, not in a screenshot. Two of the spec's table cells do not follow
+# its own formula and the formula wins: the dark divider (alpha .06 gives #2a2a2a on the
+# layer / #313131 on a card, the table's #2d2d2d / #333333 fit no single alpha) and the dark
+# `on_danger` (white on #d15c56 is 3.91, under `on()`'s 4.5 rule, so the max-contrast
+# fallback - the layer, 4.37 - wins, as it did before UI3)
+TABLE = {False: dict(stroke_layer="#ebebeb", stroke_ctl="#e7e7e7", divider_layer="#f0f0f0", divider_card="#f0f0f0",
+                     sub_layer="#f4f4f4", sub_base="#e8e8e8", hov_layer="#f7f7f7", hov_base="#ececec",
+                     stroke_edge="#d3d3d3", stroke_top=None, stroke_field="#8c8c8c", stroke_strong="#b8b8b8",
+                     disabled="#a3a3a3", card_inset=None, primary="#10892f", primary_hover="#11782a",
+                     tint="#e4f3e7", tint_hover="#dbefdf", danger="#c13c3b", danger_hover="#b02a2d",
+                     danger_text="#c13c3b", on_primary="#ffffff", on_danger="#ffffff"),
+         True: dict(stroke_layer="#2c2c2c", stroke_ctl="#3d3d3d", divider_layer="#2a2a2a", divider_card="#313131",
+                    sub_layer="#2b2b2b", sub_base="#212121", hov_layer="#262626", hov_base="#1d1d1d",
+                    stroke_edge="#222222", stroke_top="#434343", stroke_field="#999999", stroke_strong="#606060",
+                    disabled="#6e6e6e", card_inset="#2d2d2d", ring="#3c9d4b", primary="#208634",
+                    primary_hover="#329442", tint="#223324", tint_hover="#243b27", danger="#d15c56",
+                    danger_text="#f07f77", on_primary="#ffffff", on_danger="#1c1c1c")}
+for dark, want in TABLE.items():
+    p = W.palette(brand.GREEN, dark)
+    got = dict(p, stroke_layer=p["stroke"](p["layer"]), stroke_ctl=p["stroke"](p["ctl"]),
+               divider_layer=p["divider"](p["layer"]), divider_card=p["divider"](p["card"]),
+               sub_layer=p["sub"](p["layer"]), sub_base=p["sub"](p["base"]),
+               hov_layer=p["sub_hover"](p["layer"]), hov_base=p["sub_hover"](p["base"]))
+    for k, v in want.items():
+        assert got[k] == v, (dark, k, got[k], "!=", v)
+    assert W.contrast(p["on_danger"], p["danger"]) >= 3.0 and W.contrast(p["stroke_field"], p["layer"]) >= 3.0, dark
+assert max(abs(a - b) for a, b in zip(W.rgb(W.palette(brand.GREEN, False)["ring"]), W.rgb(brand.GREEN))) <= 3   # the light ring IS the brand
+
 # --- 2. every SP-derived spacing the file uses is one of the six ---------------------------
 src = Path(W.__file__).read_text(encoding="utf-8")
 used = sorted({int(i) for i in re.findall(r"\bSP\[(\d)\]", src)})
@@ -212,7 +242,6 @@ for theme in ("light", "dark"):
     drawn = {l.cget("text") for l in win.caps_all} | {
         c.itemcget(i, "text") for c in (side, win.foot_h, win.foot_p, win.foot_s, win.act, win.p_foot)
         for i in c.find_withtag("cap")}
-    assert {"↵", "Ctrl", "C", "D", "Del", "Esc", "↑", "↓", "F", "1", "2", "3", "Tab", "Space", "←", "→"} <= drawn, drawn
     # `Ctrl ,` and `Ctrl W` are the two documented undrawn synonyms (of the Settings row and Esc)
     CAP = {v: k for k, v in KEYSYM.items()}
     undrawn = {("Control", "Key", "comma"), ("Control", "Key", "w")}
@@ -221,6 +250,18 @@ for theme in ("light", "dark"):
             continue                                            # mouse events, bare <Key>, Tab's shift twin
         cap = CAP.get(seq[-1], seq[-1].upper())
         assert cap in drawn and ("Control" not in seq or "Ctrl" in drawn), (theme, "shortcut without a cap", seq)
+    # ... and the empty state's `Ctrl` `Win` caps: the OS hotkey (murmur.py's keyboard hook,
+    # not a Tk binding - drawn, never audited against `bound`), on the list once it is empty
+    win.history.items.clear()
+    win.refresh()
+    root.update()
+    assert [win.list.itemcget(i, "text") for i in win.list.find_withtag("cap")] == ["Ctrl", "Win"], theme
+    drawn |= {win.list.itemcget(i, "text") for i in win.list.find_withtag("cap")}
+    assert {"↵", "Ctrl", "C", "D", "Del", "Esc", "↑", "↓", "F", "1", "2", "3", "Tab", "Space", "←", "→", "Win"} <= drawn, drawn
+    # the Saved flash from the pick above is still due: cancelled with the window, as a
+    # rebuild does - a timer that outlives its window can call the NEXT window's binding of
+    # the same Tcl name with no event (seen once as a swallowed TypeError, 2026-09-09)
+    win._cancel_all()
     win.win.destroy()
 
 root.destroy()

@@ -1202,6 +1202,11 @@ class AppWindow:
         w.bind("<Tab>", lambda e: (setattr(self, "kbd", True), self._tab(False))[1], add="+")
         w.bind("<Shift-Tab>", lambda e: (setattr(self, "kbd", True), self._tab(True))[1], add="+")
         w.bind("<Button>", lambda e: setattr(self, "kbd", False), add="+")
+        # ... a key press says keyboard, and the highlight-ring widgets (`focus_visible`)
+        # repaint their ring from the toplevel's tag, where nothing shadows or replaces it
+        ring = lambda e: getattr(e.widget, "ring_upd", lambda: None)()
+        w.bind("<KeyPress>", lambda e: (setattr(self, "kbd", True), ring(e)), add="+")
+        w.bind("<FocusIn>", ring, add="+")
         # a card starts 12 px before the pane's text edge E (like a row highlight) and spends
         # 1 px on its hairline, so its padding is 12 minus that px - which puts every line of
         # text inside it back on E, cards or no cards
@@ -1313,10 +1318,13 @@ class AppWindow:
     # --- small parts -------------------------------------------------------------------------
     def focus_visible(self, wdg, ground) -> None:
         """Wire a highlight-ring widget to show its ring only under keyboard focus; a later
-        key press while focused (arrows) brings the ring back."""
-        upd = lambda: wdg.configure(highlightcolor=self.pal["ring"] if self.kbd else ground)
-        wdg.bind("<FocusIn>", lambda e: upd(), add="+")
-        wdg.bind("<KeyPress>", lambda e: (setattr(self, "kbd", True), upd()), add="+")
+        key press while focused (arrows) brings the ring back. The widget carries only the
+        painter (`ring_upd`); the toplevel's own <FocusIn> / <KeyPress> bindings (`_build`)
+        call it. On the widget's own tag it was shadowed: Tk fires ONE binding per tag, the
+        most specific, so the widget's <Left> / <space> handlers beat a <KeyPress> there, and
+        a later plain `bind("<FocusIn>")` on the widget replaced the ring's (the colour strip
+        rang on a mouse click)."""
+        wdg.ring_upd = lambda: wdg.configure(highlightcolor=self.pal["ring"] if self.kbd else ground)
 
     def hairline(self, parent, vertical=False, color=None) -> tk.Frame:
         """A 1 px rule; by default an inset `divider` on the layer."""
@@ -1360,21 +1368,28 @@ class AppWindow:
                         lambda: icon_png(name, colour, self.px(size), ground))
 
     # --- keycaps: the raised-key recipe at 20 px --------------------------------------------
-    def kbd_png(self, label, h=H_KBD, w=None, ground=None) -> bytes:
+    def kbd_png(self, label, h=H_KBD, w=None, ground=None, fade=False) -> bytes:
         """The cap's image: `ctl` with a hairline and the elevation edge (the "bottom lip"),
         transparent corners so it sits on the grain, a card or the layer alike - or opaque on
         `ground` where the ground is known (a footer): Tk blends a partial-alpha image by
         reading the surface back first, ~0.2 ms per draw. A single glyph is an h x h square;
-        a word is its width in mono9 plus 6 a side; `w` overrides. Bytes, for `compose_png`."""
+        a word is its width in mono9 plus 6 a side; `w` overrides. `fade` is the disabled
+        look - fill, hairline and edge 45 % toward the ground, as a button's (`_Btn.enable`):
+        a cap fades with the action it names. Bytes, for `compose_png`."""
         p = self.pal
         w = w or max(self.px(h), self.mf["mono9"].measure(label) + 2 * self.px(6))
-        return rr_png(w, self.px(h), self.px(R_KBD), p["ctl"], p["stroke"](p["ctl"]), 1, ground,
-                      edge=(p["stroke_edge"], p["stroke_top"]))
+        fill, border, edge = p["ctl"], p["stroke"](p["ctl"]), (p["stroke_edge"], p["stroke_top"])
+        if fade:
+            g = ground or p["layer"]
+            f = lambda c: mix(c, g, .45) if c else c
+            fill, border, edge = f(fill), f(border), tuple(f(c) for c in edge)
+        return rr_png(w, self.px(h), self.px(R_KBD), fill, border, 1, ground, edge=edge)
 
-    def kbd_img(self, label, h=H_KBD, w=None, ground=None) -> tk.PhotoImage:
+    def kbd_img(self, label, h=H_KBD, w=None, ground=None, fade=False) -> tk.PhotoImage:
         """`kbd_png` as a cached PhotoImage (one per label, size and ground; a cap at a fixed
         `w` is the same image whatever it says - the trigger key's, relabelled in place)."""
-        return self.img(("kbd", None if w else label, h, w, ground), lambda: self.kbd_png(label, h, w, ground))
+        return self.img(("kbd", None if w else label, h, w, ground, fade),
+                        lambda: self.kbd_png(label, h, w, ground, fade))
 
     def keycap(self, parent, label, h=H_KBD, fg=None, w=None) -> tk.Label:
         """A decorative keycap (`kbd` is taken: the focus-visible flag): not focusable, not
@@ -1470,14 +1485,14 @@ class AppWindow:
 
     def _chord_items(self, c, x, cy, caps, text_tags, img_tags=()) -> tuple:
         """A cap chord as canvas items from x, centred on cy: per cap its `kbd_img` (opaque on
-        the canvas's own ground) and a mono9 muted text item carrying `text_tags` ("cap" among
-        them, for the coverage check), 4 apart. Returns (the x after the last cap, the text
-        item ids)."""
+        the canvas's own ground; the image tagged `cap:<label>` too, so a re-render knows its
+        cap) and a mono9 muted text item carrying `text_tags` ("cap" among them, for the
+        coverage check), 4 apart. Returns (the x after the last cap, the text item ids)."""
         p, ids = self.pal, []
         for j, cap in enumerate(caps):
             x += self.px(SP[0]) if j else 0
             img = self.kbd_img(cap, ground=c["bg"])
-            c.create_image(x, cy, anchor="w", image=img, tags=img_tags)
+            c.create_image(x, cy, anchor="w", image=img, tags=tuple(img_tags) + ("cap:" + cap,))
             ids.append(c.create_text(x + img.width() // 2, cy, text=cap, font=self.F["mono9"],
                                      fill=p["muted"], tags=text_tags))
             x += img.width()
@@ -1497,7 +1512,10 @@ class AppWindow:
         Labels and Frames cost more than the whole switch did before it. With `edit_hints` a
         second item set is drawn and `.hints("view"|"edit")` shows one and hides the other.
         `.right` is a Frame PLACED over the canvas at its right edge, so in a narrow window the
-        hints run on under it and clip there - the flash slot stays."""
+        hints run on under it and clip there - the flash slot stays. `.fade(k, on)` fades the
+        k-th view hint (caps and word, tag `view<k>h`) with the action it names - the
+        `disabled` look while that action is - and only on a change, so it costs nothing on
+        a pane swap that leaves it alone."""
         p, px = self.pal, self.px
         c = tk.Canvas(parent, bg=p["layer"], height=px(H_FOOT), highlightthickness=0, bd=0)
         rule = c.create_line(0, 0, 1, 0, fill=p["divider"](p["layer"]))
@@ -1509,13 +1527,27 @@ class AppWindow:
             x = px(SP[3])
             for k, (caps, word) in enumerate(items):
                 x += px(SP[3]) if k else 0
-                x = self._chord_items(c, x, cy, caps, (which, "cap", f"{which}{k}"), (which,))[0]
+                grp = f"{which}{k}h"                 # the hint as one group: its caps and word
+                x = self._chord_items(c, x, cy, caps, (which, "cap", f"{which}{k}", grp), (which, grp))[0]
                 x += px(SP[1])
                 c.create_text(x, cy, anchor="w", text=word, font=self.F["meta"], fill=p["muted"],
-                              tags=(which,))
+                              tags=(which, grp))
                 x += self.mf["meta"].measure(word)
         c.hints = lambda which="view": [c.itemconfigure(k, state="normal" if k == which else "hidden")
                                         for k in ("view", "edit")]
+        c.faded = set()
+
+        def fade(k, on):
+            if (k in c.faded) == bool(on):
+                return
+            (c.faded.add if on else c.faded.discard)(k)
+            for i in c.find_withtag(f"view{k}h"):
+                if c.type(i) == "image":
+                    cap = next(t[4:] for t in c.gettags(i) if t.startswith("cap:"))
+                    c.itemconfigure(i, image=self.kbd_img(cap, ground=c["bg"], fade=bool(on)))
+                else:
+                    c.itemconfigure(i, fill=p["disabled" if on else "muted"])
+        c.fade = fade
         c.hints()
         return c
 
@@ -2197,14 +2229,21 @@ class AppWindow:
             return
         self._rebuild()
 
-    def _rebuild(self) -> None:
-        geo, view, sel = self.win.geometry(), self.view, self.sel
+    def _cancel_all(self) -> None:
+        """Every pending job, before the window they were scheduled on is destroyed (a
+        rebuild; a test's teardown): Tk's `after` invokes its callback by NAME, the name
+        goes with the window's commands, and the next window's bindings can be handed the
+        freed name (`id()` reuse) - which the stale timer then calls with no event."""
         for job in list(self.jobs.values()):
             try:
                 self.win.after_cancel(job)
             except tk.TclError:
                 pass
         self.jobs.clear()
+
+    def _rebuild(self) -> None:
+        geo, view, sel = self.win.geometry(), self.view, self.sel
+        self._cancel_all()
         self.win.unbind_all("<MouseWheel>")
         self.win.destroy()
         self.imgs.clear()
@@ -3007,6 +3046,7 @@ class AppWindow:
             self.b_main.f.grid()
         else:
             self.b_main.f.grid_remove()          # the only state without a primary
+        self.foot_p.fade(0, state == "drafting")   # the footer's `↵` names the primary: fades with it
         if state == "noengine":
             self.seg_host.grid_remove()          # nothing to target yet
             self.head_rows = 0
