@@ -208,6 +208,41 @@ Decisions
   Text clip the last one - the panel's Texts have no spacing. Dictating into an answer field
   works because Typist already skips the paste when murmur's own window is in front; the take
   now also lands in the focused panel field (and in History like any take).
+- 1.0.0, the ultracode pass (2026-09-07..09): "make the ui more modern... optimization... ui
+  transitions looking more clean... reduce all unnecessary code and make compact for installation".
+  Measured before anything: a view switch cost 90-160 ms (Tk re-laid the whole subtree out on
+  grid_remove/grid; plus a PATH scan - 242 path-exists checks - on every Promptify switch via
+  connect.status -> find_exe), the first window open 1.4 s, dist 299 MB. (1) SPEED: every view stays
+  gridded and go() raises the target (experiment: 143-164 -> 16-25 ms Promptify, 35 -> 15 History,
+  162 -> 44 Settings); the Promptify pane rebuilds only when (state, item, text, draft, sheet) changed
+  (p_memo); engine status cached per session with a 60 s TTL (cleared by the sheet's actions); the
+  window is prebuilt hidden 1.5 s after the model is ready; a _tab guard keeps focus inside the shown
+  view. Gotcha found on the way: Tk paths are prefixes of each other (.!toplevel.!frame prefixes
+  .!toplevel.!frame2) - the containment test needs path + "." or every sibling matches, and the
+  earlier "Tk skips covered widgets" reading came from exactly that bug. (2) SIZE, by a verified
+  workflow: PyAV (66 MB of FFmpeg DLLs) is import-bound only - faster_whisper/audio.py imports av at
+  module level but murmur always hands numpy to transcribe - so stubs/rthook_av.py stands in and
+  --collect-all av is gone; pandas (via tqdm.pandas(), lazy), lxml/bs4/soupsieve/xlsxwriter/dateutil
+  (pandas' io), pytest/_pytest/pygments (pandas.conftest, httpx's optional CLI), pydantic(+core)
+  (huggingface_hub's webhooks, guarded), hf_xet (is_xet_available() gate), tzdata (zoneinfo
+  try/except), sqlite3 (filelock's optional ReadWriteLock), PIL._avif/_imagingft (try/except codecs)
+  are all excluded; huggingface_hub collected without duplicate .py sources. dist 299 -> 175 MB
+  (172.3 MiB, 1,207 files); a refuter re-measured, ran the frozen exe (model ready, VAD warm), ran the
+  real transcription suite, and proved the first-run download still works without hf_xet. (3) DESIGN
+  by the method: BRIEF3.md (what "modern" means here as six checkable properties), REFERENCES.md,
+  three mockup directions rendered by headless Chrome - A Fluent-2 native, B glass echoing the
+  overlay, C quiet-pro icon rail - judged by three lenses (taste 8/7/5 for B/A/C, method 7/5.5/5,
+  build 7/3/8): A won 21 vs C 18 vs B 16.5, with B's icon+label segment and C's zero-shadow rule
+  grafted; B's glow was the "larper" tell. Spec BUILD3.md (881 lines, function by function). Build
+  stages landed: 1 tokens/palette/renderers (Fluent elevation borders, grain, specular, nine
+  geometry-drawn glyphs, keycaps), 2 sidebar as one Canvas with icons + Ctrl 1/2/3 caps + the
+  indicator bar, footer hint strips, Ctrl+, Ctrl+W Ctrl+F Esc bindings, reduced-motion detection,
+  3 RowList day groups + right-aligned mono time column + draft mark, the filter field, action-row
+  caps, button hover blend - and a pre-existing bug: show_sel ran before the list had a size so
+  every fresh list opened scrolled. Stages 4-7 (Promptify header segment with icons, Settings
+  icons/60 px rows/raised trigger cap, motion, reconciliation) and the screenshot-review round did
+  NOT run: the session hit its usage limit twice; the workflow resumes from its journal (run
+  wf_20bd8301-0aa). Suites green at each landed stage; switch times unchanged within 2 ms.
 - 1.0.0, "can't find murmur in the Windows search bar" + the model cap (2026-09-01). Search:
   Windows finds apps through Start Menu shortcuts, and the mirror installs since 08-31 (robocopy
   /MIR of dist into %LOCALAPPDATA%\Programs\murmur, because Inno Setup vanished) never made
