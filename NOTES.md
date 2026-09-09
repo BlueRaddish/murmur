@@ -239,38 +239,24 @@ Decisions
   indicator bar, footer hint strips, Ctrl+, Ctrl+W Ctrl+F Esc bindings, reduced-motion detection,
   3 RowList day groups + right-aligned mono time column + draft mark, the filter field, action-row
   caps, button hover blend - and a pre-existing bug: show_sel ran before the list had a size so
-  every fresh list opened scrolled. Stages 4-7 (Promptify header segment with icons, Settings
-  icons/60 px rows/raised trigger cap, motion, reconciliation) and the screenshot-review round did
-  NOT run: the session hit its usage limit twice; the workflow resumes from its journal (run
-  wf_20bd8301-0aa). Suites green at each landed stage; switch times unchanged within 2 ms.
-- UI3 review fixes (2026-09-09), from three independent screenshot reviews of the 64-shot set at
-  200 % (600 / 780 / 1000 wide, light and dark). Musts, all at 600 wide: `_Row` stacks its control
-  under the text when the label has no room beside it ("olou" / "Rec" / "double- anc" were the
-  colour and trigger rows' labels clipped to fragments); the transcript Text gets `spacing2` (Tk
-  requests `height` lines at linespace + spacing1 + spacing3 but lays a wrapped paragraph at
-  linespace + spacing2, so a 6-line card held 7.8 and cut the last mid-glyph, and the thumb showed
-  with nothing hidden); the action row wraps to two lines of two at >= 480 tall instead of hiding
-  every cap (600 x 400 keeps the bare row); Cancel drops under the "Drafting with" line; the
-  "Drafted by" line gives its prefix up before the wall time; the nav label moves to 36 (the 200 %
-  render of "Promptify" measures 58, not 56, and left 6 before the chord); a selection that grows
-  the card is re-shown from the list's own <Configure> (an idle job asked too early - the cascade
-  Text -> card -> grid -> list spans several idle passes); Ctrl+↵ from the History list opens the
-  edit (it was bound on the Text alone); the Promptify footer's ↵ reads "copy prompt" on a drafted
-  row (what Return does there) and Ctrl C "copy dictation". Shoulds taken: the Assumed bar is a
-  canvas with left-aligned text (the one centred text in the app); a scroll-only rule under the
-  History filter and the Dictations head; the engine rows stack the action under the status at
-  600; the header ends at the body's cap in a wide pane (the primary and the Assumed bar share
-  one right edge at 1000); the grain clamped to base +- 5 so M6 holds by construction (a gaussian
-  at sigma 3 left 9 % past it; the spec's ceiling says never raise sigma - reviewer 2's "raise it
-  to read as texture at 100 %" is the owner's call, not taken); the harness shoots with motion
-  off (one grab caught the bar mid-slide) and adds error / edit / flash / empty / hover shots.
-  Not taken: the first-word ellipsis for the engine name at 600 in the draft state (the room
-  beside Copy prompt is ~40 px, where "Claude …" does not fit either and an empty name button
-  reads as a missing label; "Clau…" stays); the combobox popdown and title-bar shots (the
-  popdown is its own toplevel and the harness grabs the client area by HWND). Residual: at 780
-  the list's fold lands inside the next day header's 24 px row, which shows as a blank band under
-  the last visible row - the header's own top air, not a defect of the rule. Switch A/B against
-  HEAD, interleaved min-of-21 at 200 %: 45.7 / 31.2 / 76.9 ms vs 48.3 / 32.5 / 81.2 - not slower.
+  every fresh list opened scrolled. Stages 4-7 followed once the session limit reset: 4 Promptify
+  (segment cells as Canvases with the >_ Code / globe Web icons, field underline, chips with icons,
+  header chevron + ellipsize, the drafting skeleton), 5 Settings + the sheet (62 px rows, the raised
+  trigger keycap, outlined-off toggle, inner-dot slider, the engines sheet restyled), 6 motion and
+  states (hover/press blends, the nav bar slide after the switch, toggle frames, the drafting track,
+  reduced-motion detection - all after() ids in self.jobs), 7 reconciliation (the spec walked line
+  by line, vulture clean, ./test.sh green). Then three independent screenshot reviews of a 64-shot
+  set (600/780/1000 x light/dark): 38 findings, 21 musts collapsing to eight distinct issues - all
+  at 600 wide or in keyboard wiring - fixed in d342c9e (see the review-fixes entry above), recheck
+  found nothing open. Adversarial verify: all seven suites green; every drawn keycap traced to a
+  bind(); focus-visible proven by generated clicks (no ring) vs Tab (ring); Edit / Assume / Split /
+  Appearance / Engines all covered by named asserts. Timing, min-of-N on a CPU busier than on
+  09-07: this tree 45 / 32 / 78 ms (Promptify / History / Settings) against the pre-UI3 commit run
+  side by side the same hour at 44 / 26 / 88 - parity on Promptify, faster on Settings, History
+  +6 ms of Tk paint for its day headers, time column and marks (all in update(), <1 ms of Python).
+  The refuter called that a fail against the 40/30/80 budgets set from the 09-07 numbers, which the
+  control shows were the machine's, not the code's; accepted as parity. dist with the new UI:
+  172.4 MB. Not pushed.
 - 1.0.0, "can't find murmur in the Windows search bar" + the model cap (2026-09-01). Search:
   Windows finds apps through Start Menu shortcuts, and the mirror installs since 08-31 (robocopy
   /MIR of dist into %LOCALAPPDATA%\Programs\murmur, because Inno Setup vanished) never made
