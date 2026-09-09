@@ -201,8 +201,9 @@ GAP_MARK = 16                       # that, ~1.9x the wordmark's x-height) and t
                                     # Both are up from the 20/10 first cut: at that size the mark
                                     # read as a letter and the sidebar said "m murmur"
 W_CHIP = 88                         # trigger-key cap: fits "Previous Track" at 9 pt
-W_SIDE = 192                        # sidebar: 8 + pill 176 + 8 (label 40 + "Promptify" 56 + 8 +
-                                    # the Ctrl-digit chord 64 + 8 = 176; at 184 the chord overlaps)
+W_SIDE = 192                        # sidebar: 8 + pill 176 + 8 (icon 12 + 16 + 8 = label 36, then
+                                    # "Promptify" 56-58 + the Ctrl-digit chord 64 + 8 inset leaves
+                                    # >= 10 before the chord at every DPI; at 184 the chord overlaps)
 W_FIELD = 96                        # the hex and language entries (7 mono characters)
 W_DAYS = 64                         # the retention entry
 W_COMBO = 200                       # the microphone and model combos
@@ -507,11 +508,14 @@ def segment_png(widths: tuple, h: int, r: int, i: int, fills: tuple, ground: str
 
 def grain_png(size: int, base: str, sigma: float) -> bytes:
     """The sidebar's material: a `size` px square of gaussian noise (sigma, at 1x device px - no
-    supersampling, the grain IS the pixels) around the achromatic `base`. Tiled on a canvas; a
+    supersampling, the grain IS the pixels) around the achromatic `base`, clamped to base +- 5
+    so M6 (every sidebar pixel within 5 of base) holds by construction - at sigma 3 a gaussian
+    alone leaves ~9 % of the pixels past it, and 2 sigma is 6 anyway. Tiled on a canvas; a
     monitor-high frost would be 190 ms, ~32 of these tiles are 0.4 ms once."""
     from PIL import Image
     b = rgb(base)[0]                       # achromatic: one channel is the colour
-    im = Image.effect_noise((size, size), sigma).point(lambda v: max(0, min(255, v - 128 + b)))
+    lo, hi = max(0, b - 5), min(255, b + 5)
+    im = Image.effect_noise((size, size), sigma).point(lambda v: max(lo, min(hi, v - 128 + b)))
     buf = io.BytesIO()
     im.convert("RGB").save(buf, "PNG")
     return buf.getvalue()
@@ -797,21 +801,47 @@ class _Row:
         main.pack(fill="x", padx=ui.cpad)
         self.right = tk.Frame(main, bg=bg)
         self.right.pack(side="right", pady=ui.px(SP[2]))   # the control's own width; the label
-        left = tk.Frame(main, bg=bg)                        # column takes what is left
+        left = self.left = tk.Frame(main, bg=bg)            # column takes what is left
         left.pack(side="left", fill="x", expand=True, pady=ui.px(SP[2]), padx=(0, ui.px(SP[3])))
         self.head = tk.Frame(left, bg=bg)
         self.head.pack(anchor="w")
-        tk.Label(self.head, text=label, font=ui.F["body"], fg=p["ink"], bg=bg, bd=0, padx=0,
-                 pady=0).pack(side="left")
+        self.label = tk.Label(self.head, text=label, font=ui.F["body"], fg=p["ink"], bg=bg, bd=0,
+                              padx=0, pady=0, anchor="w")
+        self.label.pack(side="left")
         self.chip = None
         self.desc = tk.Label(left, text=desc or "", font=ui.F["meta"], fg=p["muted"], bg=bg,
                              anchor="w", justify="left", bd=0, padx=0, pady=0)
-        left.bind("<Configure>",     # wrap rather than run under the control when narrow
-                  lambda e: self.desc.configure(wraplength=max(e.width - ui.px(SP[3]), ui.px(120))))
+        # the description wraps at the text column's own width - never wider than the column
+        # that clips it (a floor of 120 ran it under the control on a 600 px window)
+        left.bind("<Configure>", lambda e: self.desc.configure(wraplength=max(e.width, ui.px(48))))
         if desc:
             self.desc.pack(anchor="w", pady=(ui.px(SP[0]), 0))
+        self.stacked = False
+        main.bind("<Configure>", lambda e: self._fit(e.width))
         self.err = tk.Label(self.frame, text="", font=ui.F["meta"], fg=p["danger_text"], bg=bg,
                             anchor="e", bd=0, padx=0, pady=0)
+
+    def _fit(self, width) -> None:
+        """The control column keeps its width. When what is left beside it would not hold the
+        label (the colour rows' dots + swatch + hex field, the trigger row's cap + two keys, on
+        a 600 px window - the labels rendered as "olou" / "Rec"), the control drops UNDER the
+        text on the row's right edge, so the one right edge survives and the label is whole;
+        back beside it when the room returns. Change-only: no re-pack on a resize that leaves
+        the answer alone."""
+        ui = self.ui
+        if width <= 1:
+            return
+        room = width - self.right.winfo_reqwidth() - ui.px(SP[3])
+        stack = room < max(self.head.winfo_reqwidth(), ui.px(120))
+        if stack == self.stacked:
+            return
+        self.stacked = stack
+        if stack:
+            self.left.pack_configure(side="top", fill="x", expand=False, padx=0)
+            self.right.pack_configure(side="top", anchor="e", after=self.left, pady=(0, ui.px(SP[2])))
+        else:
+            self.right.pack_configure(side="right", anchor="center", before=self.left, pady=ui.px(SP[2]))
+            self.left.pack_configure(side="left", fill="x", expand=True, padx=(0, ui.px(SP[3])))
 
     def show(self, on, after=None) -> None:
         """Rows that apply to some settings only come and go; `after` (a _Row) keeps the order.
@@ -871,6 +901,8 @@ class RowList(tk.Canvas):
                          width=1, height=1, bd=0)
         self.ui, self.two, self.on_select = ui, two_line, on_select or (lambda it: None)
         self.keep = keep or (lambda it: True)
+        self.on_scroll = lambda on: None        # told (once per change) whether the list is scrolled
+        self.scrolled = False
         self.H = ui.px(H_ROW2 if two_line else H_ROW)
         self.rows, self.ys, self.hl, self.hl_id, self.hover = [], [], {}, {}, None
         self.sb = ttk.Scrollbar(parent, orient="vertical", style="M.Vertical.TScrollbar",
@@ -878,6 +910,11 @@ class RowList(tk.Canvas):
         self.configure(yscrollcommand=self._scrolled)
         self.pack(side="left", fill="both", expand=True)
         self.bind("<Configure>", lambda e: self.draw())
+        # ... and the selection back into view once the canvas has its new height: the card
+        # grows for a taller transcript AFTER `move()` / `go()` scrolled to the row, through
+        # several idle passes (Text -> card -> grid -> this canvas), so an idle job asked too
+        # early and the row ended below the shorter list's fold; a window resize re-shows it too
+        self.bind("<Configure>", lambda e: self.show_sel(), add="+")
         self.bind("<FocusIn>", lambda e: self.paint())
         self.bind("<FocusOut>", lambda e: self.paint())
         self.bind("<Motion>", lambda e: self.set_hover(self.row_at(e.y)))
@@ -906,6 +943,9 @@ class RowList(tk.Canvas):
             self.sb.pack_forget()
         else:
             self.sb.pack(side="right", fill="y")
+        if (float(lo) > 0.0) != self.scrolled:   # the pane's scroll-only rule follows
+            self.scrolled = not self.scrolled
+            self.on_scroll(self.scrolled)
 
     def _wheel(self, e) -> None:
         if self.ui._visible():
@@ -1537,6 +1577,19 @@ class AppWindow:
                                         for k in ("view", "edit")]
         c.faded = set()
 
+        def word(k, text):
+            """Re-word the k-th view hint (`↵ promptify` reads `↵ copy prompt` while the row's
+            Return copies) and shift the hints after it by the difference; change-only."""
+            i = next(i for i in c.find_withtag(f"view{k}h") if c.type(i) == "text" and "cap" not in c.gettags(i))
+            old = c.itemcget(i, "text")
+            if old == text:
+                return
+            c.itemconfigure(i, text=text)
+            dx = self.mf["meta"].measure(text) - self.mf["meta"].measure(old)
+            for j in range(k + 1, len(hints)):
+                c.move(f"view{j}h", dx, 0)
+        c.word = word
+
         def fade(k, on):
             if (k in c.faded) == bool(on):
                 return
@@ -1624,7 +1677,9 @@ class AppWindow:
             y, tag = y0 + i * (h + px(SP[0])), "nav_" + name
             self.nav[name] = row = dict(y=y, glyph=glyph, state="idle")
             row["pill"] = s.create_image(x, y, anchor="nw", image=self._nav_img(name, "idle"), tags=(tag,))
-            row["label"] = s.create_text(x + px(40), y + h // 2, anchor="w", text=label,
+            # the label 8 after the icon's box (12 + 16): "Promptify" then ends >= 10 before the
+            # chord at every DPI (at 40 the 200 % render left 6 - the word measures 58 there)
+            row["label"] = s.create_text(x + px(36), y + h // 2, anchor="w", text=label,
                                          font=F["body"], fill=p["muted"], tags=(tag,))
             row["caps"] = tuple(s.create_text(x + cx + cw // 2, y + h // 2, text=text, font=F["mono9"],
                                               fill=p["muted"], tags=(tag, "cap"))
@@ -1841,10 +1896,11 @@ class AppWindow:
 
     # --- history view ------------------------------------------------------------------------
     def _build_history(self, f) -> None:
-        """Rows: 0 head · 1 the filter field · 2 the list · 3 the transcript card · 4 the
-        footer. The filter (Ctrl+F) narrows the list as you type; Esc clears it."""
+        """Rows: 0 head · 1 the filter field · 2 the scroll-only rule · 3 the list · 4 the
+        transcript card · 5 the footer. The filter (Ctrl+F) narrows the list as you type; Esc
+        clears it."""
         p, pad = self.pal, self.px(SP[3])
-        f.grid_rowconfigure(2, weight=1)
+        f.grid_rowconfigure(3, weight=1)
         f.grid_columnconfigure(0, weight=1)
 
         head = tk.Frame(f, bg=p["layer"], height=self.px(H_CTL))
@@ -1872,28 +1928,37 @@ class AppWindow:
         self.filter.master.grid(row=1, column=0, sticky="w", padx=pad, pady=(0, self.px(SP[2])))
         self.filter.bind("<KeyRelease>", lambda e: self._filter_changed())
         self._filtered = ""                        # the text the list was last drawn for
-        # no rule under the header: a full-bleed hairline over a list of rounded highlights is
-        # the most rigid line on the screen, and the air below the title separates them anyway
+        # no rule under the header at rest (a full-bleed hairline over a list of rounded
+        # highlights is the most rigid line on the screen); the one under the filter shows
+        # only while the list is scrolled, where a row or a day header clips right under the
+        # field - the Settings and draft bodies' rule (`_body_scrolled`)
+        self.hrule = self.hairline(f, color=p["layer"])
+        self.hrule.grid(row=2, column=0, sticky="ew")
         box = self.box = tk.Frame(f, bg=p["layer"])
-        box.grid(row=2, column=0, sticky="nsew")
+        box.grid(row=3, column=0, sticky="nsew")
         self.list = RowList(self, box, on_select=self._select, keys={
             "<Return>": self.copy_selected, "<Control-c>": self.copy_selected,
             "<Double-Button-1>": self.copy_selected, "<Delete>": self.delete_selected,
-            "<Control-d>": self._to_promptify},
+            "<Control-d>": self._to_promptify, "<Control-Return>": self._edit_toggle},
             keep=lambda it: self.filter_text() in it["text"].lower())
+        self.list.on_scroll = lambda on: self.hrule.configure(bg=p["divider"](p["layer"]) if on else p["layer"])
 
         f.bind("<Configure>", self._fit_detail)
         # the selected transcript and its two actions are ONE grouped surface, from E - 12 to
         # the pane's right - 4 like the row highlights above it; its text lands on E like theirs
         self.card = self._card(f)
-        self.card.grid(row=3, column=0, sticky="ew", padx=self.px(SP[0]), pady=self.px(SP[3]))
+        self.card.grid(row=4, column=0, sticky="ew", padx=self.px(SP[0]), pady=self.px(SP[3]))
         card = self.card.body
         trow = tk.Frame(card, bg=p["card"])
         trow.pack(fill="x", padx=self.cpad, pady=(self.cpad, 0))
+        # the line lead: `LH` above and below each paragraph (spacing1/3) AND between the
+        # display lines of a wrapped one (spacing2) - Tk requests `height` lines at linespace +
+        # spacing1 + spacing3 but lays a paragraph's wrapped lines at linespace + spacing2, so
+        # without spacing2 a 6-line card held 7.8 lines and cut the last one mid-glyph
         self.detail = tk.Text(trow, height=1, width=1, wrap="word", relief="flat", bd=0,
                               highlightthickness=0, bg=p["card"], fg=p["ink"],
-                              font=self.mf["body"], padx=0, pady=0,
-                              spacing1=self.px(LH), spacing3=self.px(LH), state="disabled",
+                              font=self.mf["body"], padx=0, pady=0, state="disabled",
+                              spacing1=self.px(LH), spacing2=2 * self.px(LH), spacing3=self.px(LH),
                               cursor="xterm", selectbackground=p["sub"](p["card"]),
                               selectforeground=p["ink"], inactiveselectbackground=p["sub"](p["card"]))
         # no fill: stretched, the width request is ignored and a maximised window gives the
@@ -1927,37 +1992,69 @@ class AppWindow:
         # Edit reads Save while editing: born as wide as the wider word, so nothing after it moves
         self.b_edit.w = self.b_edit.w0 = max(self.b_edit.w, self.mf["body"].measure("Save") + 2 * self.b_edit.pad)
         self.b_edit._paint()
-        x, cy, self.act_xs = 0, self.px(H_CTL) // 2, []
-        for b, name, caps in ((self.b_copy, "copy", ("↵",)), (self.b_prompt, "prompt", ("Ctrl", "D")),
-                              (self.b_edit, "edit", ("Ctrl", "↵")), (self.b_del, "del", ("Del",))):
+        x, cy, self.act_xs, self.act_cw, self.act_at = 0, self.px(H_CTL) // 2, [], {}, {}
+        self.act_btns = ((self.b_copy, "copy"), (self.b_prompt, "prompt"), (self.b_edit, "edit"), (self.b_del, "del"))
+        for (b, name), caps in zip(self.act_btns, (("↵",), ("Ctrl", "D"), ("Ctrl", "↵"), ("Del",))):
             self.act_xs.append(x)                      # the button's x with its caps drawn
-            x, ids = self._chord_items(act, x + b.w + self.px(SP[1]), cy, caps, ("cap", "caps", name), ("caps",))
+            x0 = x + b.w + self.px(SP[1])              # its chord's x (the cap images anchor "w" there)
+            # the chord's items - images and texts - share `grp_<name>`, so `_layout_act` can
+            # move a whole chord; the texts alone carry `<name>` (the coverage check reads them)
+            x, ids = self._chord_items(act, x0, cy, caps, ("cap", "caps", name, "grp_" + name), ("caps", "grp_" + name))
             setattr(self, "caps_" + name, ids)       # the chord's text items: caps_copy, caps_prompt...
+            self.act_cw[name], self.act_at[name] = x - x0, (x0, cy)   # the chord's width; where it is
             x += self.px(SP[3])
         self.act_need = x - self.px(SP[3])             # the row's width with the caps
+        self.act_mode = None
         act.bind("<Configure>", lambda e: self._layout_act(e.width))
-        self._layout_act(self.act_need)
+        self._layout_act(self.act_need, refit=False)
         # the footer: the keys this view answers to that no action already shows, and at its
         # right the status ("✓ Copied", "Deleted · Undo", "Editing") in the flash slot
         self.foot_h = self._footer(f, [(("↑", "↓"), "move"), (("Ctrl", "F"), "filter"), (("Esc",), "close")],
                                    edit_hints=[(("Ctrl", "↵"), "save"), (("Esc",), "cancel")])
-        self.foot_h.grid(row=4, column=0, sticky="ew")
+        self.foot_h.grid(row=5, column=0, sticky="ew")
         self.status = self.foot_h.right
         self.s_text = self._flash_slot(self.status)
         # underlined so the one clickable word in the status line does not read as more meta
         self.s_undo = self.link(self.status, "Undo", self._undo, font=self.F["meta"] + ("underline",))
 
-    def _layout_act(self, width) -> None:
-        """Place the action row's buttons for `width`: with their caps (16 apart, a chord 8
-        after each) when the whole row fits, else the caps hidden and the buttons 8 apart -
-        the caps are decorative, the buttons are the actions, and at 600 wide the card holds
-        the four buttons but not the chords (measured, not hard-coded)."""
-        fits = self.act_need <= width
-        self.act.itemconfigure("caps", state="normal" if fits else "hidden")
+    def _layout_act(self, width=None, refit=True) -> None:
+        """Place the action row's buttons for `width` (the row's own when not given): one row
+        with their caps (16 apart, a chord 8 after each) when the whole row fits; else - a
+        shortcut keeps its key drawn, the user's rule for small windows - two rows of two,
+        Copy · Promptify over Edit · Delete at 32 + 8, while the view is 480 tall or more;
+        else (600 x 400) one row of the four buttons 8 apart with the caps hidden, where a
+        second row would leave the list a row and a half. Measured, not hard-coded, and
+        change-only; a change re-runs the height rule, whose `chrome` counts the second row."""
+        px = self.px
+        width = self.act.winfo_width() if width is None else width
+        if width <= 1:
+            return
+        mode = ("row" if self.act_need <= width else
+                "two" if self.views["history"].winfo_height() >= px(480) else "bare")
+        if mode == self.act_mode:
+            return
+        self.act_mode = mode
+        y2 = px(H_CTL) + px(SP[1])
+        self.act.configure(height=px(H_CTL) + (y2 if mode == "two" else 0))
+        self.act.itemconfigure("caps", state="hidden" if mode == "bare" else "normal")
         x = 0
-        for b, x_full in zip((self.b_copy, self.b_prompt, self.b_edit, self.b_del), self.act_xs):
-            b.f.place(x=x_full if fits else x, y=0)
-            x += b.w + self.px(SP[1])
+        for k, ((b, name), x_full) in enumerate(zip(self.act_btns, self.act_xs)):
+            if mode == "row":
+                bx, by = x_full, 0
+            elif mode == "bare":
+                bx, by = x, 0
+                x += b.w + px(SP[1])
+            else:
+                x = 0 if k % 2 == 0 else x
+                bx, by = x, (k // 2) * y2
+                x += b.w + px(SP[1]) + self.act_cw[name] + px(SP[3])
+            b.f.place(x=bx, y=by)
+            at = (bx + b.w + px(SP[1]), by + px(H_CTL) // 2)      # the chord's place, anchor "w"
+            if at != self.act_at[name]:
+                self.act.move("grp_" + name, at[0] - self.act_at[name][0], at[1] - self.act_at[name][1])
+                self.act_at[name] = at
+        if refit:
+            self._fit_height()
 
     @property
     def rows(self) -> list:
@@ -1999,6 +2096,7 @@ class AppWindow:
         inner = e.width - 2 * px(SP[0]) - 2 - 2 * self.cpad          # the card's padding box
         w = min(self.measure, inner - px(SP[0]) - px(SP[1]))         # room for the thumb + 8
         self.detail.configure(width=max(20, w // max(1, self.mf["body"].measure("0"))))
+        self._layout_act(refit=False)          # the view's height decides the row's shape too
         self._fit_height()
 
     def _fit_height(self) -> None:
@@ -2017,15 +2115,17 @@ class AppWindow:
             H = self.views["history"].winfo_height()
             lh = self.mf["body"].metrics("linespace") + 2 * px(LH)
             chrome = 2 + 2 * self.cpad + px(SP[2]) + px(H_CTL)      # hairlines, padding, gap, actions
-            # head (16, 12), filter (0, 12), the list's natural height, the card's 16 either
-            # side and its chrome, the footer
-            room = (H - px(PAD_TOP) - px(H_CTL) - px(SP[2]) - px(H_CTL) - px(SP[2]) - self.list.natural()
+            if self.act_mode == "two":
+                chrome += px(H_CTL) + px(SP[1])                     # the action row's second line
+            # head (16, 12), filter (0, 12), the rule, the list's natural height, the card's 16
+            # either side and its chrome, the footer
+            room = (H - px(PAD_TOP) - px(H_CTL) - px(SP[2]) - px(H_CTL) - px(SP[2]) - 1 - self.list.natural()
                     - px(SP[3]) - chrome - px(SP[3]) - px(H_FOOT))
             fit = room // lh
             cap = fit if fit >= 3 else (6 if H >= px(480) else 3)
             h = max(1, min(lines, cap))
             if int(self.detail.cget("height")) != h:
-                self.detail.configure(height=h)
+                self.detail.configure(height=h)      # the list follows: its <Configure> re-shows the selection
             if lines > h:
                 self.dsb.pack(side="right", fill="y")
             else:
@@ -2807,7 +2907,7 @@ class AppWindow:
                 lp.configure(width=lw)
                 f.grid_columnconfigure(0, minsize=lw)
         f.bind("<Configure>", fit)
-        lp.grid_rowconfigure(1, weight=1)
+        lp.grid_rowconfigure(2, weight=1)
         lp.grid_columnconfigure(0, weight=1)
         head = tk.Frame(lp, bg=p["layer"], height=self.px(H_CTL))
         head.grid(row=0, column=0, sticky="ew", padx=pad, pady=(self.px(PAD_TOP), pad))
@@ -2819,11 +2919,16 @@ class AppWindow:
         self.pcount = tk.Label(head, text="", font=self.F["body"], fg=p["muted"], bg=p["layer"], bd=0,
                                padx=0, pady=0)
         self.pcount.pack(side="left", padx=(self.px(SP[2]), 0))
+        # the scroll-only rule under the head (the History filter's, `hrule`): a scrolled row
+        # clips right under it, and the rule says so
+        self.prule = self.hairline(lp, color=p["layer"])
+        self.prule.grid(row=1, column=0, sticky="ew")
         box = tk.Frame(lp, bg=p["layer"])
-        box.grid(row=1, column=0, sticky="nsew")
+        box.grid(row=2, column=0, sticky="nsew")
         self.plist = RowList(self, box, two_line=True, on_select=self._select, keys={
             "<Return>": self._plist_go, "<Double-Button-1>": self._plist_go,
             "<Control-c>": self.copy_selected})
+        self.plist.on_scroll = lambda on: self.prule.configure(bg=p["divider"](p["layer"]) if on else p["layer"])
 
         d = self.dpane = tk.Frame(f, bg=p["layer"])
         d.grid(row=0, column=2, sticky="nsew")
@@ -2833,8 +2938,9 @@ class AppWindow:
         self._build_draft(d)
         self._build_sheet(d)
         # the footer runs under both panes; its right slot stays empty - "Copied" is the
-        # primary's own relabel
-        self.foot_p = self._footer(f, [(("↵",), "promptify"), (("Ctrl", "C"), "copy"), (("Esc",), "back")])
+        # primary's own relabel. `↵` names what the list's Return does for the row (`_show`
+        # re-words it `copy prompt` in the draft state); `Ctrl C` copies the dictation itself
+        self.foot_p = self._footer(f, [(("↵",), "promptify"), (("Ctrl", "C"), "copy dictation"), (("Esc",), "back")])
         self.foot_p.grid(row=1, column=0, columnspan=3, sticky="ew")
 
     def _build_draft(self, parent) -> None:
@@ -2892,7 +2998,7 @@ class AppWindow:
                                  icons={v: TARGET_UI[v][0] for _, v in promptify.TARGETS})
         self.b_main = _Btn(self, head, "Promptify", self.promptify, kind="primary")
         self.b_main.f.grid(row=0, column=3, sticky="e")
-        self.head_rows, self.main_shown = 0, True
+        self.head_rows, self.main_shown, self.head_padx = 0, True, (pad, pad)
         self.rule = self.hairline(df, color=p["layer"])
         self.rule.grid(row=1, column=0, sticky="ew")
         box = tk.Frame(df, bg=p["layer"])
@@ -2950,7 +3056,20 @@ class AppWindow:
         the segment drops to a second row. Measured on the real widgets - on every resize and
         every re-label of the primary - never a hard-coded width."""
         w = self.dpane.winfo_width()
-        if w <= 1 or self.pstate == "noengine":
+        if w <= 1:
+            return
+        # the header ends where the body does: the body is capped at the measure (`_scroller`,
+        # cap=True) with air at the right of a wide pane, and the primary shares that right
+        # edge - the Assumed bar, the prompt and the answer lines end at the primary's, never
+        # short of it under the thumb. From here `w` is the capped width
+        pad = self.px(SP[3])
+        cap = min(w, self.measure + 2 * pad)
+        padx = (pad, w - cap + pad)
+        if padx != self.head_padx:
+            self.head_padx = padx
+            self.head.grid_configure(padx=padx)
+        w = cap
+        if self.pstate == "noengine":
             return
         # the parts, not their frames: a Label's request is known at once, a frame's aggregate
         # only after Tk's next idle pass - and no <Configure> follows a re-labelled engine name
@@ -3047,6 +3166,8 @@ class AppWindow:
         else:
             self.b_main.f.grid_remove()          # the only state without a primary
         self.foot_p.fade(0, state == "drafting")   # the footer's `↵` names the primary: fades with it
+        if state != "drafting":                    # ... and says what the row's Return does: a
+            self.foot_p.word(0, "copy prompt" if state == "draft" else "promptify")   # draft is copied
         if state == "noengine":
             self.seg_host.grid_remove()          # nothing to target yet
             self.head_rows = 0
@@ -3146,8 +3267,30 @@ class AppWindow:
         self.l_draft = tk.Label(row, text=f"Drafting with {label} · 0 s", font=self.F["body"],
                                 fg=p["muted"], bg=p["layer"], bd=0, padx=0, pady=0)
         self.l_draft.pack(side="left")
-        self.b_cancel = _Btn(self, row, "Cancel", self._cancel_draft, kind="text")
-        self.b_cancel.f.pack(side="left", padx=(px(SP[2]) - px(SP[1]), 0))
+        # Cancel: 4 after the line while the two share the row, else under it on E (a 600 px
+        # window: the line alone is wider than the pane, and Cancel clipped to "Ca" at its
+        # edge) - a child of `inner` packed INTO the row, so it moves between the two without
+        # a rebuild; re-decided on every resize and every re-label of the line (the ticker's
+        # "· still working"). Change-only.
+        self.b_cancel = _Btn(self, inner, "Cancel", self._cancel_draft, kind="text")
+        self.cancel_under = None
+
+        def fit_cancel(e=None):
+            if not row.winfo_exists():
+                return
+            w = row.winfo_width()
+            under = w > 1 and self.l_draft.winfo_reqwidth() + px(SP[0]) + self.b_cancel.w > w
+            if under == self.cancel_under:
+                return
+            self.cancel_under = under
+            self.b_cancel.f.pack_forget()
+            if under:
+                self.b_cancel.f.pack(after=row, anchor="w", padx=(pad - px(SP[1]), 0), pady=(px(SP[0]), 0))
+            else:
+                self.b_cancel.f.pack(in_=row, side="left", padx=(px(SP[2]) - px(SP[1]), 0))
+        fit_cancel()
+        row.bind("<Configure>", fit_cancel)
+        self.l_draft.bind("<Configure>", fit_cancel)
         self.skel_at = None
         self.jobs["skel"] = self.win.after(300, lambda: self._skel_show(row))
 
@@ -3270,12 +3413,28 @@ class AppWindow:
                                        height=lh + px(SP[1]) + px(H_CTL))
         foot.pack(fill="x", padx=(pad - px(SP[1]), 0), pady=(px(SP[4]), 0))
         label = promptify.ENGINES.get(d.get("engine"), {}).get("label", d.get("engine", ""))
+        model, wall = d.get("model") or "", f" · {d.get('wall', 0):.0f} s"
         x, self.meta_items = px(SP[1]), []           # the button's own 8 px pad puts both on E
-        for text, font in ((f"Drafted by {label} · ", "meta"), (d.get("model") or "", "mono9"),
-                           (f" · {d.get('wall', 0):.0f} s", "meta")):
+        for text, font in ((f"Drafted by {label} · ", "meta"), (model, "mono9"), (wall, "meta")):
             self.meta_items.append(foot.create_text(x, lh // 2, anchor="w", text=text, font=self.F[font],
                                                     fill=p["muted"]))
             x += self.mf[font].measure(text)
+
+        def fit_meta(e):
+            """The line ends at E from the right (at 600 it ran 60 px past the pane): "Drafted
+            by Claude Code · " gives way first ("Claude Code · ", then nothing), then the model
+            id ellipsizes; the wall time always shows."""
+            meta, mono = self.mf["meta"], self.mf["mono9"]
+            room = e.width - px(SP[1]) - px(SP[3]) - meta.measure(wall)
+            head = next((t for t in (f"Drafted by {label} · ", f"{label} · ", "")
+                         if meta.measure(t) + mono.measure(model) <= room), "")
+            mid = ellipsize(mono, model, room - meta.measure(head))
+            x = px(SP[1])
+            for i, (text, font) in enumerate(((head, meta), (mid, mono), (wall, meta))):
+                foot.itemconfigure(self.meta_items[i], text=text)
+                foot.coords(self.meta_items[i], x, lh // 2)
+                x += font.measure(text)
+        foot.bind("<Configure>", fit_meta)
         self.b_update = _Btn(self, foot, "Update prompt", self._update, kind="text")
         self.b_update.f.place(x=0, y=lh + px(SP[1]))
         self.caps_update = self._chord_items(foot, self.b_update.w + px(SP[1]), lh + px(SP[1]) + px(H_CTL) // 2,
@@ -3408,15 +3567,20 @@ class AppWindow:
         btn.f.pack(side="right", anchor="s", padx=(px(SP[1]), 0), pady=(0, px(2)))
         a.host.pack(side="left", fill="x", expand=True)
         BAR_TEXT = "Assumed · the engine decides and says so · click to answer instead"
-        bar = tk.Label(blk, text=BAR_TEXT, font=self.F["meta"], fg=p["ink"], bg=p["layer"],
-                       bd=0, padx=0, pady=0, compound="center", cursor="hand2", takefocus=1,
-                       highlightthickness=0)
+        # a canvas, not a compound Label: the text sits on the left at the 12 px inset whatever
+        # the width (a Label centred it over the image once it fit - the one centred text in
+        # the app - and left it only when ellipsized)
+        bar = tk.Canvas(blk, height=px(H_CTL), bg=p["layer"], highlightthickness=0, bd=0,
+                        cursor="hand2", takefocus=1)
+        bar.i_bg = bar.create_image(0, 0, anchor="nw")
+        bar.i_text = bar.create_text(px(SP[2]), px(H_CTL) // 2, anchor="w", text=BAR_TEXT,
+                                     font=self.F["meta"], fill=p["ink"])
 
         def paint(e=None):
             w = bar.winfo_width()
             if w > 1:
-                bar.configure(image=self.rr(w, px(H_CTL), px(R_CTL), p["tint"], p["layer"]),
-                              text=ellipsize(self.mf["meta"], BAR_TEXT, w - 2 * px(SP[2])))
+                bar.itemconfigure(bar.i_bg, image=self.rr(w, px(H_CTL), px(R_CTL), p["tint"], p["layer"]))
+                bar.itemconfigure(bar.i_text, text=ellipsize(self.mf["meta"], BAR_TEXT, w - 2 * px(SP[2])))
 
         bar.bind("<Configure>", paint)
 
@@ -3854,7 +4018,31 @@ class AppWindow:
             if key == "openrouter" and action in ("active", "use"):   # its key is murmur's own file
                 row["disconnect"] = _Btn(self, col_, "Disconnect", self._disconnect_openrouter, kind="text")
                 row["disconnect"].f.pack(anchor="e", pady=(px(SP[0]), 0))
-            right.configure(width=max([px(W_ACT)] + [c.winfo_reqwidth() for c in col_.winfo_children()]))
+            w_act = max([px(W_ACT)] + [c.winfo_reqwidth() for c in col_.winfo_children()])
+            right.configure(width=w_act)
+
+            def fit(e, right=right, left=left, col_=col_, w_act=w_act):
+                """A narrow pane (600 px: beside the column the status wrapped to ten-character
+                lines, six of them) drops the action under the text, on the right edge; back
+                beside it, centred on the lines, when the room returns. Change-only."""
+                stack = e.width < px(W_ACT) + px(SP[2]) + px(200)
+                if stack == getattr(right, "stacked", False):
+                    return
+                right.stacked = stack
+                if stack:
+                    col_.place_forget()
+                    right.pack_propagate(True)
+                    left.pack_configure(side="top", fill="x", expand=False, padx=0)
+                    right.pack_configure(side="top", fill="x", after=left, pady=(px(SP[0]), 0))
+                    col_.pack(anchor="e")
+                else:
+                    col_.pack_forget()
+                    col_.place(relx=1.0, rely=0.5, anchor="e")
+                    right.pack_propagate(False)
+                    right.configure(width=w_act)
+                    right.pack_configure(side="right", fill="y", before=left, pady=0)
+                    left.pack_configure(side="left", fill="x", expand=True, padx=(0, px(SP[2])))
+            top.bind("<Configure>", fit)
             login = self.logins.get(key)
             if login and login["url"] and key == "claude":
                 row["code"] = self._paste_code(blk, login["login"])

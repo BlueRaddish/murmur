@@ -351,6 +351,16 @@ root.update()
 win.detail.event_generate("<Escape>")
 root.update()
 assert not win.editing and "ABANDONED" not in win.detail.get("1.0", "end")
+# the `Ctrl` `↵` cap beside Edit is the list's key too (it was bound on the Text alone, i.e.
+# only once already editing): from the list it opens the edit, from the Text it saves
+win.list.focus_force()
+root.update()
+win.list.event_generate("<Control-Return>")
+root.update()
+assert win.editing and win.win.focus_get() is win.detail
+win.detail.event_generate("<Control-Return>")
+root.update()
+assert not win.editing and win.b_edit.f.cget("text") == "Edit"
 it_e["text"] = LONG[:1400]              # the height tests below need the long transcript back
 hist.save()
 win.refresh()
@@ -369,8 +379,20 @@ assert E(win.card) == px_(4) and E(win.detail) == px_(16), (E(win.card), E(win.d
 # the status is meta in the footer's flash slot (`.right`, at the pane's right edge), the
 # footer the view's last row at 28 and the view's full width; "Copied" wears the check (it
 # goes with the flash), "Editing" does not and swaps the footer's hints for the edit strip
-assert (win.status is win.foot_h.right and win.status.master is win.foot_h and win.foot_h.grid_info()["row"] == 4
+assert (win.status is win.foot_h.right and win.status.master is win.foot_h and win.foot_h.grid_info()["row"] == 5
         and W.tkfont.Font(root, font=win.s_text.cget("font")).actual("size") == 10)
+# the rule under the filter (row 2, over the list) shows only while the list is scrolled - a
+# scrolled row or day header clips right under the field - as the Settings and draft bodies'
+# (an earlier show_sel may have left the list a few px down: start from the top)
+win.list.yview_moveto(0.0)
+root.update()
+assert win.hrule.grid_info()["row"] == 2 and win.hrule.cget("bg") == win.pal["layer"] and win.list.sb.winfo_ismapped()
+win.list.yview_moveto(1.0)
+root.update()
+assert win.hrule.cget("bg") == win.pal["divider"](win.pal["layer"])
+win.list.yview_moveto(0.0)
+root.update()
+assert win.hrule.cget("bg") == win.pal["layer"]
 # the action row: the primary, then three ink text buttons, each with its key drawn as a cap
 # chord 8 after it and the actions 16 apart. The row is ONE canvas (a Frame + Labels per
 # chord was +3.5 ms on the switch): the caps are its "cap" text items, `caps_copy` etc. their
@@ -481,11 +503,45 @@ assert upd(lambda: int(win.detail.cget("height")) == 3), win.detail.cget("height
 # ... and at 600 the card cannot hold the four actions AND their caps: the caps hide, the
 # buttons close up to 8 apart and Delete stays inside the card
 assert upd(lambda: win.act.itemcget(win.caps_del[0], "state") == "hidden")
+assert win.act_mode == "bare" and win.act.winfo_height() == px_(W.H_CTL)
 assert win.b_del.f.winfo_x() + win.b_del.f.winfo_width() <= win.act.winfo_width() < win.act_need
 assert win.b_prompt.f.winfo_x() == win.b_copy.f.winfo_width() + px_(8)
+# ... and a keyboard move onto a row whose card grows (Up from SHORT, one line, onto LONG at
+# three): the list shrinks by two lines at idle, AFTER move() scrolled the selection into
+# view - the list's own <Configure> asks again once that relayout has landed, so the row
+# stays in view (an idle job asked too early: the cascade Text -> card -> grid -> list spans
+# several idle passes)
+win._select(next(it for it in hist.items if it["text"] == SHORT))
+root.update()
+win.list.focus_force()
+root.update()
+top_of = lambda: next(y for it, y, _ in win.list.rows if it is win.sel)
+in_view = lambda: win.list.canvasy(0) <= top_of() and top_of() + win.list.H <= win.list.canvasy(0) + win.list.winfo_height()
+assert upd(lambda: int(win.detail.cget("height")) == 1)
+win.list.yview_moveto(0.0)              # wheeled to the top: the selection sits below the fold
+root.update()
+assert not in_view()
+win.list.move(-1)
+assert win.sel is win.rows[3][0] and len(win.sel["text"]) > 1300
+assert upd(lambda: int(win.detail.cget("height")) == 3 and in_view()), (win.list.winfo_height(), win.list.canvasy(0), top_of())
+# at 600 x 560 the row is too narrow for the four actions and their caps on one line, and the
+# view tall enough for two: Copy · Promptify over Edit · Delete at 32 + 8, every cap drawn
+# (the user's rule for small windows), the chords moved with their buttons, Delete's inside
+# the card; the card keeps its 6 lines, the row's second line counted in the height rule
+win.win.geometry(f"{px_(600)}x{px_(560)}")
+assert upd(lambda: win.act_mode == "two" and win.act.itemcget(win.caps_del[0], "state") == "normal")
+assert win.act.winfo_height() == 2 * px_(W.H_CTL) + px_(8) and win.b_prompt.f.winfo_y() == 0
+assert win.b_edit.f.winfo_y() == px_(W.H_CTL) + px_(8) == win.b_del.f.winfo_y() and win.b_edit.f.winfo_x() == 0
+assert win.b_prompt.f.winfo_x() == win.act_xs[1]
+img_del = next(i for i in win.act.find_withtag("grp_del") if win.act.type(i) == "image")
+assert win.act.coords(img_del) == [win.b_del.f.winfo_x() + win.b_del.w + px_(8), px_(W.H_CTL) + px_(8) + px_(16)]
+assert win.act.bbox("grp_del")[2] <= win.act.winfo_width() and win.act.coords(win.caps_del[0])[1] == win.act.coords(img_del)[1]
+assert upd(lambda: int(win.detail.cget("height")) == 6) and win.dsb.winfo_ismapped()
+assert win.card.winfo_y() + win.card.winfo_height() + px_(16) + px_(W.H_FOOT) == win.views["history"].winfo_height()
 win.win.geometry(f"{px_(780)}x{px_(560)}")
 assert upd(lambda: int(win.detail.cget("height")) == 6)
 assert upd(lambda: win.act.itemcget(win.caps_del[0], "state") == "normal" and win.b_prompt.f.winfo_x() == win.act_xs[1])
+assert win.act_mode == "row" and win.b_del.f.winfo_y() == 0 and win.act.coords(img_del) == [win.b_del.f.winfo_x() + win.b_del.w + px_(8), px_(16)]
 # ... and when the list fits, the card gets the rest of the pane, past 6 lines (at 560 the
 # chrome - filter 44, footer 28, a day header 24 - leaves room for exactly the 6-line cap, which
 # proves nothing; at 640 the room is 10 lines)
@@ -623,6 +679,13 @@ edge = lambda w: w.winfo_rootx() + w.winfo_width()
 assert upd(lambda: win.foot_s.winfo_width() == win.views["settings"].winfo_width() < px_(600) - px_(W.W_SIDE))
 assert win.foot_s.winfo_height() == px_(W.H_FOOT) and win.foot_s.bbox("view")[2] <= win.foot_s.right.winfo_x()
 assert edge(win.foot_s.right) == edge(win.r_mic.right), (edge(win.foot_s.right), edge(win.r_mic.right))
+# ... and the Indicator rows, whose control column (dots + swatch + hex field) leaves the
+# label no room at 600 (it rendered as "olou"): the control drops under the text, on the
+# same right edge, the label and description whole; the combo rows (200 wide) stay beside
+assert upd(lambda: win.r_color.stacked and win.r_color.right.winfo_y() > win.r_color.left.winfo_y())
+assert win.r_color.label.winfo_width() >= win.r_color.label.winfo_reqwidth() and win.r_color.label.winfo_x() == 0
+assert win.r_color.desc.winfo_width() >= win.r_color.desc.winfo_reqwidth() and win.r_color.desc.winfo_width() <= win.r_color.left.winfo_width()
+assert edge(win.r_color.right) == edge(win.r_mic.right) and not win.r_mic.stacked and not win.r_days.stacked
 wide = win._footer(win.views["settings"], [(("Ctrl", "Space"), "a hint that runs on and on")] * 6)
 wide.grid(row=5, column=0, sticky="ew")
 assert upd(lambda: wide.winfo_width() == win.foot_s.winfo_width())
@@ -631,6 +694,7 @@ assert edge(wide.right) == edge(win.foot_s.right)
 wide.destroy()
 win.win.geometry(f"{px_(780)}x{px_(560)}")
 assert upd(lambda: win.foot_s.winfo_width() == win.views["settings"].winfo_width() > px_(500))
+assert upd(lambda: not win.r_color.stacked) and win.r_color.right.winfo_y() == (win.r_color.frame.winfo_height() - win.r_color.right.winfo_height()) // 2
 win.sc.yview_moveto(1.0)
 root.update()
 assert srule.cget("bg") == win.pal["divider"](win.pal["layer"])
@@ -978,6 +1042,7 @@ win._select(hist.items[-1])
 root.update()
 assert win.sel is hist.items[-1] and win.pstate == "empty"
 assert win.b_main.f.cget("text") == "Promptify" and len(primaries()) == 1
+assert hint_words(win.foot_p) == ["promptify", "copy dictation", "back"]     # what ↵ and Ctrl C do here
 assert win.b_eng.f.cget("text") == "Claude Code" and win.seg_host.winfo_ismapped() and win.head_rows == 2
 # the target segment says `>_ Code` / `globe Web` (icon + short word; the engine's name is
 # already in the control before it): canvas cells 12 + 16 + 6 + text + 12 wide, the icon in
@@ -1064,6 +1129,12 @@ F = win.p_fields
 assert F["text"].get("1.0", "end").strip() == "Do the thing." and len(F["answers"]) == 2
 assert win.sel["draft"]["prompts"] == ["Do the thing.", "Second ask."]
 assert win.b_main.f.cget("text") == "Copy prompt" and win.b_main.on and len(primaries()) == 1
+# the footer's `↵` names what the row's Return does - `copy prompt` now that the row has a
+# draft (`_plist_go` copies it) - and the hints after it shift by the word's difference
+assert hint_words(win.foot_p) == ["copy prompt", "copy dictation", "back"]
+w0_ = next(i for i in win.foot_p.find_withtag("view0h") if win.foot_p.type(i) == "text" and "cap" not in win.foot_p.gettags(i))
+c1_ = next(i for i in win.foot_p.find_withtag("view1h") if win.foot_p.type(i) == "image")
+assert win.foot_p.coords(c1_)[0] == win.foot_p.coords(w0_)[0] + win.mf["meta"].measure("copy prompt") + px_(16)
 # the foot of the draft is one canvas: the "Drafted by" line as text items (the model id in
 # mono), Update prompt placed 8 under it with its `Ctrl` `↵` chord 8 after - all on E
 foot = win.p_foot
@@ -1094,6 +1165,10 @@ assert win.head_rows == 2 and win.seg_host.grid_info()["row"] == 1
 win.win.geometry(f"{win.px(1000)}x{win.px(640)}")
 assert settle(lambda: win.head_rows == 1)
 assert win.seg_host.grid_info()["row"] == 0
+# ... and in a pane wider than the body's measure the header ends where the body does: the
+# primary on the prompt's right edge (the Assumed bar's too), not off at the pane's under the thumb
+assert settle(lambda: win.dpane.winfo_width() > win.measure + 2 * px_(16) and edge(win.b_main.f) == edge(F["text"]))
+assert edge(win.b_main.f) == win.dpane.winfo_rootx() + win.measure + px_(16) < edge(win.dpane) - px_(16)
 win.win.geometry(f"{win.px(780)}x{win.px(560)}")
 assert settle(lambda: win.head_rows == 2)
 # ... and re-decided the moment the engine name changes, with no resize to prompt it: a window
@@ -1132,8 +1207,30 @@ assert win.eng_label == "Claude Code" and win.head_rows == 2 and win.seg_host.gr
 eng_w = win.eng_dot.winfo_reqwidth() + px_(4) + win.eng_chev.winfo_reqwidth() + win.b_eng.w
 assert eng_w + px_(12) + win.b_main.w <= win.dpane.winfo_width() - 2 * px_(16)
 assert edge(win.b_main.f) == edge(win.dpane) - px_(16)
+# the "Drafted by" line ends at E from the right (it ran 60 px past the pane): the engine's
+# name gives way first - "Claude Code · " here - the model id and the wall time stay, no holes
+foot = win.p_foot
+meta = [foot.itemcget(i, "text") for i in win.meta_items]
+assert meta == ["Claude Code · ", "sonnet", " · 0 s"], meta
+assert mx(1) == mx(0) + win.mf["meta"].measure(meta[0]) and mx(2) == mx(1) + win.mf["mono9"].measure("sonnet")
+assert mx(2) + win.mf["meta"].measure(meta[2]) <= foot.winfo_width() - px_(16) < mx(2) + win.mf["meta"].measure("Drafted by " + meta[2])
+# ... and a draft in progress puts Cancel under the "Drafting with" line, on E, when the two
+# cannot share the row (it clipped to "Ca" at the pane's edge); beside the line again at 780
+PF.draft = slow_draft
+win._run_draft(win.sel)
+root.update()
+assert win.pstate == "drafting" and win.cancel_under and win.b_cancel.f.master is win.p_inner
+assert win.b_cancel.f.winfo_y() > win.l_draft.master.winfo_y() and Ep(win.b_cancel.f, win.dpane) + win.b_cancel.pad == px_(16)
+assert edge(win.b_cancel.f) <= edge(win.dpane) - px_(16)
 win.win.geometry(f"{win.px(780)}x{win.px(560)}")
+assert settle(lambda: win.cancel_under is False and win.b_cancel.f.winfo_ismapped())
+assert Ep(win.b_cancel.f, win.dpane) == px_(16) + win.l_draft.winfo_width() + px_(4) and win.b_cancel.f.winfo_y() == win.l_draft.master.winfo_y()
+win._escape()
+assert settle(lambda: win.pstate == "draft" and not win.draft_thread.is_alive())
+PF.draft = fake_draft
 assert settle(lambda: win.b_eng.f.cget("text") == "Claude Code" and win.head_rows == 2)
+assert win.p_foot.itemcget(win.meta_items[0], "text") == "Drafted by Claude Code · "   # the room is back
+F = win.p_fields                                    # the cancel rebuilt the draft body
 # chips: a chip fills its answer and is the chosen one; typing something else un-chooses it;
 # the strip is ONE tab stop with a cursor
 strip, a0 = F["chips"][0], F["answers"][0]

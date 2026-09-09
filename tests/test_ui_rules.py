@@ -194,14 +194,15 @@ for theme in ("light", "dark"):
     assert at(chosen.cget("image"), win.px(11), 1) == W.rgb(pal["ink"]) and at(chosen.cget("image"), win.px(11), win.px(11)) == W.rgb(W.PRESETS[1]), theme
     assert W.contrast(pal["ink"], pal["card"]) >= 4.5 and W.contrast(pal["stroke_field"], pal["card"]) >= 3.0, theme   # ring, off-toggle outline
 
-    # --- M6. the sidebar is `base` under a grain (gaussian, sigma 3 / 2.5 - subtle: a 100-sample
-    # mean within 2 of base, nothing past 5 sigma, and it IS noise); the content ground is the
-    # user's white in light, exactly
+    # --- M6. the sidebar is `base` under a grain (gaussian, sigma 3 / 2.5, clamped to base +- 5:
+    # every sidebar pixel within 5 of base, the spec's rule, holds by construction - a 100-sample
+    # mean within 2 of base, none past 5, and it IS noise); the content ground is the user's
+    # white in light, exactly
     side = win.side
     tile = side.itemcget(side.find_withtag("frost")[0], "image")
     b = W.rgb(pal["base"])[0]
     vals = [int(root.tk.splitlist(root.tk.call(tile, "get", x, y))[0]) for x in range(3, 96, 9) for y in range(3, 96, 9)]
-    assert abs(sum(vals) / len(vals) - b) <= 2 and max(abs(v - b) for v in vals) <= 15, (theme, b, vals[:10])
+    assert abs(sum(vals) / len(vals) - b) <= 2 and max(abs(v - b) for v in vals) <= 5, (theme, b, vals[:10])
     assert len(set(vals)) > 3, (theme, "no grain")
     assert theme == "dark" or win.views["history"]["bg"] == "#ffffff" == pal["layer"]
 
@@ -242,7 +243,10 @@ for theme in ("light", "dark"):
     drawn = {l.cget("text") for l in win.caps_all} | {
         c.itemcget(i, "text") for c in (side, win.foot_h, win.foot_p, win.foot_s, win.act, win.p_foot)
         for i in c.find_withtag("cap")}
-    # `Ctrl ,` and `Ctrl W` are the two documented undrawn synonyms (of the Settings row and Esc)
+    # `Ctrl ,` and `Ctrl W` are the two documented undrawn synonyms (of the Settings row and Esc);
+    # the one SIZE without the card's four caps is 600 x 400, where `_layout_act` hides them
+    # (a second row of actions would leave the list a row and a half) - at 600 x 560 and up
+    # the row wraps to two lines and keeps them (test_window checks both)
     CAP = {v: k for k, v in KEYSYM.items()}
     undrawn = {("Control", "Key", "comma"), ("Control", "Key", "w")}
     for seq in bound - undrawn:
