@@ -130,6 +130,28 @@ for theme in ("light", "dark"):
     assert win.icon("search", pal["muted"]) is win.icon("search", pal["muted"])      # cached, one per key
     assert win.icon("search", pal["muted"]).width() == win.px(W.ICON)
 
+    # --- §6 dark parity of the Settings controls: every state is a token in both themes. The
+    # toggle on (haze is on in this cfg) is a `ring` track with a white knob; the trigger cap
+    # the raised recipe (lit top in dark, its hairline in light, the `stroke_edge` lip in both,
+    # ink text on `ctl`, 4.5+); the slider a `stroke_strong` track, `ring` fill, a `ctl` knob
+    # with the `ring` core; the chosen colour dot a 2 px `ink` ring on the card
+    tg = win.ctl["haze"]
+    assert at(tg.cget("image"), win.px(8), win.px(10)) == W.rgb(pal["ring"]) and at(tg.cget("image"), win.px(26), win.px(10)) == (255, 255, 255)
+    lt = win.l_trig
+    assert at(lt.cget("image"), win.px(44), 0) == W.rgb(pal["stroke_top"] if theme == "dark" else pal["stroke"](pal["ctl"])), theme
+    assert at(lt.cget("image"), win.px(44), win.px(24) - 1) == W.rgb(pal["stroke_edge"]) and lt.cget("fg") == pal["ink"], theme
+    assert W.contrast(lt.cget("fg"), pal["ctl"]) >= 4.5 and W.contrast(pal["muted"], pal["ctl"]) >= 4.5, theme   # cap text
+    sl = win.ctl["opacity"]
+    lines = [i for i in sl.find_all() if sl.type(i) == "line"]
+    assert {sl.itemcget(i, "fill") for i in lines} == {pal["stroke_strong"], pal["ring"]}, theme
+    knob = sl.itemcget(next(i for i in sl.find_all() if sl.type(i) == "image"), "image")
+    assert at(knob, win.px(10), win.px(10)) == W.rgb(pal["ring"]) and at(knob, win.px(10), win.px(17)) == W.rgb(pal["ctl"]), theme
+    assert W.contrast(pal["ring"], pal["card"]) >= 3.0 and W.contrast(pal["stroke_strong"], pal["card"]) >= 1.3, theme   # the track reads
+    win.ctl["color"]["pick"](W.PRESETS[1])
+    chosen = win.ctl["color"]["dots"][1]
+    assert at(chosen.cget("image"), win.px(11), 1) == W.rgb(pal["ink"]) and at(chosen.cget("image"), win.px(11), win.px(11)) == W.rgb(W.PRESETS[1]), theme
+    assert W.contrast(pal["ink"], pal["card"]) >= 4.5 and W.contrast(pal["stroke_field"], pal["card"]) >= 3.0, theme   # ring, off-toggle outline
+
     # --- M6. the sidebar is `base` under a grain (gaussian, sigma 3 / 2.5 - subtle: a 100-sample
     # mean within 2 of base, nothing past 5 sigma, and it IS noise); the content ground is the
     # user's white in light, exactly

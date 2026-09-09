@@ -552,6 +552,7 @@ print("history view ok")
 win.go("settings")
 root.update()
 assert cfg.get("theme") is None                          # missing key = follow the system
+ipx = lambda img, x, y: tuple(int(v) for v in root.tk.splitlist(root.tk.call(img, "get", x, y)))
 
 # the frame: group labels are meta/muted on E over cards that start 12 before it; the row
 # labels land on E; the thumb is 4 px; the rule under the title shows only while scrolled
@@ -560,6 +561,11 @@ assert glab.cget("text") == "Window" and glab.cget("fg") == win.pal["muted"]
 assert W.tkfont.Font(root, font=glab.cget("font")).actual("size") == 10
 Es = lambda w: w.winfo_rootx() - win.views["settings"].winfo_rootx()
 assert Es(glab) == px_(16) and Es(win.cards[0]) == px_(4) and Es(win.r_mic.head) == px_(16)
+# a row is 12 above and below its label + description (62 at 96 dpi: Fluent's 68 bent to fit
+# the Indicator card on a 560 window); the control column is centred in it
+lh = win.mf["body"].metrics("linespace")
+assert win.r_days.frame.winfo_height() == 2 * px_(12) + 2 * lh + px_(4), win.r_days.frame.winfo_height()
+assert win.r_days.desc.cget("fg") == win.pal["muted"] and win.r_days.right.winfo_y() == (win.r_days.frame.winfo_height() - win.r_days.right.winfo_height()) // 2
 # the thumb: 4 px painted (clam's 1 px strips either side are clipped by its column), in the
 # pane's right padding; the cards end where it starts, 4 before the pane's edge, thumb or not
 assert win.ssb.winfo_reqwidth() == px_(4) + 2 and win.ssb.winfo_ismapped()
@@ -669,6 +675,18 @@ n = len(saves)
 win.ctl["color"]["dots"][3].event_generate("<Button-1>")  # a preset dot
 root.update()
 assert cfg["color"] == W.PRESETS[3] == cfg["color"].lower() and len(saves) == n + 1
+# the dots: 14 px in a 22 box (8 apart), a `stroke_strong` edge; the chosen one wears a 2 px
+# `ink` ring at a 2 px gap that fills its box - so the pick moves nothing - and the strip's
+# keyboard cursor a `stroke_field` one
+dots, mid = win.ctl["color"]["dots"], px_(22) // 2
+assert all(d.winfo_width() == px_(22) == d.winfo_height() for d in dots)
+assert ipx(dots[3].cget("image"), mid, mid) == W.rgb(W.PRESETS[3]) and ipx(dots[3].cget("image"), mid, 1) == W.rgb(win.pal["ink"])
+assert ipx(dots[2].cget("image"), mid, mid) == W.rgb(W.PRESETS[2]) and ipx(dots[2].cget("image"), mid, px_(4)) == W.rgb(win.pal["stroke_strong"])
+dots[0].master.focus_force()
+root.update()
+assert ipx(dots[3].cget("image"), mid, 1) == W.rgb(win.pal["ink"])            # the cursor followed the pick
+dots[0].master.event_generate("<Right>")
+assert ipx(dots[4].cget("image"), mid, 1) == W.rgb(win.pal["stroke_field"])   # ... and moved
 
 n, e = len(saves), win.ctl["color"]["entry"]
 e.focus_force()
@@ -690,10 +708,32 @@ e.delete(0, "end")
 e.insert(0, "#12ff34")
 e.event_generate("<Return>")
 
+# the toggle: on = a `ring` track (a touch of ink under the pointer) with a 14 px white knob at
+# the right; off = the ground with a `stroke_field` hairline and a 12 px `muted` knob at the
+# left (ink under the pointer). A flip slides the knob: three frames of the NEW look 33 ms
+# apart (t 0 / .5 / 1), the job in `jobs`; reduced motion lands on the last frame at once
+tg = win.ctl["haze"]
+tpx = lambda x, y: ipx(tg.cget("image"), px_(x), px_(y) if y else 0)   # px_(0) is 1
+assert cfg["haze"] is True and tg.cget("image") and int(tg.cget("highlightthickness")) == px_(2)
+assert tpx(26, 10) == (255, 255, 255) and tpx(8, 10) == W.rgb(win.pal["ring"]) == tpx(18, 0)
+tg.event_generate("<Enter>")
+assert tpx(8, 10) == W.rgb(W.mix(win.pal["ring"], win.pal["ink"], .10)) and tpx(26, 10) == (255, 255, 255)
 n = len(saves)
-win.ctl["haze"].event_generate("<Button-1>")
-root.update()
-assert cfg["haze"] is False and len(saves) == n + 1
+tg.event_generate("<Button-1>")                          # -> off, sliding (handled at once)
+assert cfg["haze"] is False and len(saves) == n + 1 and ("toggle", "haze") in win.jobs
+assert tpx(18, 0) == W.rgb(win.pal["stroke_field"]) and tpx(27, 10) == W.rgb(win.pal["ink"])   # frame 1: off look, knob still right
+assert tpx(18, 10) == W.rgb(tg.cget("bg"))
+assert upd(lambda: ("toggle", "haze") not in win.jobs, n=30)
+assert tpx(9, 10) == W.rgb(win.pal["ink"]) and tpx(27, 10) == W.rgb(tg.cget("bg"))            # landed left
+tg.event_generate("<Leave>")
+assert tpx(9, 10) == W.rgb(win.pal["muted"])
+win.motion = False
+tg.event_generate("<Button-1>")
+assert cfg["haze"] is True and ("toggle", "haze") not in win.jobs and tpx(26, 10) == (255, 255, 255)
+win.motion = True
+tg.event_generate("<Button-1>")
+assert tpx(27, 10) == W.rgb(win.pal["muted"])            # frame 1 again, no hover: muted knob
+assert upd(lambda: ("toggle", "haze") not in win.jobs, n=30) and cfg["haze"] is False
 
 n, sl = len(saves), win.ctl["opacity"]
 sl.event_generate("<Button-1>", x=10, y=16)
@@ -702,8 +742,25 @@ assert len(saves) == n                                   # dragging does not wri
 sl.event_generate("<ButtonRelease-1>", x=40, y=16)
 root.update()
 assert len(saves) == n + 1 and 0.2 <= cfg["opacity"] < 0.9
-s_lab = next(w for w in sl.master.winfo_children() if isinstance(w, tk.Label))
-assert s_lab.cget("text") == f"{cfg['opacity'] * 100:.0f} %", s_lab.cget("text")   # a percentage, not 0.85
+# the value reads `38%`: the digits in mono ink (`ctl["opacity_label"]`), the `%` in the body
+# font muted, packed right after them with no gap (a mono space is a full cell)
+s_lab = win.ctl["opacity_label"]
+unit = next(w for w in sl.master.winfo_children() if isinstance(w, tk.Label) and w is not s_lab)
+assert s_lab.cget("text") == f"{cfg['opacity'] * 100:.0f}", s_lab.cget("text")   # a percentage, not 0.85
+assert unit.cget("text") == "%" and unit.cget("fg") == win.pal["muted"] and s_lab.cget("fg") == win.pal["ink"]
+assert W.tkfont.Font(root, font=s_lab.cget("font")).actual("family") == "Cascadia Mono" != W.tkfont.Font(root, font=unit.cget("font")).actual("family")
+root.update()
+assert unit.winfo_x() == s_lab.winfo_x() + s_lab.winfo_width()
+assert all(int(w.cget(k)) == 0 for w in (unit, s_lab) for k in ("bd", "padx", "pady"))
+# the track is 4 px with round caps (`stroke_strong`, the `ring` fill over it); the knob an
+# 18 px `ctl` dot with its hairline and a 10 px `ring` core, centred on the track
+lines = [i for i in sl.find_all() if sl.type(i) == "line"]
+assert len(lines) == 2 and all(float(sl.itemcget(i, "width")) == px_(4) and sl.itemcget(i, "capstyle") == "round" for i in lines)
+assert {sl.itemcget(i, "fill") for i in lines} == {win.pal["stroke_strong"], win.pal["ring"]}
+knob = next(i for i in sl.find_all() if sl.type(i) == "image")
+kc = px_(20) // 2
+assert ipx(sl.itemcget(knob, "image"), kc, kc) == W.rgb(win.pal["ring"]) and ipx(sl.itemcget(knob, "image"), kc, kc + px_(7)) == W.rgb(win.pal["ctl"])
+assert sl.coords(knob)[1] == sl.coords(lines[0])[1] and sl.coords(knob)[0] == sl.coords(lines[1])[2]   # on the track, at the fill's end
 
 n = len(saves)
 win.e_days.focus_force()
@@ -735,8 +792,24 @@ assert (win.r_model.chip.cget("text") == "restart to apply" and win.r_model.chip
 
 win._captured(0xB0)
 assert cfg["trigger_vk"] == 0xB0 and win.l_trig.cget("text") == W.MEDIA_KEYS[0xB0]
+# the trigger key IS a keycap: the raised recipe (`ctl`, its hairline, the `stroke_edge` lip)
+# at 24 px rendered at the fixed W_CHIP, mono9, ink while a key is set, `ring` while capturing,
+# muted for "none"; registered with every other cap, 8 before Change…
+lt = win.l_trig
+root.update()
+assert lt in win.caps_all and lt.winfo_width() == px_(W.W_CHIP) and lt.winfo_height() == px_(W.H_CHIP)
+assert str(lt.cget("image")) == str(win.kbd_img(W.MEDIA_KEYS[0xB0], W.H_CHIP, px_(W.W_CHIP), lt.cget("bg")))
+assert ipx(lt.cget("image"), px_(44), px_(12)) == W.rgb(win.pal["ctl"]) and ipx(lt.cget("image"), px_(44), px_(24) - 1) == W.rgb(win.pal["stroke_edge"])
+assert lt.cget("fg") == win.pal["ink"] and W.tkfont.Font(root, font=lt.cget("font")).actual("size") == 9 and int(lt.cget("takefocus")) == 0
+assert win.b_change.f.winfo_rootx() == lt.master.winfo_rootx() + px_(W.W_CHIP) + px_(8)
+win.get_app = lambda: types.SimpleNamespace(capture=None)
+win.capture_key()
+assert lt.cget("text") == "Press a key…" and lt.cget("fg") == win.pal["ring"] and lt.winfo_width() == px_(W.W_CHIP)
+win._captured(0xB0)
 win.clear_key()
+win.get_app = lambda: None
 assert cfg["trigger_vk"] is None and not win.b_rm.f.winfo_ismapped()
+assert lt.cget("text") == "none" and lt.cget("fg") == win.pal["muted"]
 if win.mics:   # the microphone is saved by name, never by index
     win.v_mic.set(f"{win.mics[0][0]}: {win.mics[0][1]}"); win._set_mic()
     assert cfg["mic"] == win.mics[0][1] and isinstance(cfg["mic"], str)
@@ -1317,9 +1390,27 @@ root.update()
 assert logins[-1].key == "codex" and "codex" in win.logins
 R = win.e_rows
 assert R["codex"]["action"] == "cancel" and R["codex"]["status"].cget("text").startswith("Connecting · ") and "code" not in R["codex"]
+# the connecting row's dot breathes: `muted` over the layer at .4 / .7 / 1.0 / .7, a step every
+# 225 ms, ONE job for the rows; the others' dots stand still (connected = `ring`)
+frames = [str(win.dot(8, 6, W.mix(win.pal["layer"], win.pal["muted"], a))) for a in (.4, .7, 1.0)]
+first = str(R["codex"]["dot"].cget("image"))              # any frame: the update above can take 200 ms+
+assert "breathe" in win.jobs and first in frames
+assert settle(lambda: str(R["codex"]["dot"].cget("image")) != first, n=40)     # ... and it moves
+assert str(R["codex"]["dot"].cget("image")) in frames
+assert str(R["claude"]["dot"].cget("image")) == str(win.dot(8, 6, win.pal["ring"]))
 R["codex"]["btn"].cmd()                                     # Cancel
 root.update()
 assert "codex" not in win.logins and win.e_rows["codex"]["action"] == "connect"
+assert "breathe" not in win.jobs                            # the rebuilt rows dropped the loop
+assert str(win.e_rows["codex"]["dot"].cget("image")) == str(win.dot(8, 6, win.pal["layer"], edge=win.pal["stroke_field"]))
+win.motion = False                                          # reduced motion: the .7 frame, still
+win.e_rows["codex"]["btn"].cmd()
+root.update()
+assert "codex" in win.logins and "breathe" not in win.jobs and str(win.e_rows["codex"]["dot"].cget("image")) == frames[1]
+win.e_rows["codex"]["btn"].cmd()
+root.update()
+win.motion = True
+assert "codex" not in win.logins
 # claude, login expired: Connect, the url arrives, the paste-code fallback, done: connected, still active
 STATUS["claude"] = ("expired", "Login expired")
 win._eng_cache.clear()                                # the fake changed under the cache
@@ -1507,10 +1598,19 @@ win.go("settings")
 root.update()
 assert settle(lambda: win.drafting is None)          # a rebuild waits for a running draft to land
 geo, sel_ = win.win.geometry(), win.sel
+win.ctl["haze"].event_generate("<Button-1>")                 # a slide in flight when the rebuild lands
+assert ("toggle", "haze") in win.jobs
 next(l for l, v in win.ctl["theme"] if v == "dark").event_generate("<Button-1>")
 root.update()
 assert cfg["theme"] == "dark" and win.dark and W.lum(win.pal["layer"]) < 0.1 and win.win.winfo_exists()
 assert win.view == "settings" and win.sel is sel_ and win.win.geometry().split("+")[0] == geo.split("+")[0]
+# the rebuilt controls carry the dark tokens: the toggle (haze is on now) a dark `ring` track
+# and the trigger cap the lit top; no job of the old window survives (the slide, the breathing)
+assert not any(k in win.jobs for k in ("slide", "skel", "track", "breathe")) and not any(isinstance(k, tuple) and k[0] == "toggle" for k in win.jobs)
+assert cfg["haze"] is True and ipx(win.ctl["haze"].cget("image"), px_(8), px_(10)) == W.rgb(win.pal["ring"])
+assert ipx(win.l_trig.cget("image"), px_(44), 0) == W.rgb(win.pal["stroke_top"]) and win.pal["stroke_top"] is not None
+assert ipx(win.l_trig.cget("image"), px_(44), px_(12)) == W.rgb(win.pal["ctl"])
+assert ipx(win.ctl["opacity"].itemcget(next(i for i in win.ctl["opacity"].find_all() if win.ctl["opacity"].type(i) == "image"), "image"), px_(10), px_(10)) == W.rgb(win.pal["ring"])
 next(l for l, v in win.ctl["theme"] if v == "system").event_generate("<Button-1>")
 root.update()
 assert cfg["theme"] == "system" and not win.dark               # the override says light

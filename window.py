@@ -392,7 +392,9 @@ def dot_png(box: int, d: int, fill: str, ring: str = None, ring_w: int = 2, gap:
         rc = core[0] * SS / 2
         dr.ellipse([c - rc, c - rc, c + rc, c + rc], fill=core[1])
     if ring:
-        rr = r + (gap + ring_w / 2) * SS
+        # PIL draws an outline INWARD from its box, so the box's radius is the ring's outer
+        # edge: dot + gap + ring - a 14 px dot, gap 2, ring 2 fills a 22 box exactly
+        rr = r + (gap + ring_w) * SS
         dr.ellipse([c - rr, c - rr, c + rr, c + rr], outline=ring, width=int(ring_w * SS))
     return _png(im)
 
@@ -776,9 +778,10 @@ class _Row:
     control right-aligned in a column as wide as the control, 16 from the text. Rows are
     separated by an INSET hairline - from the label's left edge to the right padding, in a
     lighter step than the card's own outline, so the card reads as one object instead of a
-    stack of full-width rules. 8 px above and below the taller column: a label over its
-    description makes the row 52. The Labels carry none of Tk's default border/padding
-    (2 + 1 px a side), so their text lands on E and the row on the grid."""
+    stack of full-width rules. 12 px above and below the taller column: a label over its
+    description makes the row 62 (Fluent's SettingsCard is 68; 60-ish keeps the Indicator card
+    on a 560 px window), a 32 px control alone 56. The Labels carry none of Tk's default
+    border/padding (2 + 1 px a side), so their text lands on E and the row on the grid."""
 
     def __init__(self, ui, group, label, desc=None):
         p, bg = ui.pal, group["bg"]
@@ -791,9 +794,9 @@ class _Row:
         main = tk.Frame(self.frame, bg=bg)
         main.pack(fill="x", padx=ui.cpad)
         self.right = tk.Frame(main, bg=bg)
-        self.right.pack(side="right", pady=ui.px(SP[1]))   # the control's own width; the label
+        self.right.pack(side="right", pady=ui.px(SP[2]))   # the control's own width; the label
         left = tk.Frame(main, bg=bg)                        # column takes what is left
-        left.pack(side="left", fill="x", expand=True, pady=ui.px(SP[1]), padx=(0, ui.px(SP[3])))
+        left.pack(side="left", fill="x", expand=True, pady=ui.px(SP[2]), padx=(0, ui.px(SP[3])))
         self.head = tk.Frame(left, bg=bg)
         self.head.pack(anchor="w")
         tk.Label(self.head, text=label, font=ui.F["body"], fg=p["ink"], bg=bg, bd=0, padx=0,
@@ -1367,8 +1370,9 @@ class AppWindow:
                       edge=(p["stroke_edge"], p["stroke_top"]))
 
     def kbd_img(self, label, h=H_KBD, w=None, ground=None) -> tk.PhotoImage:
-        """`kbd_png` as a cached PhotoImage (one per label, size and ground)."""
-        return self.img(("kbd", label, h, w, ground), lambda: self.kbd_png(label, h, w, ground))
+        """`kbd_png` as a cached PhotoImage (one per label, size and ground; a cap at a fixed
+        `w` is the same image whatever it says - the trigger key's, relabelled in place)."""
+        return self.img(("kbd", None if w else label, h, w, ground), lambda: self.kbd_png(label, h, w, ground))
 
     def keycap(self, parent, label, h=H_KBD, fg=None, w=None) -> tk.Label:
         """A decorative keycap (`kbd` is taken: the focus-visible flag): not focusable, not
@@ -2235,16 +2239,15 @@ class AppWindow:
         ground = r.right["bg"]
         grp = tk.Frame(r.right, bg=ground)
         grp.pack(side="right")
-        # the chip keeps its fixed width in a frame that does not propagate: a Label sized by
-        # its own image would grow when the text turns into "Press a key…" and shove the row
-        chip = tk.Frame(grp, bg=ground, width=self.px(W_CHIP), height=self.px(24))
+        # the key IS a keycap (the raised recipe at 24 px, rendered at the fixed W_CHIP), in a
+        # frame that does not propagate: a Label sized by its own image would grow when the
+        # text turns into "Press a key…" and shove the row. Ink while a key is set, muted for
+        # "none"; the capture state writes `ring` (`capture_key`)
+        chip = tk.Frame(grp, bg=ground, width=self.px(W_CHIP), height=self.px(H_CHIP))
         chip.pack_propagate(False)
-        self.l_trig = tk.Label(chip, text=vk_name(self.cfg.get("trigger_vk")), font=self.F["mono9"],
-                               bg=ground, bd=0, highlightthickness=0, compound="center",
-                               padx=0, pady=0,
-                               fg=p["ink"] if self.cfg.get("trigger_vk") else p["muted"],
-                               image=self.rr(self.px(W_CHIP), self.px(H_CHIP), self.px(6),
-                                             p["ctl"], ground, p["stroke"](p["ctl"])))
+        self.l_trig = self.keycap(chip, vk_name(self.cfg.get("trigger_vk")), h=H_CHIP,
+                                  fg=p["ink"] if self.cfg.get("trigger_vk") else p["muted"],
+                                  w=self.px(W_CHIP))
         self.l_trig.pack(fill="both", expand=True)
         self.b_rm = _Btn(self, grp, "Remove", self.clear_key)
         self.b_change = _Btn(self, grp, "Change…", self.capture_key)
@@ -2463,10 +2466,13 @@ class AppWindow:
         """Nine presets plus a hex field - the field is the escape hatch, the dots are the taste."""
         p, cur = self.pal, [norm_hex(self.cfg.get(key), default)]
         ground = row.right["bg"]
-        box, d, ring = self.px(24), self.px(16), self.px(2)
+        # a 14 px dot in a 22 box (dots 8 apart): the chosen one's 2 px `ink` ring at a 2 px gap
+        # fills the box exactly, so ringing a dot moves nothing
+        box, d, ring = self.px(22), self.px(14), self.px(2)
         # one tab stop for the whole strip (nine would bury the hex field): Left/Right move a
-        # cursor, Space/Return picks - so arrowing past a dot never writes cfg
-        kb = [0, False]                                    # cursor index, strip has focus
+        # cursor, Space/Return picks - so arrowing past a dot never writes cfg. The cursor
+        # starts on the chosen dot (else its halo sat on the white one beside the ringed pick)
+        kb = [PRESETS.index(cur[0]) if cur[0] in PRESETS else 0, False]   # cursor index, strip has focus
         dots = tk.Frame(row.right, bg=ground, takefocus=1, highlightthickness=ring,
                         highlightbackground=ground, highlightcolor=p["ring"])
         dots.pack(side="left")
@@ -2538,27 +2544,36 @@ class AppWindow:
         swatch()
 
     def _slider(self, parent, value) -> None:
+        """160 x 32: a 4 px `stroke_strong` track with round caps, the `ring` fill over it, an
+        18 px `ctl` knob (its hairline, a 10 px `ring` core) that is the raised thing on the
+        track. The value reads `90%`: the digits in mono ink, the `%` in the body font muted,
+        two Labels with no space between (a mono space is a full cell wide)."""
         p, ring, ground = self.pal, self.px(2), parent["bg"]
         W, H = self.px(160) - 2 * ring, self.px(H_CTL) - 2 * ring   # the ring is inside the 160x32
         val = [round(value, 2)]
-        lab = tk.Label(parent, text="", font=self.F["mono"], fg=p["muted"], bg=ground)
+        tk.Label(parent, text="%", font=self.F["body"], fg=p["muted"], bg=ground, bd=0, padx=0,
+                 pady=0).pack(side="right")
+        lab = tk.Label(parent, text="", font=self.F["mono"], fg=p["ink"], bg=ground, bd=0, padx=0,
+                       pady=0)
         lab.pack(side="right")
         c = tk.Canvas(parent, width=W, height=H, bg=ground, cursor="hand2", takefocus=1,
                       highlightthickness=ring, highlightbackground=ground, highlightcolor=p["ring"])
         c.pack(side="right", padx=(0, self.px(SP[2])))
         self.focus_visible(c, ground)
-        r = self.px(14) / 2
-        c.create_line(r, H / 2, W - r, H / 2, fill=p["stroke_strong"], width=self.px(2))
-        fill = c.create_line(r, H / 2, r, H / 2, fill=p["ring"], width=self.px(2))
-        face = p["ctl"]                 # the knob is raised above whatever it slides on
+        r = self.px(18) / 2
+        c.create_line(r, H / 2, W - r, H / 2, fill=p["stroke_strong"], width=self.px(4), capstyle="round")
+        fill = c.create_line(r, H / 2, r, H / 2, fill=p["ring"], width=self.px(4), capstyle="round")
+        face, core = p["ctl"], p["ring"]
+        # the 18 px dot in a 20 box: 1 px of air keeps its hairline off the box's edge
         knob = c.create_image(r, H / 2, image=self.img(
-            ("knob", face), lambda: dot_png(self.px(18), self.px(14), face, p["stroke_strong"], 1, 0)))
+            ("knob", face, core), lambda: dot_png(self.px(20), self.px(18), face, edge=p["stroke"](face),
+                                                  core=(self.px(10), core))))
 
         def paint():
             x = r + (val[0] - 0.2) / 0.8 * (W - 2 * r)
             c.coords(fill, r, H / 2, x, H / 2)
             c.coords(knob, x, H / 2)
-            lab.configure(text=f"{val[0] * 100:.0f} %")
+            lab.configure(text=f"{val[0] * 100:.0f}")
 
         def at(ev, commit):
             x = min(W - r, max(r, c.canvasx(ev.x)))   # canvasx: the focus ring offsets ev.x
@@ -2571,7 +2586,7 @@ class AppWindow:
                 self.cfg["opacity"] = val[0]
                 self.save()
 
-        self.ctl["opacity"] = c
+        self.ctl["opacity"], self.ctl["opacity_label"] = c, lab
         c.bind("<Button-1>", lambda e: (setattr(self, "kbd", False), c.focus_set(), at(e, False)))
         c.bind("<B1-Motion>", lambda e: at(e, False))
         c.bind("<ButtonRelease-1>", lambda e: at(e, True))
@@ -2580,26 +2595,49 @@ class AppWindow:
         paint()
 
     def _toggle(self, parent, value, key="haze") -> None:
+        """36 x 20. Off: the ground with a `stroke_field` hairline round it and a 12 px `muted`
+        knob (ink under the pointer); on: a `ring` track (a touch of ink under the pointer)
+        with a 14 px white knob. A flip slides the knob in three frames (t = 0, .5, 1, 33 ms
+        apart, `jobs[("toggle", key)]`), each a cached render of the NEW state's look;
+        reduced motion shows the last frame at once. Focus: the 2 px `ring` highlight."""
         p, w, h = self.pal, self.px(36), self.px(20)
         ground = parent["bg"]
-        on = [bool(value)]
+        on, hov, pos = [bool(value)], [False], [1.0 if value else 0.0]   # state, pointer, knob t
         l = tk.Label(parent, bg=ground, bd=0, cursor="hand2", takefocus=1,
                      highlightthickness=self.px(2), highlightbackground=ground,
                      highlightcolor=p["ring"])
         l.pack(side="right")
         self.focus_visible(l, ground)
 
-        def paint(hover=False):
-            track = (mix(p["ring"], p["ink"], .10) if hover else p["ring"]) if on[0] else \
-                    (p["muted"] if hover else p["stroke_field"])
-            knob = "#ffffff" if on[0] else p["ctl"]
-            l.configure(image=self.img((track, knob, on[0]),
-                                       lambda: pill_png(w, h, track, knob, on[0])))
+        def frame(is_on, hover, t):
+            if is_on:
+                track, knob, edge, d = (mix(p["ring"], p["ink"], .10) if hover else p["ring"]), "#ffffff", None, 14
+            else:
+                track, knob, edge, d = ground, (p["ink"] if hover else p["muted"]), p["stroke_field"], 12
+            return self.img(("toggle", w, h, track, knob, edge, d, t),
+                            lambda: pill_png(w, h, track, knob, is_on, outline=edge, knob_d=self.px(d), t=t))
+
+        def paint(hover=None, t=None):
+            if hover is not None:
+                hov[0] = hover
+            if t is not None:
+                pos[0] = t
+            l.configure(image=frame(on[0], hov[0], pos[0]))
+
+        def slide(steps, i=0):
+            self.jobs.pop(("toggle", key), None)
+            if not l.winfo_exists():                 # the sheet's rows can be rebuilt mid-slide
+                return
+            paint(t=steps[i])
+            if i + 1 < len(steps):
+                self.jobs[("toggle", key)] = self.win.after(33, lambda: slide(steps, i + 1))
 
         def toggle(*_):
             on[0] = not on[0]
             self.cfg[key] = on[0]
-            paint(True)
+            self._cancel(("toggle", key))
+            steps = (0.0, 0.5, 1.0) if on[0] else (1.0, 0.5, 0.0)
+            slide(steps if self.motion else steps[-1:])
             self.save()
 
         self.ctl[key] = l
@@ -3701,10 +3739,11 @@ class AppWindow:
         dot + state · meaning; the action at the right; the Model field under the active one),
         the disclosure. `e_rows[key]` holds each row's parts for the tests."""
         p, px, pad, inner = self.pal, self.px, self.px(SP[3]), self.e_inner
+        self._cancel("breathe")                   # the old rows' connecting dot
         for w in inner.winfo_children():
             w.destroy()
         inner.unbind("<Configure>")               # the wrap bindings of the labels just destroyed
-        self.e_rows = {}
+        self.e_rows, breathing = {}, []
         self._line(inner, "The engine writes the prompt. Each signs in on its own; murmur keeps "
                    "no keys.", "meta")
         rows = tk.Frame(inner, bg=p["layer"])
@@ -3728,16 +3767,22 @@ class AppWindow:
                      padx=0, pady=0).pack(anchor="w")
             st = tk.Frame(left, bg=p["layer"])
             st.pack(fill="x", pady=(px(2), 0))
-            tk.Label(st, bg=p["layer"], bd=0, padx=0, pady=0,
-                     image=self.dot(8, 6, col) if col else self.dot(8, 6, p["layer"], edge=p["stroke_field"])
-                     ).pack(side="left", anchor="n", pady=(px(SP[0]), 0))
+            # the state dot: `ring` connected, `danger` on an error, hollow when not connected;
+            # a row that is signing in breathes (`_breathe`) - from its .7 frame, which is also
+            # the still one under reduced motion
+            dl = tk.Label(st, bg=p["layer"], bd=0, padx=0, pady=0,
+                          image=self.dot(8, 6, mix(p["layer"], p["muted"], .7)) if key in self.logins else
+                          self.dot(8, 6, col) if col else self.dot(8, 6, p["layer"], edge=p["stroke_field"]))
+            dl.pack(side="left", anchor="n", pady=(px(SP[0]), 0))
+            if key in self.logins:
+                breathing.append(dl)
             sl = tk.Label(st, text=status, font=self.F["meta"], fg=p["muted"], bg=p["layer"],
                           anchor="w", justify="left", bd=0, padx=0, pady=0)
             sl.pack(side="left", fill="x", expand=True, padx=(px(SP[1]), 0))
             self._wrap(sl, px(SP[3]))
             col_ = tk.Frame(right, bg=p["layer"])
             col_.place(relx=1.0, rely=0.5, anchor="e")
-            row = self.e_rows[key] = {"status": sl, "action": action, "btn": None}
+            row = self.e_rows[key] = {"status": sl, "dot": dl, "action": action, "btn": None}
             if action == "active":
                 tk.Label(col_, text="Active", font=self.F["meta"], fg=p["ink"], bg=p["layer"], bd=0,
                          padx=0, pady=0).pack(anchor="e")
@@ -3756,12 +3801,26 @@ class AppWindow:
                 row["code"] = self._paste_code(blk, login["login"])
             if action == "active":
                 row["model"] = self._model_line(blk, key)
+        if breathing and self.motion:
+            self._breathe(breathing)
         self._vault_block(inner)
         self._split_block(inner)
         self._line(inner, "Connect opens the engine’s own sign-in in your browser. A dictation is "
                    "sent only to the engine you pick, only when you press Promptify. With a vault "
                    "turned on, short excerpts from matching notes travel with it.", "meta",
                    pady=(px(SP[2]), 0))
+
+    def _breathe(self, dots, i=0) -> None:
+        """The connecting rows' dots breathe: `muted` over the layer at alpha .4 -> .7 -> 1.0
+        -> .7, one step per 225 ms (900 ms a cycle) - the one loop a sign-in's wait gets. The
+        job (`jobs["breathe"]`) is cancelled when the rows are rebuilt and by `_rebuild`; a
+        dot destroyed in between is skipped."""
+        p = self.pal
+        img = self.dot(8, 6, mix(p["layer"], p["muted"], (.4, .7, 1.0, .7)[i % 4]))
+        for l in dots:
+            if l.winfo_exists():
+                l.configure(image=img)
+        self.jobs["breathe"] = self.win.after(225, lambda: self._breathe(dots, i + 1))
 
     def _vault_block(self, inner) -> None:
         """The Obsidian bridge, under the engine rows: one row - name, state line, actions.
