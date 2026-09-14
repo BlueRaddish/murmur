@@ -71,14 +71,25 @@ m.win32_event_filter(0x100, D()); m.win32_event_filter(0x101, D())
 assert got == [murmur.VK_MEDIA_PLAY_PAUSE] and m.capture is None and not m.recording and m.listener.suppressed == 1
 m.listener.suppressed = 0
 m.cfg["trigger_vk"] = murmur.VK_MEDIA_PLAY_PAUSE
-# hold: down records (auto-repeat downs while held are ignored), up stops
+# hold: down records (auto-repeat downs while held are ignored), a real hold's up stops
 m.win32_event_filter(0x100, D()); assert m.recording and not m.persistent
 m.win32_event_filter(0x100, D()); assert m.recorder.calls == ["start"]
+m.trigger_t0 -= 1.0                              # held a second: a hold, not a tap
 m.win32_event_filter(0x101, D()); assert not m.recording
 assert m.listener.suppressed == 3
-m.last_chord_release -= 1                       # break the tap run the hold test started
-# double-tap: persistent until a later press
+# a tap (up within LATCH_S - all a headset's inline button can send) latches the take open:
+# the next press stops it; a second tap inside the double-tap window changes nothing
+m.last_chord_release -= 1
 m.win32_event_filter(0x100, D()); m.win32_event_filter(0x101, D())
+assert m.recording and m.persistent and m.state == "persistent"
+m.win32_event_filter(0x100, D()); m.win32_event_filter(0x101, D())   # the "double-tap"
+assert m.recording and m.persistent
+m.last_chord_release -= 1
+m.win32_event_filter(0x100, D()); assert not m.recording
+m.win32_event_filter(0x101, D())
+m.last_chord_release -= 1                       # break the tap run the hold test started
+# double-tap on real holds: persistent until a later press
+m.win32_event_filter(0x100, D()); m.trigger_t0 -= 1.0; m.win32_event_filter(0x101, D())
 m.win32_event_filter(0x100, D()); assert m.recording and m.persistent
 m.win32_event_filter(0x101, D()); assert m.recording
 m.last_chord_release -= 1

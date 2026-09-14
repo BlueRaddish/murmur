@@ -2376,7 +2376,7 @@ class AppWindow:
     def _listening(self, parent) -> None:
         p = self.pal
         g = self._group(parent, "Listening")
-        r = _Row(self, g, "Trigger key", "A headset button, media key or F13; hold, double- and triple-tap like the chord")
+        r = _Row(self, g, "Trigger key", "A headset button, media key or F13; hold to record, tap to latch, triple-tap for the window")
         # three widgets in one right-aligned group: packed straight into r.right they hugged the
         # LEFT edge of the control column and broke the one right edge every other row shares
         ground = r.right["bg"]

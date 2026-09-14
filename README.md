@@ -78,7 +78,7 @@ python murmur.py
 | Hold Ctrl+Win, speak, release | text is typed where the cursor is |
 | Double-tap Ctrl+Win | **persistent mode**: keeps recording until you press Ctrl+Win again |
 | Triple-tap Ctrl+Win | opens the murmur window |
-| Trigger key (opt-in) | one key with the same grammar: hold to record, double-tap for persistent, triple-tap for the window |
+| Trigger key (opt-in) | one key: hold to record, or tap to keep recording until the next tap; triple-tap for the window |
 | Tray icon right-click | start/stop, edit vocab, open log, quit |
 
 (Ctrl+Cmd on a Mac keyboard.) The glass stick is near-invisible at rest. While you talk it
@@ -166,8 +166,10 @@ the trigger key; changes apply as you make them.
 </picture>
 
 **Extra trigger key.** Settings > Trigger key > Change... binds any single key - a wired
-headset's inline button, a media key, F13 on a macro pad - with the same grammar as the
-chord: hold it to record, double-tap for persistent mode, triple-tap for the window. murmur
+headset's inline button, a media key, F13 on a macro pad - with the chord's grammar: hold it
+to record, double-tap for persistent mode, triple-tap for the window. A tap (released within
+0.3 s) latches the take open until the next press - a headset's inline button reaches Windows
+as an instant press however long you hold it, so on that hardware a tap is the whole story. murmur
 swallows that key so nothing else reacts to it, and it is never turned into a Ctrl+Win
 keystroke, so nothing extra reaches the app you're typing into. Different headsets send
 different codes; the capture records whatever yours sends (the log shows the code).

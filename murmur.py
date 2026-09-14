@@ -10,7 +10,9 @@ Modes
   triple-tap  three fast taps -> opens the murmur window instead of recording.
   trigger key (opt-in) any single key - a wired headset's button, a media key, F13 - bound
               in Settings by pressing it. Same grammar as the chord: hold to record,
-              double-tap for persistent, triple-tap for the window. It is its own trigger,
+              double-tap for persistent, triple-tap for the window - and a tap latches the
+              take open until the next press, for buttons Windows can only report as taps
+              (a headset's inline button). It is its own trigger,
               never translated into Ctrl+Win, so no stray modifier keystrokes reach apps.
 
 A glassy disc at the bottom of the screen shows the mode and live mic level, so you can
@@ -65,6 +67,11 @@ APPDIR = Path(os.environ.get("APPDATA", HERE)) / "murmur"
 SAMPLE_RATE = 16000
 DOUBLE_TAP_S = 0.4          # press within this window of the last release continues a tap run:
                             # two taps = persistent mode, three = open the window
+LATCH_S = 0.3               # a trigger key released this soon after its press was a tap, not a hold:
+                            # the take stays open until the next press. A headset's inline button
+                            # is a consumer control - Windows reports it as an instant down/up pair
+                            # however long it is physically held (murmur.log: every "hold" ended
+                            # in 0.1-0.3 s), so hold-to-record alone could never work on it.
 VK_MEDIA_PLAY_PAUSE = 0xB3  # what a wired headset's inline button sends on Windows
 
 # Hold both of these to record. Key.cmd is the Win key on Windows, Cmd on macOS.
@@ -369,6 +376,7 @@ class Murmur:
         self.persistent = False
         self.chord_was_down = False
         self.trigger_down = False
+        self.trigger_t0 = 0.0             # when the trigger key went down (the tap/hold call)
         self.last_chord_release = 0.0
         self.taps = 0                     # length of the current fast-tap run
         self.lock = threading.Lock()      # one transcription at a time
@@ -474,7 +482,9 @@ class Murmur:
             self.discard()
             self.on_open()
             return
-        if self.persistent:                 # press while persistent = stop
+        if self.persistent:                 # press while persistent = stop ...
+            if run and self.taps == 2:      # ... unless it is the second tap on a latched take:
+                return                      # the double-tap asked for what is already running
             self.stop()
             return
         self.start(persistent=run)
@@ -515,12 +525,18 @@ class Murmur:
             return True
         trig = self.cfg.get("trigger_vk")
         if trig is not None and vk == trig:
+            now = time.monotonic()
             if down and not self.trigger_down:   # holding a key auto-repeats WM_KEYDOWN
                 self.trigger_down = True
-                self.chord_pressed(time.monotonic())
+                self.trigger_t0 = now
+                self.chord_pressed(now)
             elif not down:
                 self.trigger_down = False
-                self.chord_released(time.monotonic())
+                if now - self.trigger_t0 < LATCH_S and self.recording and not self.persistent:
+                    self.persistent = True       # a tap: latch the take open (see LATCH_S)
+                    log("[latched]")
+                    self._set("persistent")
+                self.chord_released(now)
             self.listener.suppress_event()
         return True
 

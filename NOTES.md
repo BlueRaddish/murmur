@@ -208,6 +208,20 @@ Decisions
   Text clip the last one - the panel's Texts have no spacing. Dictating into an answer field
   works because Typist already skips the paste when murmur's own window is in front; the take
   now also lands in the focused panel field (and in History like any take).
+- 1.0.0, the trigger key that would not hold (2026-09-14). "If I'm only pressing down and
+  continuing to press down on my play pause button, it won't record... the keyboard chord
+  works." Evidence before theory: murmur.log shows every trigger "hold" ending in software within
+  0.1-0.3 s ("[rec]" then "(nothing heard: 0.2s)"), while chord holds run as long as held. A
+  headset's inline button is a consumer control: Windows reports it as an instant down/up pair
+  however long it is physically held, so the chord grammar (hold = record while held) can never
+  hold on that hardware - the take started at the down and stopped at the OS's immediate up. Fix
+  (LATCH_S = 0.3): a trigger key released within 0.3 s of its press is a tap and LATCHES the take
+  open (persistent) until the next press; a real hold (a keyboard media key, F13) still records
+  while held and stops at the release. The double-tap grammar survives: a second tap inside the
+  0.4 s window on a latched take is a no-op (chord_pressed returns instead of stopping), a third
+  still opens the window, a later press stops. The chord is unchanged - a quick Ctrl+Win tap still
+  records nothing rather than starting a take by surprise. Assumption named: the instant-up
+  reading rests on the log durations, not on a HID trace; the latch works either way.
 - 1.0.0, the ultracode pass (2026-09-07..09): "make the ui more modern... optimization... ui
   transitions looking more clean... reduce all unnecessary code and make compact for installation".
   Measured before anything: a view switch cost 90-160 ms (Tk re-laid the whole subtree out on
