@@ -9,10 +9,10 @@ Modes
   persistent  double-tap Ctrl+Win -> keeps recording until Ctrl+Win is pressed again.
   triple-tap  three fast taps -> opens the murmur window instead of recording.
   trigger key (opt-in) any single key - a wired headset's button, a media key, F13 - bound
-              in Settings by pressing it. Same grammar as the chord: hold to record,
-              double-tap for persistent, triple-tap for the window - and a tap latches the
-              take open until the next press, for buttons Windows can only report as taps
-              (a headset's inline button). It is its own trigger,
+              in Settings by pressing it. A single tap still does the key's own job (a
+              headset's Play/Pause keeps playing and pausing); double-tap starts or stops a
+              recording, triple-tap opens the window, a real hold records while held. It is
+              its own trigger,
               never translated into Ctrl+Win, so no stray modifier keystrokes reach apps.
 
 A glassy disc at the bottom of the screen shows the mode and live mic level, so you can
@@ -47,6 +47,7 @@ import json
 import os
 import sys
 import threading
+import zlib
 from pathlib import Path
 
 # CTranslate2 ships Intel OpenMP, whose worker threads spin for 200 ms after every parallel
@@ -67,11 +68,14 @@ APPDIR = Path(os.environ.get("APPDATA", HERE)) / "murmur"
 SAMPLE_RATE = 16000
 DOUBLE_TAP_S = 0.4          # press within this window of the last release continues a tap run:
                             # two taps = persistent mode, three = open the window
-LATCH_S = 0.3               # a trigger key released this soon after its press was a tap, not a hold:
-                            # the take stays open until the next press. A headset's inline button
-                            # is a consumer control - Windows reports it as an instant down/up pair
-                            # however long it is physically held (murmur.log: every "hold" ended
-                            # in 0.1-0.3 s), so hold-to-record alone could never work on it.
+HOLD_S = 0.3                # a trigger key still down after this long is a hold (records while
+                            # held). A headset's inline button never gets here: Windows reports it
+                            # as an instant down/up pair however long it is held (murmur.log: every
+                            # "hold" ended in 0.1-0.3 s), so on that button only taps exist.
+PASS_MARK = 0x6D726D72      # dwExtraInfo on the key murmur re-sends, so its own filter lets it by
+LOOP_CR = 2.4               # text whose zlib compression ratio passes this is a repetition loop -
+                            # Whisper's own hallucination threshold. The user's "uh + long pause"
+                            # takes logged 26.24 three windows running (2026-09-15)
 VK_MEDIA_PLAY_PAUSE = 0xB3  # what a wired headset's inline button sends on Windows
 
 # Hold both of these to record. Key.cmd is the Win key on Windows, Cmd on macOS.
@@ -148,6 +152,11 @@ def load_vocab(path: Path) -> str:
     terms = [l.strip() for l in path.read_text(encoding="utf-8").splitlines()]
     terms = [t for t in terms if t and not t.startswith("#")]
     return ", ".join(terms)
+
+
+def compression_ratio(text: str) -> float:
+    b = text.encode("utf-8")
+    return len(b) / max(1, len(zlib.compress(b)))
 
 
 def clean(text: str) -> str:
@@ -376,7 +385,10 @@ class Murmur:
         self.persistent = False
         self.chord_was_down = False
         self.trigger_down = False
-        self.trigger_t0 = 0.0             # when the trigger key went down (the tap/hold call)
+        self.trig_taps = 0                # taps in the trigger key's current run
+        self.trig_gen = 0                 # bumped on every trigger edge: stale timers see it and stand down
+        self.trig_held = False            # the current press became a hold (a take is recording)
+        self.later = lambda s, fn, *a: threading.Timer(s, fn, args=a).start()   # tests swap this
         self.last_chord_release = 0.0
         self.taps = 0                     # length of the current fast-tap run
         self.lock = threading.Lock()      # one transcription at a time
@@ -482,9 +494,7 @@ class Murmur:
             self.discard()
             self.on_open()
             return
-        if self.persistent:                 # press while persistent = stop ...
-            if run and self.taps == 2:      # ... unless it is the second tap on a latched take:
-                return                      # the double-tap asked for what is already running
+        if self.persistent:                 # press while persistent = stop
             self.stop()
             return
         self.start(persistent=run)
@@ -510,11 +520,13 @@ class Murmur:
 
     def win32_event_filter(self, msg, data) -> bool:
         """Runs for every key, before pynput's own handling. Two jobs: report the next key to a
-        waiting capture callback (binding the trigger key), and act on the bound trigger key
-        with the chord's grammar - hold records, double-tap goes persistent, triple-tap opens
-        the window; both down and up are swallowed so nothing else (a media player, the focused
-        app) sees it. Everything else passes through untouched."""
+        waiting capture callback (binding the trigger key), and act on the bound trigger key.
+        The trigger's edges are swallowed and counted (`_trig_down` / `_trig_up`); a run of one
+        tap is sent back out as the key itself, so Play/Pause still plays and pauses. Everything
+        else - and murmur's own re-sent key - passes through untouched."""
         vk = data.vkCode
+        if getattr(data, "dwExtraInfo", 0) == PASS_MARK:
+            return True
         down = msg in (0x100, 0x104)  # WM_KEYDOWN, WM_SYSKEYDOWN
         if self.capture is not None:
             if down:
@@ -525,20 +537,62 @@ class Murmur:
             return True
         trig = self.cfg.get("trigger_vk")
         if trig is not None and vk == trig:
-            now = time.monotonic()
             if down and not self.trigger_down:   # holding a key auto-repeats WM_KEYDOWN
                 self.trigger_down = True
-                self.trigger_t0 = now
-                self.chord_pressed(now)
-            elif not down:
+                self._trig_down()
+            elif not down and self.trigger_down:
                 self.trigger_down = False
-                if now - self.trigger_t0 < LATCH_S and self.recording and not self.persistent:
-                    self.persistent = True       # a tap: latch the take open (see LATCH_S)
-                    log("[latched]")
-                    self._set("persistent")
-                self.chord_released(now)
+                self._trig_up(vk)
             self.listener.suppress_event()
         return True
+
+    def _trig_down(self) -> None:
+        self.trig_gen += 1
+        self.trig_held = False
+        self.later(HOLD_S, self._trig_hold, self.trig_gen)
+
+    def _trig_hold(self, gen) -> None:
+        """Still down after HOLD_S: a real hold - record while held (a keyboard key, not a headset)."""
+        if gen != self.trig_gen or not self.trigger_down:
+            return
+        self.trig_held, self.trig_taps = True, 0
+        if not self.recording:
+            self.start(persistent=False)
+
+    def _trig_up(self, vk) -> None:
+        self.trig_gen += 1
+        if self.trig_held:
+            self.trig_held = False
+            if not self.persistent:
+                self.stop()
+            return
+        self.trig_taps += 1
+        self.later(DOUBLE_TAP_S, self._trig_resolve, self.trig_gen, vk)
+
+    def _trig_resolve(self, gen, vk) -> None:
+        """No further tap within DOUBLE_TAP_S: act on the run. The wait is the price of letting
+        a single tap stay the key's own - it reaches the media player 0.4 s late."""
+        if gen != self.trig_gen:
+            return
+        n, self.trig_taps = self.trig_taps, 0
+        if n >= 3:
+            self.on_open()
+        elif n == 2:
+            self.stop() if self.recording else self.start(persistent=True)
+        elif self.recording:
+            self.stop()                          # a tap while a take runs ends it
+        else:
+            self.send_key(vk)
+
+    @staticmethod
+    def send_key(vk) -> None:
+        """Re-send the trigger key (down + up) marked with PASS_MARK so our filter lets it by."""
+        try:
+            u = ctypes.windll.user32
+            u.keybd_event(vk, 0, 0x1, PASS_MARK)          # KEYEVENTF_EXTENDEDKEY
+            u.keybd_event(vk, 0, 0x1 | 0x2, PASS_MARK)    # ... | KEYEVENTF_KEYUP
+        except Exception as e:
+            log(f"  trigger pass-through failed: {e}")
 
     # --- transcription ------------------------------------------------------
     def _segments(self, audio: np.ndarray, prev: str = "") -> list:
@@ -547,7 +601,14 @@ class Murmur:
         # The context is passed exactly as committed: Whisper ends every sentence it finishes
         # with punctuation, so a bare word at the end means mid-sentence, and closing it made the
         # next window start a new sentence ("Docker runs The Kubernetes tests").
-        prompt = " ".join(p for p in (self.vocab and self.vocab + ".", prev[-200:].strip()) if p) or None
+        # A committed tail that is itself a loop ("uh, uh, uh, ...") is never fed back: as the next
+        # window's prompt it pulled that window into the same loop (measured: a looping tail gave
+        # "uh, uh, uh, uh" where a clean one gave none) - the cascade the user's log showed.
+        tail = prev[-200:].strip()
+        if tail and compression_ratio(tail) > LOOP_CR:
+            tail = ""
+        vocab_prompt = (self.vocab + ".") if self.vocab else None
+        prompt = " ".join(p for p in (vocab_prompt, tail) if p) or None
         # beam 5 (Whisper's classic). beam_size 1 in config is 1.6x faster and scored the same on
         # TTS'd technical text, but real speech is noisier and the user rates accuracy first.
         # temperature=0: no retry ladder. Whisper's default re-decodes a piece at up to five
@@ -555,17 +616,30 @@ class Murmur:
         # result: an ordinary sentence cost 20.7 s instead of 3 s and came back as "py installer",
         # "inno setup". One deterministic decode is both faster and truer to what was said.
         with boosted():
-            segs, _ = self.model.transcribe(
-                audio, language=self.language, beam_size=self.cfg.get("beam_size") or 5,
-                initial_prompt=prompt, vad_filter=True, condition_on_previous_text=False,
-                temperature=0.0,
-            )
-            segs = list(segs)
-        low = [s for s in segs if s.avg_logprob < -1.0 or s.compression_ratio > 2.4]
+            segs = self._decode(audio, prompt)
+            worst = max((s.compression_ratio for s in segs), default=0.0)
+            if worst > LOOP_CR:
+                # a repetition loop (a filler then a long pause does it): decode the same audio once
+                # more without the committed context and with 3-grams unable to repeat, and keep
+                # whichever came back less repetitive. Decode-side only - no text is ever edited.
+                again = self._decode(audio, vocab_prompt, no_repeat_ngram_size=3)
+                better = max((s.compression_ratio for s in again), default=0.0)
+                log(f"  repetition loop: compression {worst:.2f}, re-decoded {better:.2f}")
+                if better < worst:
+                    segs = again
+        low = [s for s in segs if s.avg_logprob < -1.0 or s.compression_ratio > LOOP_CR]
         if low:   # diagnostics only, never acted on: the text is whatever Whisper heard
             log(f"  low confidence: logprob {min(s.avg_logprob for s in low):.2f}, "
                 f"compression {max(s.compression_ratio for s in low):.2f}")
         return segs
+
+    def _decode(self, audio: np.ndarray, prompt, **extra) -> list:
+        segs, _ = self.model.transcribe(
+            audio, language=self.language, beam_size=self.cfg.get("beam_size") or 5,
+            initial_prompt=prompt, vad_filter=True, condition_on_previous_text=False,
+            temperature=0.0, **extra,
+        )
+        return list(segs)
 
     def transcribe(self, audio: np.ndarray, prev: str = "") -> str:
         if len(audio) < SAMPLE_RATE * 0.3:  # under 300ms: a tap, not speech

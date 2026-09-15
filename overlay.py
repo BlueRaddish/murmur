@@ -13,7 +13,7 @@ import queue
 import time
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
@@ -116,7 +116,7 @@ class Overlay:
     PAD = 22         # headroom for the waveform, glow and shadow
     HAZE_PAD = 36    # extra margin each side with the haze on: its blur reaches ~3 sigma past the shape
     BANDS = 20       # spectrum bands per half (mirrored -> 40 across)
-    NBARS = 14       # fixed-size bars across the container
+    LOBES = 15       # liquid lobes across the stick (see _spectrum_mask)
     SS = 2           # supersampling
     ENTER, EXIT = 0.18, 0.65   # seconds: light up at once, let go over ~0.65 s and be *gone*
     FALL = 0.9       # per-frame decay of the bands (one rate now: the exit relaxes the shape too)
@@ -311,21 +311,35 @@ class Overlay:
         top_p = shape
         bot_p = shape * 0.85
         hmax = min(self.H * S * 4.0, (self.PAD - 3) * S) * amp
-        # fixed-size bars: NBARS at a fixed pitch across the container, each a rounded bar whose
-        # top and bottom follow the profile at its centre; the container (stick) stays underneath
+        # liquid, the liquid-gooey way: soft lobes (an ellipse per sample, overlapping) drawn onto
+        # the stick, blurred, then pushed through a hard contrast ramp - where the blurred field
+        # crosses the middle is the edge, so neighbouring lobes merge through smooth necks instead
+        # of a staircase of bars. A lobe that climbs past 72 % throws a droplet above its peak; the
+        # same blur + ramp fuses it back into the body while it is close and pinches it off as the
+        # peak falls away.
         m = Image.new("L", (n_w, n_h), 0)
         d = ImageDraw.Draw(m)
         d.rounded_rectangle((x0, y0, x1, y1), radius=r, fill=255)
-        inner_w = (x1 - x0) - 2 * r * 0.9
-        pitch = inner_w / self.NBARS
-        bw = pitch * 0.52                                        # half-width just over the pitch: bars fuse, no gaps
-        idx = np.linspace(0, N - 1, self.NBARS * 2 + 1)[1::2]    # profile sample at each bar centre
-        for i in range(self.NBARS):
-            xc = x0 + r * 0.9 + pitch * (i + 0.5)
-            ht = r + hmax * float(np.interp(idx[i], np.arange(N), top_p))
-            hb = r + hmax * float(np.interp(idx[i], np.arange(N), bot_p))
-            d.rounded_rectangle((xc - bw, cy - ht, xc + bw, cy + hb), radius=bw * 0.6, fill=255)
-        return m.filter(ImageFilter.GaussianBlur(0.6 * S))
+        inner_w = (x1 - x0) - 2 * r
+        n = self.LOBES
+        pitch = inner_w / n
+        rx = pitch * 0.72                                        # half-width: lobes overlap, peaks stay distinct
+        idx = np.linspace(0, N - 1, n * 2 + 1)[1::2]
+        for i in range(n):
+            xc = x0 + r + pitch * (i + 0.5)
+            vt = float(np.interp(idx[i], np.arange(N), top_p))
+            vb = float(np.interp(idx[i], np.arange(N), bot_p))
+            ht, hb = r + hmax * vt, r + hmax * vb
+            d.ellipse((xc - rx, cy - ht, xc + rx, cy + hb), fill=255)
+            if vt > 0.72 and amp > 0.5:                          # the droplet: only the loudest peaks throw one
+                dr = r * 0.48
+                dy = cy - ht - dr * (0.2 + 3.2 * (vt - 0.72))
+                d.ellipse((xc - dr, dy - dr, xc + dr, dy + dr), fill=255)
+        soft = m.filter(ImageFilter.GaussianBlur(1.05 * S))
+        liquid = soft.point(lambda v: max(0, min(255, (v - 110) * 6)))
+        # the stick itself is laid back in exactly: a blur + threshold thins a 7 px capsule a hair,
+        # and the lit stick then grew back into the idle one at the end of every fade
+        return ImageChops.lighter(liquid, self._stick_mask())
 
     @staticmethod
     def _lerp(a, b, m):
@@ -341,35 +355,58 @@ class Overlay:
         return self._lerp(acc, self.colors["busy"], self.busymix)
 
     def _fill(self, img: Image.Image, mask: Image.Image, col) -> None:
-        """Glowing one-piece fill: bright, lighter colour along the centre line fading to the
-        state colour at the edge, a soft outer glow, and a thin bright rim. No layer is scaled
-        by the transition any more - _dissolve fades glow, body and rim together."""
+        """Liquid glass in the state colour. Denser at the edge than in the middle (Fresnel: glass
+        seen at a grazing angle), lighter in the body; a crisp white specular line riding the top
+        contour, a lighter caustic along the bottom (light gathers where glass curves under), a
+        thin dark edge so it reads on white, and one tight glow. Every layer comes from the one
+        mask, so the shape and its lighting never disagree. _dissolve fades them together."""
         n_w, n_h = mask.size
         S = self.SS * self.scale
-        _, _, x0, y0, x1, y1, r = self._geom()
-        cy = (y0 + y1) / 2
+        op = self.opacity
         m = np.asarray(mask, dtype=np.float32) / 255
-        # distance from the centre line, normalised per column by the shape's half-height there
+        base = np.array(col, np.float32)
+        light = base * 0.72 + 255 * 0.28
+        deep = base * 0.62
+        # distance-to-edge, cheaply: a small blur is ~1 deep inside and ~0.5 on the edge
+        inner = np.asarray(mask.filter(ImageFilter.GaussianBlur(2.2 * S)), dtype=np.float32) / 255
+        edge = np.clip((1.0 - inner) * 2.0, 0, 1) * m                 # 1 at the rim, 0 deep inside
+        # top-to-bottom position inside the shape, per column
         lit = m > 0.5
         ys = np.arange(n_h, dtype=np.float32)[:, None]
-        above = np.maximum((lit & (ys < cy)).sum(axis=0), 1.0)[None, :]
-        below = np.maximum((lit & (ys >= cy)).sum(axis=0), 1.0)[None, :]
-        dist = np.where(ys < cy, (cy - ys) / above, (ys - cy) / below)
-        dist = np.clip(dist, 0, 1)
-        light = np.array([min(255, c * 0.35 + 255 * 0.65) for c in col], np.float32)
-        base = np.array(col, np.float32)
-        rgb = light[None, None, :] * (1 - dist[..., None]) ** 1.6 + base[None, None, :] * (1 - (1 - dist[..., None]) ** 1.6)
-        alpha = (255 * self.opacity * (1 - 0.3 * dist ** 2) * m)[..., None]
-        body = Image.fromarray(np.concatenate([rgb, alpha], axis=2).astype(np.uint8), "RGBA")
-        glow = mask.filter(ImageFilter.GaussianBlur(4 * S)).point(lambda v: min(255, v * 1.8) * 0.6 * self.opacity)
-        g = Image.new("RGBA", (n_w, n_h), col + (255,))
+        top = np.where(lit.any(axis=0), np.argmax(lit, axis=0), 0).astype(np.float32)[None, :]
+        bot = np.where(lit.any(axis=0), n_h - 1 - np.argmax(lit[::-1], axis=0), 1).astype(np.float32)[None, :]
+        v = np.clip((ys - top) / np.maximum(bot - top, 1.0), 0, 1)
+        rgb = light[None, None, :] * (1 - v[..., None]) * 0.6 + base[None, None, :] * (0.4 + 0.6 * v[..., None])
+        rgb = rgb * (1 - edge[..., None] * 0.55) + deep[None, None, :] * (edge[..., None] * 0.55)
+        alpha = 255 * op * m * (0.78 + 0.22 * edge)
+        # a thin dark edge just outside the shape, for legibility on light grounds
+        # a 1 px grow: a slight blur pushed through a gain (MaxFilter(3) cost 2.2 ms a frame, this 0.6)
+        grow = np.asarray(mask.filter(ImageFilter.GaussianBlur(0.6 * S)).point(lambda q: min(255, q * 3)),
+                          dtype=np.float32) / 255
+        outline = np.clip(grow - m, 0, 1)
+        glow = mask.filter(ImageFilter.GaussianBlur(3 * S)).point(lambda q: min(255, q * 1.5) * 0.5 * op)
+        g = Image.new("RGBA", (n_w, n_h), tuple(col) + (255,))
         g.putalpha(glow)
         img.alpha_composite(g)
-        img.alpha_composite(body)
-        edge = np.asarray(mask.filter(ImageFilter.FIND_EDGES), dtype=np.float32)
-        rim = Image.new("RGBA", (n_w, n_h), (255, 255, 255, 0))
-        rim.putalpha(Image.fromarray(np.clip(edge * 0.7 * self.opacity, 0, 160).astype(np.uint8), "L"))
-        img.alpha_composite(rim)
+        dark = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
+        dark.putalpha(Image.fromarray((outline * 60 * op).astype(np.uint8), "L"))
+        img.alpha_composite(dark)
+        img.alpha_composite(Image.fromarray(np.concatenate([rgb, alpha[..., None]], 2).clip(0, 255).astype(np.uint8), "RGBA"))
+        # specular: the top rim (the shape minus itself moved down), softened a touch
+        sh = int(round(1.4 * S))
+        down = np.zeros_like(m); down[sh:] = m[:-sh]
+        spec = np.clip(m - down, 0, 1)
+        spec = np.asarray(Image.fromarray((spec * 255).astype(np.uint8), "L").filter(ImageFilter.GaussianBlur(0.5 * S)),
+                          dtype=np.float32) / 255
+        hi = Image.new("RGBA", (n_w, n_h), (255, 255, 255, 0))
+        hi.putalpha(Image.fromarray((spec * 235 * op).astype(np.uint8), "L"))
+        img.alpha_composite(hi)
+        # caustic: the bottom rim, in a lighter tint of the colour
+        up = np.zeros_like(m); up[:-sh] = m[sh:]
+        caus = np.clip(m - up, 0, 1)
+        cl = Image.new("RGBA", (n_w, n_h), tuple(int(c) for c in (base * 0.3 + 255 * 0.7)) + (0,))
+        cl.putalpha(Image.fromarray((caus * 120 * op).astype(np.uint8), "L"))
+        img.alpha_composite(cl)
 
     def _glass(self, mask: Image.Image) -> Image.Image:
         """Shadow + frosted glass body for a shape mask. Only the resting look comes through
@@ -480,7 +517,9 @@ class Overlay:
         prem = (a[..., :3] * a[..., 3:4] * (1 - level) + b[..., :3] * b[..., 3:4] * level) / 255.0
         al = a[..., 3:4] * (1 - level) + b[..., 3:4] * level
         rgb = np.divide(prem * 255.0, al, out=np.zeros_like(prem), where=al > 0)   # un-premultiply
-        return Image.fromarray(np.concatenate([np.clip(rgb, 0, 255), al], 2).astype(np.uint8), "RGBA")
+        # rounded, not truncated: astype alone always rounds down, shaving up to one alpha level off
+        # every soft pixel, so the last frames of a fade sat below the idle stick and stepped up onto it
+        return Image.fromarray(np.rint(np.concatenate([np.clip(rgb, 0, 255), al], 2)).astype(np.uint8), "RGBA")
 
     def _render(self) -> Image.Image:
         """One renderer per look: idle is the resting glass, *every* active state is the lit

@@ -30,6 +30,7 @@ def fresh():
     m.cfg = {"trigger_vk": None}; m.recorder = FakeRec(); m.on_state = lambda s: None; m.capture = None
     m.state = "idle"; m.held = set(); m.recording = m.persistent = m.chord_was_down = False
     m.trigger_down = False; m.taps = 0; m.on_open = lambda: None
+    m.trig_taps = m.trig_gen = 0; m.trig_held = False
     m.last_chord_release = 0.0; m.lock = __import__("threading").Lock(); m.ctl = __import__("threading").Lock(); m.pending = 0
     m.handle = lambda audio, take=None: None  # never touch the model here
     m.take = None
@@ -58,52 +59,60 @@ assert m.recorder.calls == ["start", "stop", "start", "stop"]
 # slow second tap is just another hold
 m = fresh(); chord(m); chord(m, False); m.last_chord_release = _t.monotonic() - 1.0
 chord(m); assert m.recording and not m.persistent; chord(m, False); assert not m.recording
-# trigger key: ignored when unbound; bound, it follows the chord grammar and is swallowed
+# trigger key: ignored when unbound; bound, every edge is swallowed and counted. Timers are
+# queued (m.later) and fired by hand, so the test controls "no further tap came"
 class D: vkCode = murmur.VK_MEDIA_PLAY_PAUSE
 class L:
     def __init__(self): self.suppressed = 0
     def suppress_event(self): self.suppressed += 1
+def trig_setup(m):
+    m.listener = L(); m.cfg["trigger_vk"] = murmur.VK_MEDIA_PLAY_PAUSE
+    m.timers, m.sent = [], []
+    m.later = lambda s, fn, *a: m.timers.append((s, fn, a))
+    m.send_key = m.sent.append
+def fire(m, delay):                              # run every queued timer of that delay, in order
+    due = [t for t in m.timers if t[0] == delay]
+    m.timers = [t for t in m.timers if t[0] != delay]
+    for _, fn, a in due: fn(*a)
+def tap(m): m.win32_event_filter(0x100, D()); m.win32_event_filter(0x101, D())
 m = fresh(); m.listener = L()
 m.win32_event_filter(0x100, D()); assert not m.recording and m.listener.suppressed == 0
 # capture: the next key-down is reported once and swallowed, and does not record
 got = []; m.capture = got.append
 m.win32_event_filter(0x100, D()); m.win32_event_filter(0x101, D())
 assert got == [murmur.VK_MEDIA_PLAY_PAUSE] and m.capture is None and not m.recording and m.listener.suppressed == 1
-m.listener.suppressed = 0
-m.cfg["trigger_vk"] = murmur.VK_MEDIA_PLAY_PAUSE
-# hold: down records (auto-repeat downs while held are ignored), a real hold's up stops
-m.win32_event_filter(0x100, D()); assert m.recording and not m.persistent
-m.win32_event_filter(0x100, D()); assert m.recorder.calls == ["start"]
-m.trigger_t0 -= 1.0                              # held a second: a hold, not a tap
-m.win32_event_filter(0x101, D()); assert not m.recording
-assert m.listener.suppressed == 3
-# a tap (up within LATCH_S - all a headset's inline button can send) latches the take open:
-# the next press stops it; a second tap inside the double-tap window changes nothing
-m.last_chord_release -= 1
-m.win32_event_filter(0x100, D()); m.win32_event_filter(0x101, D())
-assert m.recording and m.persistent and m.state == "persistent"
-m.win32_event_filter(0x100, D()); m.win32_event_filter(0x101, D())   # the "double-tap"
-assert m.recording and m.persistent
-m.last_chord_release -= 1
-m.win32_event_filter(0x100, D()); assert not m.recording
-m.win32_event_filter(0x101, D())
-m.last_chord_release -= 1                       # break the tap run the hold test started
-# double-tap on real holds: persistent until a later press
-m.win32_event_filter(0x100, D()); m.trigger_t0 -= 1.0; m.win32_event_filter(0x101, D())
-m.win32_event_filter(0x100, D()); assert m.recording and m.persistent
-m.win32_event_filter(0x101, D()); assert m.recording
-m.last_chord_release -= 1
-m.win32_event_filter(0x100, D()); assert not m.recording
-m.win32_event_filter(0x101, D())
-# triple-tap: the window opens, the second tap's take is discarded, nothing new transcribes
-opened = []; m = fresh(); m.listener = L(); m.cfg["trigger_vk"] = murmur.VK_MEDIA_PLAY_PAUSE
-m.on_open = lambda: opened.append(1)
-for _ in range(2): m.win32_event_filter(0x100, D()); m.win32_event_filter(0x101, D())
-assert m.recording and m.persistent
-pend = m.pending
-m.win32_event_filter(0x100, D())
-assert opened == [1] and not m.recording and m.state == "idle" and m.pending == pend
-m.win32_event_filter(0x101, D())
+# a single tap is the key's own: nothing records, and after the tap window it is re-sent
+m = fresh(); trig_setup(m)
+tap(m); assert m.listener.suppressed == 2 and not m.recording and m.sent == []
+fire(m, murmur.HOLD_S)                           # the hold timer: stale (the key came up)
+fire(m, murmur.DOUBLE_TAP_S); assert m.sent == [murmur.VK_MEDIA_PLAY_PAUSE] and not m.recording
+# murmur's own re-sent key is not caught by the filter
+class Mine: vkCode = murmur.VK_MEDIA_PLAY_PAUSE; dwExtraInfo = murmur.PASS_MARK
+n = m.listener.suppressed
+m.win32_event_filter(0x100, Mine()); m.win32_event_filter(0x101, Mine())
+assert m.listener.suppressed == n and not m.trigger_down
+# double-tap starts a recording (no pass-through), a later double-tap stops it
+m = fresh(); trig_setup(m)
+tap(m); tap(m); fire(m, murmur.HOLD_S)
+assert len([t for t in m.timers if t[0] == murmur.DOUBLE_TAP_S]) == 2
+fire(m, murmur.DOUBLE_TAP_S)                     # the first tap's resolve is stale, the second's acts
+assert m.recording and m.persistent and m.sent == []
+tap(m); tap(m); fire(m, murmur.HOLD_S); fire(m, murmur.DOUBLE_TAP_S)
+assert not m.recording and m.recorder.calls == ["start", "stop"] and m.sent == []
+# a single tap during a recording stops it instead of reaching the player
+tap(m); tap(m); fire(m, murmur.HOLD_S); fire(m, murmur.DOUBLE_TAP_S); assert m.recording
+tap(m); fire(m, murmur.HOLD_S); fire(m, murmur.DOUBLE_TAP_S)
+assert not m.recording and m.sent == []
+# triple-tap opens the window and records nothing
+opened = []; m = fresh(); trig_setup(m); m.on_open = lambda: opened.append(1)
+tap(m); tap(m); tap(m); fire(m, murmur.HOLD_S); fire(m, murmur.DOUBLE_TAP_S)
+assert opened == [1] and not m.recording and m.recorder.calls == [] and m.sent == []
+# a real hold (a keyboard key): records while held, auto-repeat downs ignored, stops on release
+m = fresh(); trig_setup(m)
+m.win32_event_filter(0x100, D()); m.win32_event_filter(0x100, D())
+assert len(m.timers) == 1 and not m.recording
+fire(m, murmur.HOLD_S); assert m.recording and not m.persistent
+m.win32_event_filter(0x101, D()); assert not m.recording and m.timers == [] and m.sent == []
 # triple-tap on the chord too
 opened = []; m = fresh(); m.on_open = lambda: opened.append(1)
 chord(m); chord(m, False); chord(m); chord(m, False); chord(m)
@@ -208,6 +217,36 @@ out = []; m.typist = type("T", (), {"type": lambda self, t: out.append(t)})(); m
 m.pending = 1; murmur.Murmur.handle(m, np.zeros(16000 * 7, dtype=np.float32), take)
 assert out == ["first sentence. second one. the tail."], out
 assert m.model.calls[-1][0] == 7 * 16000 - int(4.4 * 16000) and m.model.calls[-1][1].endswith("first sentence. second one.")   # tail only, with context, prompt punctuated
+# repetition loops (a filler then a long pause): a looping window is re-decoded once without the
+# committed context and with no_repeat_ngram_size=3, and the less repetitive result is kept; a
+# looping committed tail is never fed back as the prompt; ordinary windows decode once, untouched
+class LSeg:
+    avg_logprob, temperature, start, end = -0.1, 0.0, 0.0, 1.0
+    def __init__(self, text, cr): self.text, self.compression_ratio = text, cr
+kws = []
+def looping(audio, **kw):
+    kws.append(kw)
+    if kw.get("no_repeat_ngram_size"):
+        return iter([LSeg(" improve the, uh, wave voice", 1.1)]), None
+    return iter([LSeg(" improve the," + " uh," * 60, 26.24)]), None
+m.model.transcribe = looping; m.vocab = "tmux"
+logged = []; _log = murmur.log; murmur.log = logged.append
+assert m.transcribe(np.zeros(16000 * 5, dtype=np.float32), prev="Um, secondly,") == "improve the, uh, wave voice"
+assert len(kws) == 2 and kws[0]["initial_prompt"] == "tmux. Um, secondly," and "no_repeat_ngram_size" not in kws[0]
+assert kws[1]["initial_prompt"] == "tmux." and kws[1]["no_repeat_ngram_size"] == 3
+assert any("repetition loop" in l for l in logged)
+kws.clear()
+m.model.transcribe = lambda audio, **kw: (kws.append(kw), (iter([LSeg(" a clean sentence.", 1.2)]), None))[1]
+assert m.transcribe(np.zeros(16000 * 5, dtype=np.float32), prev="the," + " uh," * 40) == "a clean sentence."
+assert len(kws) == 1 and kws[0]["initial_prompt"] == "tmux."             # the looping tail was dropped
+kws.clear()
+assert m.transcribe(np.zeros(16000 * 5, dtype=np.float32), prev="run the tests") == "a clean sentence."
+assert len(kws) == 1 and kws[0]["initial_prompt"] == "tmux. run the tests" # a clean tail still rides along
+# a re-decode that is no better is not taken
+m.model.transcribe = lambda audio, **kw: (iter([LSeg(" s" * 80, 9.0 if kw.get("no_repeat_ngram_size") else 8.0)]), None)
+assert m.transcribe(np.zeros(16000 * 5, dtype=np.float32)).count("s") == 80
+murmur.log = _log; m.model.transcribe = _t
+assert murmur.compression_ratio("uh, " * 40) > murmur.LOOP_CR > murmur.compression_ratio("please rebase the branch onto main")
 print("streaming ok")
 
 # Recorder.snapshot(start) returns exactly the audio past `start`, copying only the chunks needed
@@ -377,7 +416,9 @@ for hz in (True, False):                              # haze on and off, every s
 # the haze is no longer clipped: with it on, the glow crosses the line where the window edge
 # used to be (row ext) and has faded out before the new edge, at rest and lit alike
 o.configure({"color": "#00ff00", "haze": True}); o.bands[:] = 0
-for o.state, o.level, floor in (("idle", 0.0, 1), ("recording", 1.0, 8)):   # rest is faint by design
+for o.state, o.level, floor in (("idle", 0.0, 1), ("recording", 1.0, 4)):   # rest is faint by design;
+    # the liquid-glass body is crisper than the old blurred bars (less soft mass to spread), so the lit
+    # haze reaches the old edge at 7, not 20 - still across the line the window used to clip at
     a = np.asarray(o._render())[..., 3]
     assert a[o.ext].max() >= floor, (o.state, a[o.ext].max())
     assert a[0].max() == 0 and a[-1].max() == 0 and a[:, 0].max() == 0 and a[:, -1].max() == 0
@@ -446,7 +487,8 @@ assert len(hue) > 4 and max(hue) <= hue[0] + 5, hue    # never drifts towards gr
 at08 = [a for t, _, _, a in frames if t >= 0.79][0]                   # the resting stick again
 assert np.abs(at08 - idle_ref).max() <= 8 and abs(at08[..., 3].sum() - idle_ref[..., 3].sum()) < idle_ref[..., 3].sum() * 0.005
 assert o.level == 0.0 and o.busymix == 0.0 and o.bands.max() == 0.0        # take forgotten
-assert frames[-1][1] < frames[0][1] * 0.5
+assert frames[-1][1] < frames[0][1] * 0.6   # the lit glass carries 1.82x the idle alpha (the old glow 2.05x);
+                                            # 'back to rest' itself is the per-pixel at08 check above
 
 # _dissolve: the ends are exact, the middle is the alpha average
 fake[0] = 0.0

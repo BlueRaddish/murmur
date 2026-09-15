@@ -208,6 +208,53 @@ Decisions
   Text clip the last one - the panel's Texts have no spacing. Dictating into an answer field
   works because Typist already skips the paste when murmur's own window is in front; the take
   now also lands in the focused panel field (and in History like any take).
+- 1.0.0, the user's test pass (2026-09-15), three asks. (1) The tap-to-latch was wrong for them:
+  "don't make it tap start and tap stop on the headphones... a single click on my play pause
+  button doesn't allow me to actually use it as a play pause button". The trigger key's grammar
+  is now its own (the chord is untouched): every edge is swallowed and counted; a run that ends
+  (no tap for DOUBLE_TAP_S) with ONE tap is sent back out as the key itself via keybd_event with
+  dwExtraInfo = PASS_MARK, which the filter lets by - so Play/Pause plays and pauses, 0.4 s late;
+  two taps start or stop a recording; three open the window; a single tap during a recording
+  stops it; a key still down after HOLD_S (a keyboard key - a headset button never gets there)
+  records while held. Timers go through Murmur.later so the tests fire them by hand. Verified
+  live with F24 (not Play/Pause, so no music was touched): the hook sees the mark
+  (dwExtraInfo 1836215666) on murmur's own re-sent edges and None on a plain keybd_event.
+  (2) "When I say um or uh and then pause for a long time, it fills in that blank with a hell
+  of a lot of fuzz" - their own message above came back with ~150 "uh," and a run of "sssss".
+  murmur.log for that take: windows at compression ratio 26.24 three passes running with logprob
+  -0.03 (Whisper's repetition hallucination, confident and identical each pass - the committed
+  loop fed back as the next window's prompt). TTS could not reproduce the full loop (24 cases of
+  filler + 4-14 s room tone at two noise levels: compression 1.23-1.28 throughout), but a
+  deliberate poisoned-prompt test showed the cascade mechanism: a looping tail as prompt gave
+  "uh, uh, uh, uh, way voice UI thing" where a clean tail gave "way voice UI thing", and
+  no_repeat_ngram_size=3 changed nothing else across all 24 clean cases. Fix, decode-side only
+  (no text is edited - the no-rewriting rule stands): a committed tail whose zlib compression
+  ratio exceeds LOOP_CR 2.4 is never fed back as the prompt; a window that comes back with a
+  segment over 2.4 is decoded once more with only the vocab prompt and no_repeat_ngram_size=3,
+  and the less repetitive result is kept (a re-decode that is no better is rejected, tested).
+  Costs nothing on ordinary windows (one decode, as before). Not verified on the user's real
+  voice - that needs their next "um... pause" take; the log line "repetition loop: compression
+  X, re-decoded Y" will show it firing. (3) "Improve the wave voice UI thing... reference the
+  glass texture resource": the only glass resource filed is 3-Resources/ui-design-method/
+  liquid-gooey (Jakub Antalik; nothing glass was filed after 09-01 - assumption named). Its two
+  ideas carried into PIL: the gooey metaball (a blurred silhouette through a hard contrast ramp,
+  so shapes merge through necks) and the two-layer render (the silhouette carries shape and
+  shadow, the crisp material rides on top). The recording shape was 14 fused bars under a 0.6
+  blur - a fuzzy symmetric "lemon" with stair-stepped edges and a white seam through the middle.
+  Now: 15 overlapping ellipse lobes on the stick, blurred 1.05 S and ramped (v-110)*6, with a
+  droplet thrown above any lobe past 72 % that fuses back or pinches off; the exact stick laid
+  back in (ImageChops.lighter) because a blur + threshold thins a 7 px capsule. Material: glass
+  denser at the rim than the body (Fresnel, from a 2.2 S blur of the mask), lighter at the top
+  of each column, a crisp white specular line = the mask minus itself moved down 1.4 S, a lighter
+  caustic along the bottom rim, a thin dark outline for white grounds, one tighter glow. Same
+  spectrum engine, dissolves, haze and pulse. Three render rounds reviewed at true pixels (v1
+  too smooth and pale; v2 knob-like droplet; v3 shipped). Per frame 17.5 vs 17.0 ms min
+  interleaved (MaxFilter swapped for a blur+gain grow: 2.2 -> 0.6 ms). Two test findings were
+  real, not noise: the fade's last step used to rise by 0.5 % - _dissolve truncated floats to
+  uint8 (always down), so the final dissolve frames sat just under the idle stick; it now rounds.
+  Two assertion constants moved with reasons written beside them: the lit haze reaches the old
+  edge at 7 (was 20: a crisper body has less soft mass) and the lit glass carries 1.82x the idle
+  alpha (the old glow 2.05x). Sheet: scratchpad murmur-waveform-before-after.png.
 - 1.0.0, the trigger key that would not hold (2026-09-14). "If I'm only pressing down and
   continuing to press down on my play pause button, it won't record... the keyboard chord
   works." Evidence before theory: murmur.log shows every trigger "hold" ending in software within
