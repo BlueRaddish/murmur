@@ -100,6 +100,20 @@ def set_dpi_aware() -> float:
         return 1.0
 
 
+# The waveform styles (Settings > Appearance > Waveform), chosen by the user from a rendered lineup
+# (2026-09-15; scratchpad wavevar/). Each: `bands` spectrum bands, drawn as `cols` columns; `attack`
+# and `fall` set how fast a column rises and sinks (the old single look used 0.65 / 0.9 and read as
+# too slow); `spread` lifts neighbouring bands; `smooth` blurs columns into each other; `wobble` Hz
+# scales each column's own slow shimmer; `mirror` puts the lows in the middle (else the bands are
+# scattered so neighbouring columns never match).
+WAVES = {
+    "ribbon": dict(bands=40, cols=40, attack=0.8, fall=0.7, spread=1, smooth=1.0, wobble=1.8, mirror=True),
+    "equaliser": dict(bands=26, cols=13, attack=0.85, fall=0.7, spread=0, smooth=0.0, wobble=1.4, mirror=False),
+    "liquid": dict(bands=32, cols=21, attack=0.8, fall=0.72, spread=1, smooth=0.8, wobble=1.0, mirror=True),
+}
+WAVE_DEFAULT = "ribbon"
+
+
 class Overlay:
     """A small glass stick at the bottom centre. Near-invisible at rest. While recording the
     stick *is* the visualizer: a live frequency spectrum (FFT -> log bands -> neighbour
@@ -115,26 +129,19 @@ class Overlay:
     W, H = 48, 7     # stick size in logical px
     PAD = 22         # headroom for the waveform, glow and shadow
     HAZE_PAD = 36    # extra margin each side with the haze on: its blur reaches ~3 sigma past the shape
-    BANDS = 20       # spectrum bands per half (mirrored -> 40 across)
-    LOBES = 15       # liquid lobes across the stick (see _spectrum_mask)
     SS = 2           # supersampling
     ENTER, EXIT = 0.18, 0.65   # seconds: light up at once, let go over ~0.65 s and be *gone*
-    FALL = 0.9       # per-frame decay of the bands (one rate now: the exit relaxes the shape too)
 
     def __init__(self, get_samples, scale: float = 1.0, window: bool = True):
         self.get_samples = get_samples   # () -> last ~2048 samples at 16 kHz, or None
-        self.bands = np.zeros(self.BANDS, dtype=np.float32)
+        self.wave = None
+        self._set_wave(WAVE_DEFAULT)
         self.colors = dict(COLORS)
         self.opacity = 0.9               # 0..1, from config
         self.haze = False
         self.busymix = 0.0               # 0 = accent colour, 1 = transcribing colour; eased
         self.pulse_gain = 1.0            # frozen with the colour when the exit starts
         self.rng = np.random.default_rng(7)
-        self.noise_phase = self.rng.uniform(0, 2 * np.pi, size=(2, 4))   # random field per side
-        # asymmetry axes: each side has a few lobe centres that wander; the spectrum is laid out
-        # around each centre (lows at the centre, highs outward) and the lobes are soft-OR'd
-        self.axes = [[self.rng.uniform(0.2, 0.8, 3), self.rng.uniform(0, 2 * np.pi, 3),
-                      self.rng.uniform(0.02, 0.06, 3)] for _ in range(2)]
         self.scale = scale
         self.cw = int((self.W + 2 * self.PAD) * scale)     # the core canvas: stick, glow, shadow
         self.ch = int((self.H + 2 * self.PAD) * scale)
@@ -171,6 +178,9 @@ class Overlay:
         except (TypeError, ValueError):
             self.opacity = 0.9
         self.haze = bool(cfg.get("haze", False))
+        wave = cfg.get("wave") if cfg.get("wave") in WAVES else WAVE_DEFAULT
+        if wave != self.wave:            # only a real change resets the shape: Save mid-take keeps it
+            self._set_wave(wave)
         self.ext = int(self.HAZE_PAD * self.scale) if self.haze else 0
         self.w, self.h = self.cw + 2 * self.ext, self.ch + 2 * self.ext
         self._place()
@@ -238,107 +248,118 @@ class Overlay:
         return m
 
     # --- spectrum ----------------------------------------------------------------
+    def _set_wave(self, name) -> None:
+        self.wave, self.spec = name, WAVES[name]
+        sp = self.spec
+        self.bands = np.zeros(sp["bands"], dtype=np.float32)
+        rng = np.random.default_rng(7)                   # the same scatter and shimmer every run
+        self.perm = rng.permutation(sp["cols"])
+        self.jit_ph = rng.uniform(0, 2 * np.pi, (2, sp["cols"]))
+        self.jit_hz = rng.uniform(0.6, 2.2, (2, sp["cols"]))
+
     def _analyse(self, x) -> None:
         """Update self.bands from raw samples: FFT, log-spaced bands, auto-gain, neighbour
-        spreading (each band lifts its neighbours by 1/1.6^distance so the outline is one
-        flowing shape, not fence posts), then fast attack / slow fall."""
+        spreading (a band lifts its neighbours by 1/1.6^distance), then the style's attack / fall."""
+        sp, n = self.spec, len(self.bands)
         if x is None or len(x) < 512:
-            target = np.zeros(self.BANDS, dtype=np.float32)
+            target = np.zeros(n, dtype=np.float32)
         else:
             x = np.asarray(x, dtype=np.float32)
             x = x - x.mean()
             spec = np.abs(np.fft.rfft(x * np.hanning(len(x))))
             df = 16000 / len(x)
-            edges = np.geomspace(90, 5500, self.BANDS + 1) / df
-            target = np.zeros(self.BANDS, dtype=np.float32)
-            for i in range(self.BANDS):
+            edges = np.geomspace(90, 6000, n + 1) / df
+            target = np.zeros(n, dtype=np.float32)
+            for i in range(n):
                 lo, hi = int(edges[i]), max(int(edges[i]) + 1, int(edges[i + 1]))
                 target[i] = spec[lo:hi].mean()
-            target = np.log1p(target * 4.0) * (1 + 0.6 * np.linspace(0, 1, self.BANDS))  # lift the highs a little
+            target = np.log1p(target * 4.0) * (1 + 0.6 * np.linspace(0, 1, n))  # lift the highs a little
             self.peak = max(float(target.max()), self.peak * 0.994, 0.5)
             target = np.clip(target / self.peak, 0, 1) ** 1.3
-            spread = target.copy()
-            for d in range(1, 5):
-                f = 1.6 ** d
-                spread[d:] = np.maximum(spread[d:], target[:-d] / f)
-                spread[:-d] = np.maximum(spread[:-d], target[d:] / f)
-            target = spread
+            if sp["spread"]:
+                spread = target.copy()
+                for d in range(1, sp["spread"] + 1):
+                    f = 1.6 ** d
+                    spread[d:] = np.maximum(spread[d:], target[:-d] / f)
+                    spread[:-d] = np.maximum(spread[:-d], target[d:] / f)
+                target = spread
         rising = target > self.bands
-        self.bands = np.where(rising, self.bands * 0.35 + target * 0.65, self.bands * self.FALL)
+        self.bands = np.where(rising, self.bands * (1 - sp["attack"]) + target * sp["attack"],
+                              self.bands * sp["fall"])
+
+    def _columns(self):
+        """The bands as `cols` column heights (0..1), top and bottom. Mirrored styles put the lows in
+        the middle; the others scatter the bands. Each column shimmers on its own clock (active time
+        only, so the shape freezes while a take fades out); an envelope tapers the tips."""
+        sp, n = self.spec, self.spec["cols"]
+        if sp["mirror"]:
+            half = np.interp(np.linspace(0, len(self.bands) - 1, (n + 1) // 2), np.arange(len(self.bands)), self.bands)
+            base = np.concatenate([half[::-1], half[1 if n % 2 else 0:]])[:n]
+        else:
+            base = np.interp(np.linspace(0, len(self.bands) - 1, n), np.arange(len(self.bands)), self.bands)[self.perm]
+        env = np.sin(np.linspace(0.12, np.pi - 0.12, n)) ** 0.5
+        out = []
+        for side in (0, 1):
+            jit = 0.72 + 0.28 * np.sin(2 * np.pi * self.jit_hz[side] * self.ctime * sp["wobble"] + self.jit_ph[side])
+            p = base * jit * env
+            if sp["smooth"]:
+                k = np.exp(-0.5 * (np.arange(-3, 4) / sp["smooth"]) ** 2)
+                p = np.convolve(np.pad(p, 3, mode="edge"), k / k.sum(), mode="valid")
+            out.append(np.clip(p, 0, 1))
+        return out[0], out[1] * 0.88
 
     def _spectrum_mask(self, amp: float) -> Image.Image:
-        """One silhouette: the mirrored, smoothed band heights become the half-height of the
-        stick at each x; lows in the middle, highs fading into the tips."""
+        """The active silhouette for the current style, from `_columns`; `amp` (the entry/exit
+        level) scales how far it reaches beyond the stick."""
+        top, bot = self._columns()
         n_w, n_h, x0, y0, x1, y1, r = self._geom()
         S = self.SS * self.scale
         cy = (y0 + y1) / 2
-        N = 200
-        k = np.exp(-0.5 * (np.arange(-8, 9) / 3.0) ** 2); k /= k.sum()
-        taper = np.sin(np.linspace(0, np.pi, N)) ** 0.35     # still meets the tips
-
-        # organic asymmetry: the mirrored spectrum (lows centre) is modulated by a smooth random
-        # field - a few sines with random phases, drifting slowly - different for top and bottom,
-        # so the shape is never the same twice and never favours one side
-        t = self.frame / 25.0
-        u = np.linspace(0, 1, N)
-
-        def field(side):
-            ph = self.noise_phase[side]
-            f = (np.sin(2 * np.pi * (u * 1.3 + 0.11 * t) + ph[0]) + 0.7 * np.sin(2 * np.pi * (u * 2.7 - 0.07 * t) + ph[1])
-                 + 0.5 * np.sin(2 * np.pi * (u * 4.1 + 0.05 * t) + ph[2]) + 0.4 * np.sin(2 * np.pi * (u * 0.6 - 0.13 * t) + ph[3]))
-            return 0.72 + 0.28 * f / 2.6
-
-        def lobes(side):
-            """Profile over x from several wandering axes. Each axis k sits at c_k(t) and spans
-            w_k; the band curve is read by distance from the axis. Combined as 1-prod(1-v)."""
-            centres, phases, speeds = self.axes[side]
-            acc = np.ones(N, dtype=np.float32)
-            widths = (0.55, 0.38, 0.3)
-            gains = (1.0, 0.8, 0.65)
-            for k in range(3):
-                c = centres[k] + 0.22 * np.sin(2 * np.pi * speeds[k] * t + phases[k]) \
-                    + 0.08 * np.sin(2 * np.pi * speeds[k] * 2.7 * t + phases[k] * 1.7)
-                d = np.clip(np.abs(u - c) / widths[k], 0, 1)
-                v = np.interp(d * (len(self.bands) - 1), np.arange(len(self.bands)), self.bands) * gains[k]
-                v *= (1 - d) ** 0.35                              # fade each lobe at its rim
-                acc *= 1 - np.clip(v, 0, 1)
-            pr = 1 - acc
-            pr = np.convolve(np.pad(pr, 8, mode="edge"), k_, mode="valid")
-            return pr * taper
-
-        k_ = k
-        shape = lobes(0) * field(0)       # one set of axes for both halves: they move together
-        top_p = shape
-        bot_p = shape * 0.85
         hmax = min(self.H * S * 4.0, (self.PAD - 3) * S) * amp
-        # liquid, the liquid-gooey way: soft lobes (an ellipse per sample, overlapping) drawn onto
-        # the stick, blurred, then pushed through a hard contrast ramp - where the blurred field
-        # crosses the middle is the edge, so neighbouring lobes merge through smooth necks instead
-        # of a staircase of bars. A lobe that climbs past 72 % throws a droplet above its peak; the
-        # same blur + ramp fuses it back into the body while it is close and pinches it off as the
-        # peak falls away.
         m = Image.new("L", (n_w, n_h), 0)
         d = ImageDraw.Draw(m)
+        n = len(top)
+        if self.wave == "equaliser":
+            # separate glass pills with a real gap, each column its own
+            pitch = (x1 - x0) / n
+            bw = pitch * 0.66 / 2
+            for i in range(n):
+                xc = x0 + pitch * (i + 0.5)
+                d.rounded_rectangle((xc - bw, cy - r * 0.8 - hmax * top[i], xc + bw, cy + r * 0.8 + hmax * bot[i]),
+                                    radius=bw, fill=255)
+            pills = m.filter(ImageFilter.GaussianBlur(0.35 * S))
+            # the stick underneath, as solid as the voice is quiet: the pills grow out of it while you
+            # talk and melt back into it when you stop (alone they settled into a row of beads)
+            quiet = float(np.clip(1.0 - 3.0 * max(top.max(), bot.max()), 0.0, 1.0))
+            if quiet > 0.0:
+                pills = ImageChops.lighter(pills, self._stick_mask().point(lambda v: v * quiet))
+            return pills
         d.rounded_rectangle((x0, y0, x1, y1), radius=r, fill=255)
-        inner_w = (x1 - x0) - 2 * r
-        n = self.LOBES
-        pitch = inner_w / n
-        rx = pitch * 0.72                                        # half-width: lobes overlap, peaks stay distinct
-        idx = np.linspace(0, N - 1, n * 2 + 1)[1::2]
+        if self.wave == "ribbon":
+            # a ribbon whose thickness and centre line both follow the voice
+            hmax *= 0.8
+            xs = np.linspace(x0 + r, x1 - r, n)
+            fine = np.linspace(xs[0], xs[-1], 200)
+            th = np.interp(fine, xs, (top + bot) / 2)
+            wob = np.interp(fine, xs, top - bot)
+            for x, t, w in zip(fine, th, wob):
+                yc = cy - hmax * 0.55 * w
+                h = r * 0.55 + hmax * t
+                d.ellipse((x - S * 1.4, yc - h, x + S * 1.4, yc + h), fill=255)
+            return m.filter(ImageFilter.GaussianBlur(0.8 * S)).point(lambda v: max(0, min(255, (v - 100) * 4)))
+        # liquid: overlapping lobes blurred and pushed through a hard contrast ramp (liquid-gooey),
+        # a droplet thrown above the loudest peaks, the exact stick laid back in
+        pitch = (x1 - x0 - 2 * r) / n
+        rx = pitch * 0.62
         for i in range(n):
             xc = x0 + r + pitch * (i + 0.5)
-            vt = float(np.interp(idx[i], np.arange(N), top_p))
-            vb = float(np.interp(idx[i], np.arange(N), bot_p))
-            ht, hb = r + hmax * vt, r + hmax * vb
+            ht, hb = r + hmax * top[i], r + hmax * bot[i]
             d.ellipse((xc - rx, cy - ht, xc + rx, cy + hb), fill=255)
-            if vt > 0.72 and amp > 0.5:                          # the droplet: only the loudest peaks throw one
+            if top[i] > 0.72 and amp > 0.5:
                 dr = r * 0.48
-                dy = cy - ht - dr * (0.2 + 3.2 * (vt - 0.72))
+                dy = cy - ht - dr * (0.2 + 3.2 * (top[i] - 0.72))
                 d.ellipse((xc - dr, dy - dr, xc + dr, dy + dr), fill=255)
-        soft = m.filter(ImageFilter.GaussianBlur(1.05 * S))
-        liquid = soft.point(lambda v: max(0, min(255, (v - 110) * 6)))
-        # the stick itself is laid back in exactly: a blur + threshold thins a 7 px capsule a hair,
-        # and the lit stick then grew back into the idle one at the end of every fade
+        liquid = m.filter(ImageFilter.GaussianBlur(0.8 * S)).point(lambda v: max(0, min(255, (v - 110) * 6)))
         return ImageChops.lighter(liquid, self._stick_mask())
 
     @staticmethod
@@ -583,7 +604,7 @@ class Overlay:
         if self.state in ("recording", "persistent"):
             self._analyse(self.get_samples())
         elif self.bands.max() > 0.01:
-            self._analyse(None)                        # keeps relaxing at fall 0.9 while it fades
+            self._analyse(None)                        # keeps relaxing at the style's fall while it fades
             if self.bands.max() <= 0.01:
                 self.bands[:] = 0                      # under a third of a pixel of bar: settle
                 #   exactly rather than leave a residue that stops decaying (tick would no longer

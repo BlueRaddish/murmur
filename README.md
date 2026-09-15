@@ -82,9 +82,10 @@ python murmur.py
 | Tray icon right-click | start/stop, edit vocab, open log, quit |
 
 (Ctrl+Cmd on a Mac keyboard.) The glass stick is near-invisible at rest. While you talk it
-turns red and becomes a live spectrum of your voice - one glowing shape that swells and
-ripples across its whole length and pinches back into the stick at the tips, then relaxes
-slowly when you stop; it auto-scales to your mic. Colours, opacity and haze are yours:
+turns red and becomes a live spectrum of your voice, in one of three glass styles (Settings >
+Appearance > Waveform): a ribbon whose thickness and line follow the voice, an equaliser of
+separate glass pills that grow out of the stick, or liquid glass that merges and throws off
+droplets. It auto-scales to your mic and settles back into the stick when you stop. Colours, opacity and haze are yours:
 Settings has an accent colour (recording) and a transcribing colour with preset swatches, an
 opacity slider and a haze toggle; every change applies as you make it. An orange-to-yellow
 pulse runs along it while transcribing. If the bar stays flat while you talk, it is
@@ -157,8 +158,9 @@ the draft lists which notes were used (click one to open it in Obsidian). Privat
 folders (journal, diary, private, people) are never indexed, and you can exclude more. Off
 by default.
 
-**Settings** - light or dark (or follow Windows), model, microphone, colours, retention,
-the trigger key; changes apply as you make them.
+**Settings** - Appearance (light or dark or follow Windows, and the waveform: a glass ribbon,
+a glass equaliser or liquid glass), model, microphone, colours, retention, the trigger key;
+changes apply as you make them.
 
 <picture>
 <source media="(prefers-color-scheme: dark)" srcset="docs/settings-dark.png">

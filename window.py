@@ -550,6 +550,12 @@ GLYPHS = {
              ("line", ((9.5, 2), (9.5, 4.5), (12, 4.5))),
              ("line", ((6, 8), (10, 8))), ("line", ((6, 10.5), (10, 10.5)))),
     "check": (("line", ((3, 8.5), (6.5, 12), (13, 4.5))),),
+    # the three waveform styles in Settings > Appearance
+    "wave": (("line", ((2, 8), (4, 4.5), (6.5, 11.5), (9, 4), (11.5, 11), (14, 7.5))),),
+    "bars": (("line", ((3, 6.5), (3, 9.5))), ("line", ((6, 3), (6, 13))), ("line", ((9, 5), (9, 11))),
+             ("line", ((12, 2.5), (12, 13.5)))),
+    "drop": (("closed", ((8, 2.5), (11.3, 7.8), (11.8, 10.4), (10.2, 12.9), (8, 13.6), (5.8, 12.9),
+                         (4.2, 10.4), (4.7, 7.8))),),
 }
 
 
@@ -2309,12 +2315,23 @@ class AppWindow:
         body.pack(fill="x", pady=self.px(SP[0]))   # 12 (row) + 4 = the card's 16 px top padding
         return body
 
+    WAVE_UI = (("Ribbon", "ribbon", "wave"), ("Equaliser", "equaliser", "bars"), ("Liquid", "liquid", "drop"))
+
     def _appearance(self, parent) -> None:
-        g = self._group(parent, "Window", first=True)
-        r = _Row(self, g, "Appearance", "System follows the Windows setting")
+        g = self._group(parent, "Appearance", first=True)
+        r = _Row(self, g, "Theme", "System follows the Windows setting")
         v = self.cfg.get("theme")
         self._segment(r.right, "theme", [("System", "system"), ("Light", "light"), ("Dark", "dark")],
                       v if v in ("light", "dark") else "system", self._set_theme)
+        r = _Row(self, g, "Waveform", "How the bar moves while you talk")
+        w = self.cfg.get("wave")
+        self._segment(r.right, "wave", [(t, v) for t, v, _ in self.WAVE_UI],
+                      w if w in [v for _, v, _ in self.WAVE_UI] else "ribbon", self._set_wave,
+                      icons={v: ic for _, v, ic in self.WAVE_UI})
+
+    def _set_wave(self, v) -> None:
+        self.cfg["wave"] = v
+        self.save()                           # run_app's on_save hands the config to the overlay: next frame
 
     def _set_theme(self, v) -> None:
         self.cfg["theme"] = v

@@ -208,6 +208,32 @@ Decisions
   Text clip the last one - the panel's Texts have no spacing. Dictating into an answer field
   works because Typist already skips the paste when murmur's own window is in front; the take
   now also lands in the focused panel field (and in History like any take).
+- 1.0.0, three waveform styles in Settings > Appearance (2026-09-15, later). The liquid glass
+  was "too slow... the individual waves are too much of a bump... needs more diversity in the
+  peaks". Measured causes: the shape was a slow-drifting envelope - lobe axes wandering at
+  0.02-0.06 Hz, the profile smoothed twice - so speech mostly scaled one fixed blob; and only 20
+  bands, spread into neighbours, drawn as 15 equal lobes. The user asked for many versions to
+  choose from: a rig in the scratchpad (wavevar/variants.py) rendered eight shapes plus the two
+  references from the same TTS speech with the real overlay code, measuring motion (mean share of
+  the stick area changing per frame; current 0.092) and peak variety (spread of the tallest
+  point across twelve slices; current 43.6), published as the artifact "murmur waveform lineup".
+  They picked the glass ribbon (E: 0.164 / 70.5), the glass equaliser (B: 0.173 / 79.9) and the
+  fast liquid glass (A: 0.148 / 53.8), all three selectable. overlay.py now carries a WAVES table
+  (bands, cols, attack, fall, spread, smooth, wobble Hz, mirror) and one engine: _analyse takes
+  the style's band count and rates, _columns turns bands into column heights (mirrored lows-centre
+  or scattered, each column shimmering on its own clock of active time so a fading take stays
+  still), _spectrum_mask draws the style. The slow lobe-axis/field machinery is gone. One flaw
+  found in the state render: equaliser pills alone relaxed into a row of beads while transcribing;
+  the stick is now laid in under them in proportion to quiet, so they grow out of it and melt
+  back. config "wave" (ribbon default; an unknown value falls back); Settings' first group is
+  now "Appearance" with rows Theme and Waveform, the latter a three-cell segment with new wave /
+  bars / drop glyphs, applied live through on_save. Test-suite notes from the day: the suites
+  showed timing-dependent failures under load that also fail on the committed tree (a fake draft
+  that finished mid-check - now gated on an Event; the History action-row placement read before
+  its layout pass; a rare leftover id-keyed timer after the theme rebuild that five instrumented
+  runs never reproduced) - recorded, not chased further. The display went from 192 to 96 DPI with
+  a second monitor mid-session; that turned out not to matter (a DPI-unaware test process sees 96
+  either way).
 - 1.0.0, the user's test pass (2026-09-15), three asks. (1) The tap-to-latch was wrong for them:
   "don't make it tap start and tap stop on the headphones... a single click on my play pause
   button doesn't allow me to actually use it as a play pause button". The trigger key's grammar

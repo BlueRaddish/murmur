@@ -647,7 +647,13 @@ ipx = lambda img, x, y: tuple(int(v) for v in root.tk.splitlist(root.tk.call(img
 # the frame: group labels are meta/muted on E over cards that start 12 before it; the row
 # labels land on E; the thumb is 4 px; the rule under the title shows only while scrolled
 glab = win.cards[0].master.pack_slaves()[0]
-assert glab.cget("text") == "Window" and glab.cget("fg") == win.pal["muted"]
+assert glab.cget("text") == "Appearance" and glab.cget("fg") == win.pal["muted"]
+# the waveform picker: three styles, ribbon by default, a pick writes cfg and saves
+assert [v for _, v in win.ctl["wave"]] == ["ribbon", "equaliser", "liquid"]
+n_ = len(saves)
+next(l for l, v in win.ctl["wave"] if v == "equaliser").event_generate("<Button-1>")
+root.update()
+assert cfg["wave"] == "equaliser" and len(saves) == n_ + 1 and saves[-1]["wave"] == "equaliser"
 assert W.tkfont.Font(root, font=glab.cget("font")).actual("size") == 10
 Es = lambda w: w.winfo_rootx() - win.views["settings"].winfo_rootx()
 assert Es(glab) == px_(16) and Es(win.cards[0]) == px_(4) and Es(win.r_mic.head) == px_(16)
@@ -1216,7 +1222,14 @@ assert mx(1) == mx(0) + win.mf["meta"].measure(meta[0]) and mx(2) == mx(1) + win
 assert mx(2) + win.mf["meta"].measure(meta[2]) <= foot.winfo_width() - px_(16) < mx(2) + win.mf["meta"].measure("Drafted by " + meta[2])
 # ... and a draft in progress puts Cancel under the "Drafting with" line, on E, when the two
 # cannot share the row (it clipped to "Ca" at the pane's edge); beside the line again at 780
-PF.draft = slow_draft
+import threading as _threading
+_gate = _threading.Event()                  # held open until the checks are done: a timed fake draft
+def held_draft(cfg_, text, target="code", prompts=None, questions=None, answers=None, cancel=None, workdir=None, vault_ctx=None):
+    while not _gate.wait(0.02):             # landed mid-check on a busy CPU and destroyed Cancel under it
+        if cancel is not None and cancel.is_set():
+            raise PF.Cancelled()
+    return fake_draft(cfg_, text, target, prompts, questions, answers)
+PF.draft = held_draft
 win._run_draft(win.sel)
 root.update()
 assert win.pstate == "drafting" and win.cancel_under and win.b_cancel.f.master is win.p_inner
@@ -1226,6 +1239,7 @@ win.win.geometry(f"{win.px(780)}x{win.px(560)}")
 assert settle(lambda: win.cancel_under is False and win.b_cancel.f.winfo_ismapped())
 assert Ep(win.b_cancel.f, win.dpane) == px_(16) + win.l_draft.winfo_width() + px_(4) and win.b_cancel.f.winfo_y() == win.l_draft.master.winfo_y()
 win._escape()
+_gate.set()
 assert settle(lambda: win.pstate == "draft" and not win.draft_thread.is_alive())
 PF.draft = fake_draft
 assert settle(lambda: win.b_eng.f.cget("text") == "Claude Code" and win.head_rows == 2)
