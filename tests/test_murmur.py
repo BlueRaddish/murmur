@@ -535,4 +535,29 @@ live = o.bands.max(); assert live > 0.3
 o.configure({"color": "#00ff00", "opacity": 0.5})      # what run_app's on_save does
 assert o.bands.max() == live
 
+# the equaliser's split is timed: it eases open over ~0.5 s once the voice is there (never in one
+# frame), holds through a short pause, and merges back into the plain stick after the voice stops;
+# the other styles never split
+fake[0] = 0.0
+o = fresh_overlay(samples=lambda: tone, wave="equaliser")
+o.post("recording")
+opened = []
+for _ in range(30):
+    fake[0] += 0.04; o.tick(); opened.append(o.split)
+steps = [b - a for a, b in zip([0.0] + opened, opened)]         # (the first tick sees dt 0: the fake clock)
+assert max(steps) < 0.4 and 0.0 < opened[1] < 0.4, opened[:3]   # it eases open; no frame jumps it
+assert next(i for i, v in enumerate(opened) if v > 0.95) * 0.04 <= 0.8, opened
+o.get_samples = lambda: np.zeros(2048, dtype=np.float32)        # the voice stops, still recording
+for _ in range(3):
+    fake[0] += 0.04; o.tick()
+assert o.split > 0.9                                            # a short pause is held open
+closing = []
+for _ in range(40):
+    fake[0] += 0.04; o.tick(); closing.append(o.split)
+assert closing[0] > 0.5 and closing[-1] == 0.0 and all(b <= a for a, b in zip(closing, closing[1:]))
+assert o.bands.max() < 0.01 and o._render().size == (o.w, o.h)  # still recording: quiet, not snapped to 0
+r2 = fresh_overlay(samples=lambda: tone, wave="ribbon"); r2.post("recording")
+for _ in range(10):
+    fake[0] += 0.04; r2.tick()
+assert r2.split == 0.0
 print("overlay transitions ok")

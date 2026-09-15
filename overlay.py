@@ -112,6 +112,10 @@ WAVES = {
     "liquid": dict(bands=32, cols=21, attack=0.8, fall=0.72, spread=1, smooth=0.8, wobble=1.0, mirror=True),
 }
 WAVE_DEFAULT = "ribbon"
+# the equaliser's split: its pills grow out of the stick and melt back into it over time, so the
+# transformation itself is seen (the user: "when it pops up, it needs to be a bit slower... the
+# merging a bit slower"). Seconds to ~95 %, and how long a pause between words is held open.
+SPLIT_S, MERGE_S, SPLIT_HOLD_S = 0.5, 0.7, 0.15
 
 
 class Overlay:
@@ -159,6 +163,8 @@ class Overlay:
         self.level_from = self.level_to = 0.0
         self.level_t0, self.level_dur = self.t_last, self.EXIT
         self.ctime = 0.0                  # seconds of *active* time: colour/pulse phase
+        self.split = 0.0                  # equaliser: 0 = pills fused into the stick, 1 = apart
+        self.voice_t = -1e9               # when the voice was last loud enough to split
         self.last: Image.Image | None = None   # last rendered frame (also when there is no window)
         self.peak = 1.0   # running spectrum reference, so the display fills for any mic gain
         self._cache: dict = {}
@@ -320,20 +326,26 @@ class Overlay:
         d = ImageDraw.Draw(m)
         n = len(top)
         if self.wave == "equaliser":
-            # separate glass pills with a real gap, each column its own
+            # separate glass pills that grow out of the stick. `split` (eased in tick) opens the gaps,
+            # raises the pills and fades the stick out under them; while it is between, the shape is
+            # also pushed through the liquid ramp, so neighbouring pills pinch apart like liquid
+            # instead of cross-fading - the transformation is part of the look
+            sp = self.split
             pitch = (x1 - x0) / n
-            bw = pitch * 0.66 / 2
+            bw = pitch * (1.0 - 0.34 * sp) / 2
             for i in range(n):
                 xc = x0 + pitch * (i + 0.5)
-                d.rounded_rectangle((xc - bw, cy - r * 0.8 - hmax * top[i], xc + bw, cy + r * 0.8 + hmax * bot[i]),
-                                    radius=bw, fill=255)
-            pills = m.filter(ImageFilter.GaussianBlur(0.35 * S))
-            # the stick underneath, as solid as the voice is quiet: the pills grow out of it while you
-            # talk and melt back into it when you stop (alone they settled into a row of beads)
-            quiet = float(np.clip(1.0 - 3.0 * max(top.max(), bot.max()), 0.0, 1.0))
-            if quiet > 0.0:
-                pills = ImageChops.lighter(pills, self._stick_mask().point(lambda v: v * quiet))
-            return pills
+                d.rounded_rectangle((xc - bw, cy - r * 0.8 - hmax * top[i] * sp, xc + bw, cy + r * 0.8 + hmax * bot[i] * sp),
+                                    radius=min(bw, r), fill=255)
+            if sp < 1.0:
+                m = ImageChops.lighter(m, self._stick_mask().point(lambda v: v * (1.0 - sp)))
+            crisp = m.filter(ImageFilter.GaussianBlur(0.35 * S))
+            if sp > 0.98:
+                return crisp
+            liquid = m.filter(ImageFilter.GaussianBlur((0.6 + 1.0 * (1.0 - sp)) * S)).point(
+                lambda v: max(0, min(255, (v - 110) * 6)))
+            liquid = ImageChops.lighter(liquid, self._stick_mask().point(lambda v: v * (1.0 - sp)))
+            return Image.blend(crisp, liquid, float(np.clip(1.0 - sp, 0.0, 1.0) ** 0.6))
         d.rounded_rectangle((x0, y0, x1, y1), radius=r, fill=255)
         if self.wave == "ribbon":
             # a ribbon whose thickness and centre line both follow the voice
@@ -557,7 +569,7 @@ class Overlay:
             # whisper - so keep one slot (core + mask + haze layer) and re-sweep only the pulse.
             key = (col, self.haze)
             slot = self._cache.get("fill")
-            static = self.level >= 1.0 and self.bands.max() == 0.0
+            static = self.level >= 1.0 and self.bands.max() == 0.0 and self.split == 0.0
             if static and slot is not None and slot[0] == key:
                 core, mask = slot[1].copy(), slot[2]
             else:
@@ -603,13 +615,29 @@ class Overlay:
             self.bands[:] = 0                          # and its shape
         if self.state in ("recording", "persistent"):
             self._analyse(self.get_samples())
-        elif self.bands.max() > 0.01:
+            if self.bands.max() > 0.12:
+                self.voice_t = now
+        # the equaliser's split eases toward open while the voice is present (a short pause between
+        # words holds it) and toward closed otherwise - timed, so it cannot pop
+        speaking = (self.wave == "equaliser" and self.state in ("recording", "persistent")
+                    and now - self.voice_t < SPLIT_HOLD_S)
+        target = 1.0 if speaking else 0.0
+        tau = (SPLIT_S if target > self.split else MERGE_S) / 3
+        self.split += (target - self.split) * (1 - np.exp(-dt / tau))
+        # settle the exponential's tails exactly: at 2 % a pill gap moves well under a pixel, and a
+        # split that never quite reaches 0 kept the resting stick from ever being a cached still
+        if target == 0.0 and self.split < 0.02:
+            self.split = 0.0
+        elif target == 1.0 and self.split > 0.98:
+            self.split = 1.0
+        if self.bands.max() > 0.01 and self.state not in ("recording", "persistent"):
             self._analyse(None)                        # keeps relaxing at the style's fall while it fades
             if self.bands.max() <= 0.01:
                 self.bands[:] = 0                      # under a third of a pixel of bar: settle
                 #   exactly rather than leave a residue that stops decaying (tick would no longer
                 #   call _analyse), so the relaxed silhouette stops depending on `frame` at all
-        if self.state == "idle" and self.level <= 0.0 and self.bands.max() <= 0.01 and self.busymix < 0.02 and self.frame % 10:
+        if self.state == "idle" and self.level <= 0.0 and self.bands.max() <= 0.01 and self.busymix < 0.02 \
+                and self.split == 0.0 and self.frame % 10:
             return  # idle look is static: no need to redraw every frame
         self.last = self._render()
         if self.hwnd:

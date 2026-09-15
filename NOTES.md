@@ -208,6 +208,20 @@ Decisions
   Text clip the last one - the panel's Texts have no spacing. Dictating into an answer field
   works because Typist already skips the paste when murmur's own window is in front; the take
   now also lands in the focused panel field (and in History like any take).
+- 1.0.0, the equaliser's split (2026-09-15, evening). "When it pops up, it needs to be a bit
+  slower. The merging could be a bit slower, so that we can show the visual transformations."
+  Cause: nothing timed it - the stick under the pills vanished once the loudest band passed a
+  third, which the fast attack reached in a frame or two. Now Overlay.split (0 = pills fused into
+  the stick, 1 = apart) eases in tick with its own time constants (SPLIT_S 0.5 to open, MERGE_S
+  0.7 to close, SPLIT_HOLD_S 0.15 so a pause between words holds it) and drives the equaliser's
+  shape: the gaps open (pill width 1.0 -> 0.66 of the pitch), the pills rise (heights x split),
+  the stick fades out under them, and while in between the mask is blended with a blur +
+  contrast-ramp version so neighbouring pills pinch apart like liquid instead of cross-fading.
+  Measured on TTS speech: opens in 0.48 s, merges in 0.92 s after the voice stops. A first hold of
+  0.35 s left a flat row of beads sitting before the merge (the pills reach zero height before the
+  hold ends); 0.15 s turns it into beads rolling together. The exponential's tails snap at 2 % so
+  the resting stick becomes a cached still again; only the equaliser splits. Test pins it: no frame
+  jumps the split by 0.4, open within 0.8 s, a short pause held, monotonic close to exactly 0.
 - 1.0.0, three waveform styles in Settings > Appearance (2026-09-15, later). The liquid glass
   was "too slow... the individual waves are too much of a bump... needs more diversity in the
   peaks". Measured causes: the shape was a slow-drifting envelope - lobe axes wandering at
