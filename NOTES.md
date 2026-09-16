@@ -208,6 +208,24 @@ Decisions
   Text clip the last one - the panel's Texts have no spacing. Dictating into an answer field
   works because Typist already skips the paste when murmur's own window is in front; the take
   now also lands in the focused panel field (and in History like any take).
+- 1.0.0, the overlay's frame cost (2026-09-15, evening). "The graphics are really slow, and that
+  makes it really choppy - that takes away the point of slow." Measured per style and scale,
+  interleaved against the pre-liquid version: at 200 % a frame cost 36-49 ms against the 40 ms
+  timer (the old fused bars 49 ms - it had been marginal all along), at 100 % 10-16 ms on a CPU
+  that Whisper keeps busy. 30 ms of it was _fill's per-pixel lighting, and it ran on the 2x
+  SUPERSAMPLE - four times the pixels the screen shows - because every layer was built at SS and
+  the whole frame reduced at the end. Fix: shapes are still drawn at SS (that is the
+  anti-aliasing) but `_mask` reduces to device pixels immediately, and fill, pulse, haze, glass
+  and the dissolve all work there; `_render` no longer reduces. `_stick1()` caches the reduced
+  stick, which the pulse now uses as its clip (eroded by a cheap gain instead of redrawing a
+  rounded rect at SS every frame), and the haze's very wide blur runs at half resolution and
+  scales back up. Same measurement after: 1.8-2.5 ms at 100 %, 4.9-6.7 ms at 200 %, with the old
+  fused bars at 17 ms in the same run - about 3x cheaper than the version that felt smooth. A/B
+  of the same frames before and after: mean |diff| 2.4-4.3 per channel (soft glow edges only),
+  nothing visible at 4x zoom. With that headroom the app's timer went 40 -> 33 ms (FRAME_MS, 30
+  fps): the render is 2-7 ms of it either way, and 25 fps was itself part of the steppiness.
+  Two tests followed the pipeline: the transition test's idle reference no longer reduces
+  `_base()`, and the dissolve test lights a reduced mask.
 - 1.0.0, the equaliser's split (2026-09-15, evening). "When it pops up, it needs to be a bit
   slower. The merging could be a bit slower, so that we can show the visual transformations."
   Cause: nothing timed it - the stick under the pills vanished once the loudest band passed a

@@ -77,6 +77,9 @@ LOOP_CR = 2.4               # text whose zlib compression ratio passes this is a
                             # Whisper's own hallucination threshold. The user's "uh + long pause"
                             # takes logged 26.24 three windows running (2026-09-15)
 VK_MEDIA_PLAY_PAUSE = 0xB3  # what a wired headset's inline button sends on Windows
+FRAME_MS = 33               # the overlay's timer: 30 fps. A frame costs 2-7 ms since the render
+                            # moved to device pixels (2026-09-15); at 25 fps the motion still read
+                            # as steppy on the user's machine.
 
 # Hold both of these to record. Key.cmd is the Win key on Windows, Cmd on macOS.
 CTRL_KEYS = {Key.ctrl, Key.ctrl_l, Key.ctrl_r}
@@ -871,12 +874,12 @@ def run_app(factory, cfg: dict, cfg_path: Path) -> None:
             overlay.tick()
         except Exception as e:   # a draw bug must not stop the timer (the overlay would freeze)
             log(f"overlay: {e}")
-        root.after(40, tick)
+        root.after(FRAME_MS, tick)
 
     threading.Thread(target=icon.run, daemon=True).start()
     threading.Thread(target=load, daemon=True).start()
     log(f"ui up  {since_launch()}")
-    root.after(40, tick)
+    root.after(FRAME_MS, tick)
     try:
         root.mainloop()
     finally:

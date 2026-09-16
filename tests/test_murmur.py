@@ -467,7 +467,7 @@ for _ in range(25): fake[0] += 0.04; o.tick()          # 1 s of speech
 o.post("busy")
 for _ in range(25): fake[0] += 0.04; o.tick()          # 1 s of transcribing
 assert o.level == 1.0 and o.busymix > 0.9              # fully lit, fully in the busy colour
-idle_ref = np.asarray(o._base().reduce(o.SS)).astype(np.float32)
+idle_ref = np.asarray(o._base()).astype(np.float32)   # device pixels already: the fill runs there
 idle_pre = idle_ref[..., :3] * idle_ref[..., 3:4]
 o.post("idle"); t0 = fake[0]; frames = []
 for _ in range(25):                                    # 1 s of fade
@@ -493,7 +493,7 @@ assert frames[-1][1] < frames[0][1] * 0.6   # the lit glass carries 1.82x the id
 # _dissolve: the ends are exact, the middle is the alpha average
 fake[0] = 0.0
 o = fresh_overlay(samples=lambda: tone)
-mask = o._spectrum_mask(1.0)
+mask = o._mask(o._spectrum_mask(1.0))                 # shapes are drawn at SS, lit at device pixels
 act = overlay.Image.new("RGBA", mask.size, (0, 0, 0, 0)); o._fill(act, mask, (0, 255, 0)); base = o._base()
 assert o._dissolve(base, act, 0.0) is base and o._dissolve(base, act, 1.0) is act
 mid = np.asarray(o._dissolve(base, act, 0.5)).astype(np.float32)

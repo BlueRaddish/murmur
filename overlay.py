@@ -128,7 +128,12 @@ class Overlay:
     post(state) from any thread. The haze (a wide soft glow) reaches well past the stick's
     canvas, so with it on the window grows by HAZE_PAD each side: the expensive per-pixel
     work stays on the small core canvas, the blurred haze layer is built on the big one and
-    the core is composited over it."""
+    the core is composited over it.
+
+    Resolution: shapes are DRAWN at SS x device pixels (masks only - that is the anti-aliasing),
+    then `_mask` reduces to device pixels and every per-pixel layer (fill, pulse, haze, glass,
+    dissolve) works there. Lighting the supersample instead cost 4x the pixels: 30 ms a frame of
+    the 36-49 ms at 200 %, against a 40 ms budget, which is what read as choppy (2026-09-15)."""
 
     W, H = 48, 7     # stick size in logical px
     PAD = 22         # headroom for the waveform, glow and shadow
@@ -246,6 +251,16 @@ class Overlay:
         x0, y0 = self.PAD * S, self.PAD * S
         x1, y1 = x0 + self.W * S, y0 + self.H * S
         return n_w, n_h, x0, y0, x1, y1, (y1 - y0) / 2
+
+    def _mask(self, m: Image.Image) -> Image.Image:
+        """An SS-drawn mask at device pixels, anti-aliased by the box filter."""
+        return m.reduce(self.SS)
+
+    def _stick1(self) -> Image.Image:
+        """The resting stick at device pixels, cached (the pulse and the equaliser's merge use it)."""
+        if "stick1" not in self._cache:
+            self._cache["stick1"] = self._mask(self._stick_mask())
+        return self._cache["stick1"]
 
     def _stick_mask(self) -> Image.Image:
         n_w, n_h, x0, y0, x1, y1, r = self._geom()
@@ -394,7 +409,7 @@ class Overlay:
         thin dark edge so it reads on white, and one tight glow. Every layer comes from the one
         mask, so the shape and its lighting never disagree. _dissolve fades them together."""
         n_w, n_h = mask.size
-        S = self.SS * self.scale
+        S = self.scale                      # device px per logical px: this runs at screen resolution
         op = self.opacity
         m = np.asarray(mask, dtype=np.float32) / 255
         base = np.array(col, np.float32)
@@ -446,7 +461,7 @@ class Overlay:
         here now: every active state is drawn by _fill, so the old tinted /
         glowing half of this (and _base's state argument) is gone."""
         n_w, n_h = mask.size
-        S = self.SS * self.scale
+        S = self.scale
         img = Image.new("RGBA", (n_w, n_h), (0, 0, 0, 0))
         # shadow below
         # (blur the single-channel mask, then colour it: 4x cheaper than blurring RGBA)
@@ -484,11 +499,15 @@ class Overlay:
     def _haze(self, mask: Image.Image, col, blur: float, k: float, gain: float) -> Image.Image:
         """The wide glow on the BIG canvas: the core mask pasted at the margin, blurred, so
         nothing of it is clipped by the window edge (it used to cut straight through)."""
-        S = self.SS * self.scale
-        bw, bh, off = self.w * self.SS, self.h * self.SS, self.ext * self.SS
+        S = self.scale
+        bw, bh, off = self.w, self.h, self.ext
         m = Image.new("L", (bw, bh), 0)
         m.paste(mask, (off, off))
-        hz = m.filter(ImageFilter.GaussianBlur(blur * S)).point(lambda v: min(255, v * k) * gain * self.opacity)
+        # the haze is a very wide blur: doing it at half resolution and scaling back up is four
+        # times less work and indistinguishable (measured 18.5 -> 12 ms a frame at 200 %)
+        half = m.resize((max(1, bw // 2), max(1, bh // 2)), Image.BILINEAR)
+        hz = half.filter(ImageFilter.GaussianBlur(blur * S / 2)).resize((bw, bh), Image.BILINEAR)
+        hz = hz.point(lambda v: min(255, v * k) * gain * self.opacity)
         layer = Image.new("RGBA", (bw, bh), tuple(col) + (255,))
         layer.putalpha(hz)
         return layer
@@ -504,20 +523,20 @@ class Overlay:
             if ckey:
                 self._cache[ckey] = layer
         big = layer.copy()
-        big.alpha_composite(core, (self.ext * self.SS, self.ext * self.SS))
+        big.alpha_composite(core, (self.ext, self.ext))
         return big
 
     def _base(self) -> Image.Image:
         """The resting stick. Static, so it is built once per configure() and cached."""
         if "idle" not in self._cache:
-            mask = self._stick_mask()
+            mask = self._stick1()
             self._cache["idle"] = self._frame(self._glass(mask), mask, (245, 245, 250), 11, 2.2, 0.22)
         return self._cache["idle"]
 
     def _pulse(self, img, alpha_scale: float = 1.0) -> None:
         """Orange-to-yellow gradient sweeping along the stick, breathing in brightness."""
-        n_w, n_h, x0, y0, x1, y1, r = self._geom()
-        S = self.SS * self.scale
+        stick = np.asarray(self._stick1(), dtype=np.float32) / 255
+        n_h, n_w = stick.shape
         t = self.ctime
         xs = np.linspace(0, 1, n_w, dtype=np.float32)
         wave = 0.5 + 0.5 * np.sin(2 * np.pi * (xs * 1.5 - t * 0.8))
@@ -527,13 +546,13 @@ class Overlay:
         row = orange[None, :] * (1 - wave[:, None]) + yellow[None, :] * wave[:, None]
         breathe = 0.65 + 0.35 * np.sin(2 * np.pi * t * 0.9)
         a = np.full((n_w, 1), int(190 * breathe * alpha_scale * self.opacity), np.float32)
-        rgba = np.concatenate([row, a], axis=1).astype(np.uint8)
-        grad = Image.fromarray(np.broadcast_to(rgba[None, :, :], (n_h, n_w, 4)).copy(), "RGBA")
-        mask = Image.new("L", (n_w, n_h), 0)
-        ImageDraw.Draw(mask).rounded_rectangle((x0 + 1.2 * S, y0 + 1.2 * S, x1 - 1.2 * S, y1 - 1.2 * S),
-                                              radius=r, fill=255)
-        grad.putalpha(Image.composite(grad.split()[3], Image.new("L", (n_w, n_h), 0), mask))
-        img.alpha_composite(grad)
+        rgba = np.concatenate([row, a], axis=1)
+        grad = np.broadcast_to(rgba[None, :, :], (n_h, n_w, 4)).copy()
+        # inside the stick, a pixel in from its edge: the cached stick alpha eroded by a small blur
+        # (redrawing the rounded rect at SS and reducing it cost a draw and a reduce every frame)
+        inner = np.clip(stick * 1.6 - 0.6, 0, 1)
+        grad[..., 3] *= inner
+        img.alpha_composite(Image.fromarray(np.rint(grad).astype(np.uint8), "RGBA"))
 
     @staticmethod
     def _dissolve(idle: Image.Image, active: Image.Image, level: float) -> Image.Image:
@@ -573,8 +592,8 @@ class Overlay:
             if static and slot is not None and slot[0] == key:
                 core, mask = slot[1].copy(), slot[2]
             else:
-                mask = self._spectrum_mask(self.level)                    # bands at 0 -> plain stick
-                core = Image.new("RGBA", (self.cw * self.SS, self.ch * self.SS), (0, 0, 0, 0))
+                mask = self._mask(self._spectrum_mask(self.level))        # bands at 0 -> plain stick
+                core = Image.new("RGBA", (self.cw, self.ch), (0, 0, 0, 0))
                 self._fill(core, mask, col)
                 if static:
                     self._cache["fill"] = (key, core.copy(), mask)
@@ -582,7 +601,7 @@ class Overlay:
                 self._pulse(core, self.busymix * self.pulse_gain)
             act = self._frame(core, mask, col, 12, 2.4, 0.45, ckey=("haze", key) if static else None)
             img = self._dissolve(idle, act, self.level)
-        return img.reduce(self.SS)  # box filter: the 2x supersample already did the anti-aliasing
+        return img
 
     # --- API ----------------------------------------------------------------
     def post(self, state: str) -> None:
