@@ -30,7 +30,6 @@ PRIVATE_DIRS = {"journal", "diary", "private", "people"}
 HEAD_BYTES = 4096            # what indexing reads per file: frontmatter + H1 + first paragraph
 MAX_INDEX_NOTES = 20000      # a huge vault keeps its newest notes
 INDEX_TTL_S = 6 * 3600
-IO_DEADLINE_S = 2.0          # total live-IO budget on the hot path
 MAX_NOTES = 3
 NOTE_BUDGET = 1200           # chars per injected note
 TOTAL_BUDGET = 3000

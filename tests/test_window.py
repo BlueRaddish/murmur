@@ -68,13 +68,8 @@ assert cut.endswith("…") and fnt.measure(cut) <= 160 and long.startswith(cut[:
 
 now = time.mktime((2026, 8, 26, 12, 0, 0, 0, 0, -1))
 mk = lambda *a: time.mktime(a + (0, 0, -1))
-assert W.when(now - 3600, now) == "Today 11:00"
-assert W.when(mk(2026, 8, 25, 9, 10, 0), now) == "Yesterday 09:10"
 d3 = mk(2026, 8, 23, 21, 5, 0)
-assert W.when(d3, now) == time.strftime("%a", time.localtime(d3)) + " 21:05"
-assert W.when(mk(2026, 8, 12, 8, 0, 0), now) == "Aug 12"
-assert W.when(mk(2025, 8, 12, 8, 0, 0), now) == "Aug 12 2025"
-# the day-group header: the same day arithmetic without the clock, the weekday spelled out
+# the day-group header: 'Today' / 'Yesterday' / the weekday / a date
 assert W.day_of(now - 3600, now) == "Today" and W.day_of(mk(2026, 8, 25, 9, 10, 0), now) == "Yesterday"
 assert W.day_of(d3, now) == time.strftime("%A", time.localtime(d3))
 assert W.day_of(mk(2026, 8, 12, 8, 0, 0), now) == "Aug 12" and W.day_of(mk(2025, 8, 12, 8, 0, 0), now) == "Aug 12 2025"

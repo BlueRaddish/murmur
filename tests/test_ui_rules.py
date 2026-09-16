@@ -168,7 +168,6 @@ for theme in ("light", "dark"):
     assert at(cap, cap.width() // 2, 0) == W.rgb(pal["stroke_top"] if theme == "dark" else pal["stroke"](pal["ctl"])), theme
     k = win.keycap(win.views["settings"], "Esc")
     assert k in win.caps_all and k.cget("text") == "Esc" and int(k.cget("takefocus")) == 0
-    assert [c.cget("text") for c in win.kbd_chord(win.views["settings"], "Ctrl", "D").winfo_children()] == ["Ctrl", "D"]
     assert win.icon("search", pal["muted"]) is win.icon("search", pal["muted"])      # cached, one per key
     assert win.icon("search", pal["muted"]).width() == win.px(W.ICON)
 

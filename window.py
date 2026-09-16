@@ -326,24 +326,9 @@ def _days_ago(t: float, now: float = None) -> tuple:
     return (day(ln) - day(lt)).days, lt, ln
 
 
-def when(t: float, now: float = None) -> str:
-    """Relative-day stamp, 24-hour clock: 'Today 14:32' / 'Yesterday 09:10' / 'Mon 21:05' /
-    'Aug 12' / 'Aug 12 2025'."""
-    d, lt, ln = _days_ago(t, now)
-    hm = time.strftime("%H:%M", lt)
-    if d == 0:
-        return "Today " + hm
-    if d == 1:
-        return "Yesterday " + hm
-    if 2 <= d <= 6:
-        return time.strftime("%a ", lt) + hm
-    out = time.strftime("%b ", lt) + str(lt.tm_mday)
-    return out if lt.tm_year == ln.tm_year else out + " " + str(lt.tm_year)
-
-
 def day_of(t: float, now: float = None) -> str:
     """The day-group header of a list row: 'Today' / 'Yesterday' / 'Monday' (2-6 days back) /
-    'Aug 12' / 'Aug 12 2025' - `when()`'s day arithmetic without the clock."""
+    'Aug 12' / 'Aug 12 2025'. The row's own time is a plain clock beside it."""
     d, lt, ln = _days_ago(t, now)
     if d == 0:
         return "Today"
@@ -1447,13 +1432,6 @@ class AppWindow:
                      highlightthickness=0, takefocus=0, image=self.kbd_img(label, h, w, parent["bg"]))
         self.caps_all.append(l)
         return l
-
-    def kbd_chord(self, parent, *labels) -> tk.Frame:
-        """Caps side by side, 4 apart, no `+` glyph between them (Raycast)."""
-        f = tk.Frame(parent, bg=parent["bg"])
-        for i, label in enumerate(labels):
-            self.keycap(f, label).pack(side="left", padx=(self.px(SP[0]), 0) if i else 0)
-        return f
 
     def _corners(self, parent, r, fill, ground, border=None) -> list:
         """Pin the four masks of `corner_pngs` to a frame's corners. Relative placement means
