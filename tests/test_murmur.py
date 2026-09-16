@@ -1,5 +1,5 @@
 """Run: python tests/test_murmur.py  — no framework, asserts only."""
-import sys, os, subprocess, tempfile, wave
+import sys, os, json, subprocess, tempfile, wave
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np
@@ -294,7 +294,30 @@ assert murmur.load_config(cp) == c
 cp.write_text('{"headset_button": true}', encoding="utf-8")   # pre-0.5 config migrates
 assert murmur.load_config(cp)["trigger_vk"] == murmur.VK_MEDIA_PLAY_PAUSE
 cp.write_text('{"model": "medium.en"}', encoding="utf-8")     # a model over the size cap falls back
-assert murmur.load_config(cp)["model"] == murmur.DEFAULTS["model"] == "base.en"; os.remove(cp)
+assert murmur.load_config(cp)["model"] == murmur.DEFAULTS["model"] == "base.en"
+# config.json is a hand-edited file (the tray opens its folder): a value of the wrong SHAPE is
+# dropped here, not left to raise a TypeError after a dictation, where a windowed build shows nothing
+cp.write_text('{"retention_days": "seven", "haze": "yes", "color": 5, "trigger_vk": "play"}',
+              encoding="utf-8")
+kept = murmur.load_config(cp)
+for k in ("retention_days", "haze", "color", "trigger_vk"):
+    assert kept[k] == murmur.DEFAULTS[k], (k, kept[k])
+assert kept["retention_days"] > 0        # the comparison the app actually makes after every take
+# the shapes that ARE allowed: None for anything, an int or a name for the mic, ints where floats live
+cp.write_text('{"language": null, "mic": "Headset", "opacity": 1, "beam_size": 3}', encoding="utf-8")
+ok = murmur.load_config(cp)
+assert ok["language"] is None and ok["mic"] == "Headset" and ok["opacity"] == 1 and ok["beam_size"] == 3
+assert murmur.fits("haze", True) and not murmur.fits("haze", 1)      # a bool is an int in Python
+assert murmur.fits("beam_size", 5) and not murmur.fits("beam_size", True)
+# a corrupt file falls back to defaults rather than taking the app down
+cp.write_text("{not json at all", encoding="utf-8")
+assert murmur.load_config(cp) == murmur.DEFAULTS
+cp.write_text("", encoding="utf-8")
+assert murmur.load_config(cp) == murmur.DEFAULTS
+# save_config replaces atomically: nothing is left behind, and the file is whole
+murmur.save_config(cp, dict(murmur.DEFAULTS, retention_days=3))
+assert not cp.with_suffix(".json.new").exists() and json.loads(cp.read_text())["retention_days"] == 3
+os.remove(cp)
 from window import vk_name
 assert vk_name(0xB3) == "Play/Pause" and vk_name(None) == "none" and vk_name(0x41).upper() == "A"
 
@@ -588,3 +611,40 @@ for _ in range(10):
     fake[0] += 0.04; r2.tick()
 assert r2.split == 0.0
 print("overlay transitions ok")
+
+# a second launch does not start a second murmur: it asks the running one to open its window.
+# Two real processes - the mutex is per-process, so nothing in-process can prove this.
+HERE = str(Path(__file__).resolve().parents[1])
+FIRST = ("import sys, time; sys.path.insert(0, r'%s'); import murmur; got = []\n"
+         "assert murmur.claim_instance() is True\n"
+         "murmur.watch_open_requests(lambda: got.append(1)); print('READY', flush=True)\n"
+         "[time.sleep(0.05) for _ in range(100) if not got]\n"
+         "print('OPENED' if got else 'NEVER', flush=True)") % HERE
+SECOND = ("import sys; sys.path.insert(0, r'%s'); import murmur\n"
+          "print('CLAIMED' if murmur.claim_instance() else 'REFUSED', flush=True)") % HERE
+first = subprocess.Popen([sys.executable, "-c", FIRST], stdout=subprocess.PIPE, text=True)
+assert first.stdout.readline().strip() == "READY"
+second = subprocess.run([sys.executable, "-c", SECOND], capture_output=True, text=True, timeout=60)
+assert second.stdout.strip() == "REFUSED", second.stdout + second.stderr
+assert first.stdout.readline().strip() == "OPENED", "the running instance was never asked to open"
+first.wait(timeout=30)
+again = subprocess.run([sys.executable, "-c", SECOND], capture_output=True, text=True, timeout=60)
+assert again.stdout.strip() == "CLAIMED", "the lock outlived the process that held it"
+print("single instance ok")
+
+# a windowed build has no stderr: every unhandled exception has to reach murmur.log instead
+lines = []
+_real_log, murmur.log = murmur.log, lines.append
+murmur.install_crash_log()
+try:
+    murmur.sys.excepthook(ValueError, ValueError("main thread"), None)
+    t = __import__("threading").Thread(target=lambda: 1 / 0, name="worker")
+    t.start(); t.join()
+    murmur.sys.excepthook(KeyboardInterrupt, KeyboardInterrupt(), None)   # Ctrl+C is not a crash
+finally:
+    murmur.log = _real_log
+    murmur.sys.excepthook = murmur.sys.__excepthook__
+assert any("crash" in l and "main thread" in l for l in lines), lines
+assert any("crash in thread worker" in l and "ZeroDivisionError" in l for l in lines), lines
+assert len(lines) == 2, lines            # the KeyboardInterrupt logged nothing
+print("crash log ok")

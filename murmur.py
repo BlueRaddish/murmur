@@ -127,6 +127,97 @@ def log(msg: str) -> None:
             pass
 
 
+def install_crash_log(root=None) -> None:
+    """Send every unhandled exception to murmur.log.
+
+    The shipped build is --noconsole, so it has no stderr: without these three hooks a crash in
+    a Tk callback (the likeliest kind - every button and timer runs there), or in one of the
+    worker threads, is printed to nowhere. The window simply stops responding and the log shows
+    the run ending normally. The tray's "Open config/log folder" is how a user gets the trace."""
+    import traceback
+
+    def crash(where, exc_type, exc, tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            return
+        log(f"{where}:\n" + "".join(traceback.format_exception(exc_type, exc, tb)).rstrip())
+
+    sys.excepthook = lambda t, e, tb: crash("crash", t, e, tb)
+    threading.excepthook = lambda a: crash(f"crash in thread {a.thread.name}",
+                                           a.exc_type, a.exc_value, a.exc_traceback)
+    if root is not None:
+        root.report_callback_exception = lambda t, e, tb: crash("crash in a UI callback", t, e, tb)
+
+
+NULLABLE = {"language": str, "mic": (int, str), "trigger_vk": int, "vault_path": str}
+
+
+def fits(key: str, value) -> bool:
+    """Is `value` the shape this key is used as? The tray offers "Open config/log folder", so
+    config.json is a hand-edited file, and a key filter alone lets "retention_days": "seven"
+    through - it then raises a TypeError after every dictation, far from here and, in a windowed
+    build, silently. Keys whose default is None carry their type in NULLABLE."""
+    want = DEFAULTS[key]
+    if value is None:
+        return True                             # None means "unset" for every key that allows it
+    if want is None:
+        return isinstance(value, NULLABLE.get(key, object))
+    if isinstance(want, bool):                  # bool before int: in Python a bool IS an int
+        return isinstance(value, bool)
+    if isinstance(want, (int, float)):
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return isinstance(value, type(want))
+
+
+MUTEX_NAME = "Local\\murmur-running"       # "Local\\" = per login session, so two users each get one
+OPEN_EVENT = "Local\\murmur-open-window"
+_instance_lock = None                      # held for the life of the process; never garbage-collected
+
+
+def claim_instance() -> bool:
+    """True if this process is the only murmur. False means one is already running - and it has
+    been asked to show its window, which is what clicking the shortcut is for.
+
+    Without this, launching murmur again (easy: the app is invisible apart from a tray icon, so
+    the Start menu entry looks like it did nothing) leaves two keyboard hooks and two overlays
+    running, and every dictation gets pasted twice."""
+    global _instance_lock
+    try:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateMutexW.restype = ctypes.c_void_p
+        k32.OpenEventW.restype = ctypes.c_void_p
+        k32.CloseHandle.argtypes = [ctypes.c_void_p]
+        h = k32.CreateMutexW(None, False, MUTEX_NAME)
+        if h and ctypes.get_last_error() == 183:        # ERROR_ALREADY_EXISTS
+            ev = k32.OpenEventW(0x0002, False, OPEN_EVENT)   # EVENT_MODIFY_STATE
+            if ev:
+                k32.SetEvent(ctypes.c_void_p(ev))
+                k32.CloseHandle(ctypes.c_void_p(ev))
+            k32.CloseHandle(ctypes.c_void_p(h))
+            return False
+        _instance_lock = h
+    except Exception as e:      # not Windows, or the call failed: never block the app over this
+        log(f"single-instance check skipped: {e}")
+    return True
+
+
+def watch_open_requests(on_open) -> None:
+    """A later launch sets this event instead of starting a second murmur; show the window."""
+    try:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateEventW.restype = ctypes.c_void_p
+        k32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        ev = k32.CreateEventW(None, False, False, OPEN_EVENT)   # auto-reset
+        if not ev:
+            return
+
+        def wait():
+            while k32.WaitForSingleObject(ctypes.c_void_p(ev), 0xFFFFFFFF) == 0:
+                on_open()
+        threading.Thread(target=wait, daemon=True, name="open-watch").start()
+    except Exception as e:
+        log(f"open-request watch skipped: {e}")
+
+
 def load_config(path: Path) -> dict:
     cfg = dict(DEFAULTS)
     if path.exists():
@@ -134,7 +225,14 @@ def load_config(path: Path) -> dict:
             raw = json.loads(path.read_text(encoding="utf-8"))
             if raw.get("headset_button") and raw.get("trigger_vk") is None:   # pre-0.5 option
                 raw["trigger_vk"] = VK_MEDIA_PLAY_PAUSE
-            cfg.update({k: v for k, v in raw.items() if k in DEFAULTS})
+            for k, v in raw.items():
+                if k not in DEFAULTS:
+                    continue
+                if fits(k, v):
+                    cfg[k] = v
+                else:
+                    log(f"config: {k}={v!r} is not a {type(DEFAULTS[k]).__name__ if DEFAULTS[k] is not None else 'valid value'}"
+                        f", using {cfg[k]!r}")
         except (OSError, ValueError) as e:
             log(f"config ignored: {e}")
     from window import MODELS            # the picker's list is the one allowed set
@@ -145,8 +243,13 @@ def load_config(path: Path) -> dict:
 
 
 def save_config(path: Path, cfg: dict) -> None:
+    """Written beside the target and renamed over it: os.replace is atomic, so a crash or a power
+    cut during the write leaves the previous settings intact rather than a truncated file that
+    loads as defaults."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({k: cfg[k] for k in DEFAULTS}, indent=2), encoding="utf-8")
+    tmp = path.with_suffix(".json.new")
+    tmp.write_text(json.dumps({k: cfg[k] for k in DEFAULTS}, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def find_vocab() -> Path:
@@ -843,6 +946,7 @@ def run_app(factory, cfg: dict, cfg_path: Path) -> None:
     scale = set_dpi_aware()           # before Tk() so tkinter gets real pixels too
     root = tk.Tk()
     root.withdraw()
+    install_crash_log(root)           # Tk swallows callback errors into a stderr this build lacks
     root.tk.call("tk", "scaling", scale * 96 / 72)
     holder = {"app": None}
     history = History(APPDIR / "history.jsonl", cfg["retention_days"])
@@ -920,6 +1024,7 @@ def run_app(factory, cfg: dict, cfg_path: Path) -> None:
             log(f"overlay: {e}")
         root.after(FRAME_MS, tick)
 
+    watch_open_requests(open_window)   # a second launch raises this window instead of starting again
     threading.Thread(target=icon.run, daemon=True).start()
     threading.Thread(target=load, daemon=True).start()
     log(f"ui up  {since_launch()}")
@@ -943,8 +1048,12 @@ def main(argv=None) -> int:
     p.add_argument("--console", action="store_true", help="no tray/overlay/window; log to the console")
     p.add_argument("--list-devices", action="store_true", help="print audio devices and exit")
     a = p.parse_args(argv)
+    install_crash_log()
     if a.list_devices:
         print(audio().query_devices())
+        return 0
+    if not claim_instance():
+        log("murmur is already running; asked it to open its window")
         return 0
 
     cfg = load_config(a.config)

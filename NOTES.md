@@ -208,6 +208,79 @@ Decisions
   Text clip the last one - the panel's Texts have no spacing. Dictating into an answer field
   works because Typist already skips the paste when murmur's own window is in front; the take
   now also lands in the focused panel field (and in History like any take).
+- 1.0.0, the release pass: efficiency, then compaction, then the bug check (2026-09-16).
+  Run in that order on purpose - the efficiency pass adds code as often as it removes it, so
+  compaction should see what actually ships. Both procedures are now standing documents in PARA
+  (3-Resources/methods/efficiency-optimization.md, and the pre-deletion danger list + final bug
+  check added to major-release-cleanup.md), each item traced to a dated source rather than to
+  habit.
+
+  EFFICIENCY. Two changes, both measured, and three hunches killed by measurement.
+  * A take held every chunk of itself for its whole life, and stop() concatenated the lot again:
+    30 min measured 126 MB held + 115 MB for the copy, a 244 MB peak, for audio the streaming
+    loop had finished with minutes before. The loop commits as it goes and nothing reads below
+    `committed`, so Recorder.release(upto) drops whole committed chunks, snapshots start at the
+    oldest sample still held, and stop() returns the audio WITH the sample index it starts at -
+    both under one lock, because a pass still in flight can release more immediately afterwards
+    and a base read separately would slice the tail at the wrong place and paste committed text
+    twice. After: 0.6 MB held, 1.2 MB peak, and the tail handed to Whisper is 9 s instead of
+    1800 s. The test feeds chunks whose samples carry their own index, so a slipped tail shows
+    up as a value and not only as a length.
+  * sounddevice was 0.20 s of the 0.46 s murmur.py cost to import, all of it PortAudio's DLL, and
+    nothing needs it until a recording starts: audio() now loads it on the loader thread beside
+    the VAD warm-up, so neither the tray icon nor the first take waits. Import 456 -> 181 ms.
+    (Deferring it to first use instead would only have moved the stall onto the first dictation.)
+  * Measured and left alone, with the numbers, so the next pass does not re-open them: the idle
+    overlay costs 0.03-0.05 % of a core (the idle frame is a cached still); the window's image
+    cache is 70 images / 0.60 MB and stays exactly that across an 800-step resize (only one key
+    carries a pixel size, and it is a fixed-width field); the audio callback runs 0.014 ms median,
+    under 1 % of its 20 ms deadline, and does not degrade at 90 000 chunks held - so its
+    allocations, which sounddevice's docs warn against, are fine here and stay.
+
+  COMPACTION. The static chain came back clean (pyflakes, ruff F+ERA, vulture at 100), so the
+  haul was small and that is the honest result of having done this in September already. Deleted:
+  when() - it formatted "Today 14:32" for a list row, but the list grew day-group headers (day_of)
+  with a plain clock beside each row, and its five assertions were the only callers left;
+  kbd_chord() - the app packs keycaps directly, only a test called it; vault's IO_DEADLINE_S -
+  no reference anywhere. 22 lines. Each was checked against the new pre-deletion danger list
+  (dynamic dispatch, entry points, persisted names, public API) first. on_screen() is also
+  test-only and was KEPT: it is the readable form of _in_shown, and removing it would copy the
+  visibility predicate into two test files - recorded here so the next pass does not re-litigate.
+  deptry named huggingface_hub as an unused dependency; it is pinned for the error behaviour
+  load_model relies on and is never imported, which is exactly deptry's documented false-positive
+  class - kept. onnxruntime looked like 36 MB of dead weight in the bundle and is NOT: faster-
+  whisper imports it lazily inside the VAD filter, which murmur turns on and warms at startup.
+  Excluding it would have shipped a build that broke on the first dictation.
+
+  THE BUG CHECK. Four real defects, none of which any test or lint would have found, all in the
+  states a developer's own machine never reaches again:
+  * No single-instance guard. murmur is invisible apart from a tray icon, so clicking the Start
+    menu entry while it is already running looks like it did nothing - and started a second copy:
+    two keyboard hooks, two overlays, every dictation pasted twice. A named mutex now claims the
+    instance, and a second launch sets a named event that asks the running one to open its
+    window, which is what the click meant. Proven with two real processes (the mutex is
+    per-process, so nothing in-process can test it), including that the lock does not outlive the
+    process holding it.
+  * A crash went nowhere. The build is --noconsole, so it has no stderr, and nothing installed
+    sys.excepthook, threading.excepthook or Tk's report_callback_exception. A failure in a UI
+    callback - the likeliest kind, since every button and timer runs there - left the window
+    silently unresponsive and a log that looked like a normal run. All three now write the
+    traceback to murmur.log, which the tray's "Open config/log folder" opens.
+  * load_config filtered unknown KEYS but never checked VALUES, and the tray invites hand-editing.
+    Reproduced: "retention_days": "seven" loaded fine, then raised TypeError after every dictation
+    (history silently lost, and in a windowed build with no trace). fits() now checks each value
+    against the shape of its default - bool before int, since a bool is an int in Python - and
+    NULLABLE carries the types of the keys whose default is None. A rejected value is logged and
+    the default used.
+  * save_config truncated the file before rewriting it. Now written beside the target and renamed
+    over it with os.replace, so a crash mid-write leaves the previous settings rather than a
+    truncated file that loads as defaults. (vault's index already did this; config was the outlier.)
+  Checked and clean: no secret ever committed (the credential files live in the user's own
+  profile); all 22 silent exception handlers are narrowly typed and each has a reason; first run
+  with nothing on disk, a path with a space and Korean characters, a corrupt history file, a
+  missing vocab and an unwritable config directory all behave; every background thread is a daemon
+  and every long write is atomic.
+
 - 1.0.0, the overlay's frame cost (2026-09-15, evening). "The graphics are really slow, and that
   makes it really choppy - that takes away the point of slow." Measured per style and scale,
   interleaved against the pre-liquid version: at 200 % a frame cost 36-49 ms against the 40 ms
