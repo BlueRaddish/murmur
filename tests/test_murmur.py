@@ -21,8 +21,9 @@ from pynput.keyboard import Key
 class FakeRec:
     def __init__(self): self.calls = []; self.level = 0.0
     def start(self): self.calls.append("start")
-    def stop(self): self.calls.append("stop"); return np.zeros(0, dtype=np.float32)
+    def stop(self): self.calls.append("stop"); return np.zeros(0, dtype=np.float32), 0
     def snapshot(self, start=0): return np.zeros(0, dtype=np.float32)
+    def release(self, upto): self.calls.append(("release", upto))
     total = property(lambda self: len(self.snapshot()))
 
 def fresh():
@@ -198,6 +199,32 @@ assert m._stream_pass(take11) == 0                     # only 1 s more: no retry
 m.recorder.snapshot = lambda start=0: np.zeros(16000 * 10, dtype=np.float32)[start:]
 assert m._stream_pass(take11) == 10 * 16000            # 3 s more: retried
 m.model.transcribe = _t
+# the recorder releases audio the streaming loop has committed, and what is left still lines up:
+# every sample carries its own index, so a misplaced tail shows up as a value, not just a length
+rec = murmur.Recorder()
+for i in range(50):                       # 50 chunks of 1600 samples = 5 s at 16 kHz
+    rec._cb(np.arange(i * 1600, (i + 1) * 1600, dtype=np.float32).reshape(-1, 1))
+assert rec.total == 80000 and rec.dropped == 0
+assert rec.snapshot(70000)[0] == 70000 and len(rec.snapshot(70000)) == 10000
+rec.release(35000)                        # whole chunks only: 21 chunks = 33600 samples
+assert rec.dropped == 33600 and len(rec._chunks) == 29
+assert rec.snapshot(35000)[0] == 35000, "audio kept must still be addressed by absolute index"
+assert rec.snapshot(0)[0] == 33600, "a start below what is held begins at the oldest sample kept"
+class FakeStream:
+    def stop(self): pass
+    def close(self): pass
+rec._stream = FakeStream()
+audio, base = rec.stop()
+assert base == 33600 and audio[0] == 33600 and len(audio) == 80000 - 33600
+committed = 40000                         # what handle() slices with
+assert audio[committed - base] == committed, "the tail handle() transcribes must start at `committed`"
+# release never drops what has not been committed, and a take that commits nothing holds everything
+rec2 = murmur.Recorder()
+for i in range(10):
+    rec2._cb(np.zeros((1600, 1), dtype=np.float32))
+rec2.release(0); assert rec2.dropped == 0 and len(rec2._chunks) == 10
+rec2.release(1599); assert rec2.dropped == 0, "a chunk is only dropped once it is entirely committed"
+rec2.start = lambda: None                 # start() would reopen a device; only the reset matters here
 # a released take being transcribed takes precedence over background passes
 m.recorder.snapshot = lambda start=0: np.zeros(16000 * 7, dtype=np.float32)[start:]
 m.pending = 1; assert m._stream_pass(murmur.Take()) == 0; m.pending = 0

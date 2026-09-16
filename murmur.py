@@ -57,9 +57,22 @@ os.environ.setdefault("KMP_BLOCKTIME", "0")
 
 import numpy as np
 import pyperclip
-import sounddevice as sd
 from pynput import keyboard
 from pynput.keyboard import Controller, Key
+
+sd = None   # sounddevice: 0.20 s of the 0.46 s this module costs to import, all of it PortAudio's
+            # DLL, and nothing needs it until a recording starts. `audio()` below loads it on the
+            # loader thread instead, so the tray icon and the overlay do not wait for it.
+
+
+def audio():
+    """The sounddevice module, imported on first use."""
+    global sd
+    if sd is None:
+        import sounddevice
+        sd = sounddevice
+    return sd
+
 
 FROZEN = getattr(sys, "frozen", False)
 HERE = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
@@ -211,7 +224,7 @@ def resolve_device(device):
     if device is None or isinstance(device, int):
         return device
     q = str(device).strip().lower()
-    for i, d in enumerate(sd.query_devices()):
+    for i, d in enumerate(audio().query_devices()):
         if d["max_input_channels"] > 0 and d["hostapi"] == 0 and q in d["name"].lower():
             return i
     log(f"mic {device!r} not found, using the default input")
@@ -230,6 +243,7 @@ class Recorder:
         self._rate = SAMPLE_RATE
         self.level = 0.0  # RMS of the latest chunk, 0..1
         self.total = 0    # samples recorded so far (at 16 kHz)
+        self.dropped = 0  # samples released after being transcribed; snapshots start here at the earliest
         self.recent = np.zeros(2048, dtype=np.float32)  # last 128 ms at 16 kHz, for the visualizer
 
     def _cb(self, data, *_):
@@ -244,12 +258,9 @@ class Recorder:
     def samples(self) -> np.ndarray:
         return self.recent
 
-    def snapshot(self, start: int = 0) -> np.ndarray:
-        """Audio from sample `start` on. Only the chunks past `start` are copied, so a streaming
-        pass on a long take costs its window, not the whole take."""
-        with self._lock:
-            chunks, total = list(self._chunks), self.total
-        need = total - start
+    @staticmethod
+    def _join(chunks: list, need: int) -> np.ndarray:
+        """The last `need` samples of `chunks`, copying only the chunks that carry them."""
         if need <= 0:
             return np.zeros(0, dtype=np.float32)
         out, n = [], 0
@@ -261,25 +272,49 @@ class Recorder:
         audio = np.concatenate(out[::-1])
         return audio[len(audio) - need:]
 
+    def snapshot(self, start: int = 0) -> np.ndarray:
+        """Audio from sample `start` on (or from the oldest sample still held, if that is later).
+        Only the chunks past `start` are copied, so a streaming pass on a long take costs its
+        window, not the whole take."""
+        with self._lock:
+            chunks, total, start = list(self._chunks), self.total, max(start, self.dropped)
+        return self._join(chunks, total - start)
+
+    def release(self, upto: int) -> None:
+        """Drop audio that has been transcribed and committed: nothing ever reads below the
+        take's committed pointer again. Without this a take holds all of itself for its whole
+        life - a 30 min take measured 126 MB held, plus 115 MB more for the copy stop() makes,
+        a 244 MB peak for audio finished with minutes earlier. Whole chunks only, so the
+        sample indices the caller holds stay meaningful."""
+        with self._lock:
+            n, k = self.dropped, 0
+            while k < len(self._chunks) and n + len(self._chunks[k]) <= upto:
+                n += len(self._chunks[k])
+                k += 1
+            if k:
+                del self._chunks[:k]     # one shift per pass, not one per chunk
+                self.dropped = n
+
     def start(self) -> None:
         with self._lock:
             self._chunks = []
-            self.total = 0
+            self.total = self.dropped = 0
         self.level = 0.0
         dev = resolve_device(self.device)
         if dev != self._opened:
             try:
-                log(f"mic: {sd.query_devices(dev, 'input')['name']}")
+                log(f"mic: {audio().query_devices(dev, 'input')['name']}")
             except Exception as e:
                 log(f"mic: {dev!r} ({e})")
             self._opened = dev
+        a = audio()
         try:   # the rate that worked last time (16 k to begin with), so a take starts on the first open
-            self._stream = sd.InputStream(samplerate=self._rate, channels=1, dtype="float32",
-                                          device=dev, callback=self._cb)
-        except sd.PortAudioError:  # device refuses it (WASAPI refuses 16k): native rate, resample later
-            self._rate = int(sd.query_devices(dev, "input")["default_samplerate"])
-            self._stream = sd.InputStream(samplerate=self._rate, channels=1, dtype="float32",
-                                          device=dev, callback=self._cb)
+            self._stream = a.InputStream(samplerate=self._rate, channels=1, dtype="float32",
+                                         device=dev, callback=self._cb)
+        except a.PortAudioError:  # device refuses it (WASAPI refuses 16k): native rate, resample later
+            self._rate = int(a.query_devices(dev, "input")["default_samplerate"])
+            self._stream = a.InputStream(samplerate=self._rate, channels=1, dtype="float32",
+                                         device=dev, callback=self._cb)
         try:
             self._stream.start()
         except Exception:
@@ -287,12 +322,17 @@ class Recorder:
             self._stream = None
             raise
 
-    def stop(self) -> np.ndarray:
+    def stop(self) -> tuple:
+        """The take's remaining audio and the sample index it starts at. Both are read under one
+        lock: a streaming pass still in flight may release more audio immediately afterwards, and
+        a base taken separately from the audio would slice the tail at the wrong place."""
         self._stream.stop()
         self._stream.close()
         self.level = 0.0
         self.recent = np.zeros_like(self.recent)
-        return self.snapshot()
+        with self._lock:
+            chunks, total, base = list(self._chunks), self.total, self.dropped
+        return self._join(chunks, total - base), base
 
 
 class Typist:
@@ -358,6 +398,7 @@ class Take:
         self.active = True
         self.parts: list = []
         self.committed = 0
+        self.base = 0                     # first sample the audio handed to handle() carries
         self.stalled = 0                  # pending size at the last pass that could commit nothing
         self.done = threading.Event()
 
@@ -421,6 +462,7 @@ class Murmur:
         """Create the VAD session now (~0.6 s) rather than inside the first dictation. The model
         itself gets no warm-up run: measured cold-vs-warm difference is ~0.6 s, not worth
         delaying "ready" by a full 30 s-window pass (1 s idle, 6-12 s on a busy CPU)."""
+        audio()   # PortAudio's DLL (0.20 s) on this thread, not the UI thread and not the first take
         try:
             from faster_whisper.vad import get_vad_model
             get_vad_model()
@@ -458,11 +500,12 @@ class Murmur:
             if not self.recording:
                 return
             self.recording = self.persistent = False
-            audio = self.recorder.stop()
+            audio, base = self.recorder.stop()
             self.pending += 1
             self._set("busy")
             take, self.take = self.take, None
             take.active = False
+            take.base = base
         threading.Thread(target=self.handle, args=(audio, take), daemon=True).start()
 
     def toggle(self) -> None:
@@ -716,6 +759,7 @@ class Murmur:
             # would otherwise move the pointer 20 ms and re-decode the same audio at once, appending
             # the junk every pass): nothing safe to commit, wait for more audio
             take.stalled = n
+        self.recorder.release(take.committed)   # this pass is the only writer of `committed`
         return n
 
     def handle(self, audio: np.ndarray, take: "Take" = None) -> None:
@@ -727,7 +771,7 @@ class Murmur:
         waited = time.time() - t0
         with self.lock:  # one transcription at a time
             try:
-                tail = self.transcribe(audio[take.committed:], " ".join(take.parts))
+                tail = self.transcribe(audio[take.committed - take.base:], " ".join(take.parts))
                 text = clean(" ".join(p for p in take.parts + [tail] if p))
                 if not text:
                     rms = float(np.sqrt((audio ** 2).mean())) if len(audio) else 0.0
@@ -900,7 +944,7 @@ def main(argv=None) -> int:
     p.add_argument("--list-devices", action="store_true", help="print audio devices and exit")
     a = p.parse_args(argv)
     if a.list_devices:
-        print(sd.query_devices())
+        print(audio().query_devices())
         return 0
 
     cfg = load_config(a.config)
