@@ -173,9 +173,12 @@ OPEN_EVENT = "Local\\murmur-open-window"
 _instance_lock = None                      # held for the life of the process; never garbage-collected
 
 
-def claim_instance() -> bool:
+def claim_instance(name: str = MUTEX_NAME, event: str = OPEN_EVENT) -> bool:
     """True if this process is the only murmur. False means one is already running - and it has
     been asked to show its window, which is what clicking the shortcut is for.
+
+    `name`/`event` are arguments only so the tests can claim a pair of their own: claiming the
+    real ones would fail the suite whenever murmur itself is running, which is most of the time.
 
     Without this, launching murmur again (easy: the app is invisible apart from a tray icon, so
     the Start menu entry looks like it did nothing) leaves two keyboard hooks and two overlays
@@ -186,9 +189,9 @@ def claim_instance() -> bool:
         k32.CreateMutexW.restype = ctypes.c_void_p
         k32.OpenEventW.restype = ctypes.c_void_p
         k32.CloseHandle.argtypes = [ctypes.c_void_p]
-        h = k32.CreateMutexW(None, False, MUTEX_NAME)
+        h = k32.CreateMutexW(None, False, name)
         if h and ctypes.get_last_error() == 183:        # ERROR_ALREADY_EXISTS
-            ev = k32.OpenEventW(0x0002, False, OPEN_EVENT)   # EVENT_MODIFY_STATE
+            ev = k32.OpenEventW(0x0002, False, event)        # EVENT_MODIFY_STATE
             if ev:
                 k32.SetEvent(ctypes.c_void_p(ev))
                 k32.CloseHandle(ctypes.c_void_p(ev))
@@ -200,13 +203,13 @@ def claim_instance() -> bool:
     return True
 
 
-def watch_open_requests(on_open) -> None:
+def watch_open_requests(on_open, event: str = OPEN_EVENT) -> None:
     """A later launch sets this event instead of starting a second murmur; show the window."""
     try:
         k32 = ctypes.WinDLL("kernel32", use_last_error=True)
         k32.CreateEventW.restype = ctypes.c_void_p
         k32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-        ev = k32.CreateEventW(None, False, False, OPEN_EVENT)   # auto-reset
+        ev = k32.CreateEventW(None, False, False, event)        # auto-reset
         if not ev:
             return
 

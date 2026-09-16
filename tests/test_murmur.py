@@ -615,13 +615,17 @@ print("overlay transitions ok")
 # a second launch does not start a second murmur: it asks the running one to open its window.
 # Two real processes - the mutex is per-process, so nothing in-process can prove this.
 HERE = str(Path(__file__).resolve().parents[1])
+# a pair of names of this run's own: claiming the real ones would fail here whenever murmur
+# itself is running, which on the machine that develops it is most of the time
+NM = "Local\\murmur-test-%d" % os.getpid()
+EV = NM + "-open"
 FIRST = ("import sys, time; sys.path.insert(0, r'%s'); import murmur; got = []\n"
-         "assert murmur.claim_instance() is True\n"
-         "murmur.watch_open_requests(lambda: got.append(1)); print('READY', flush=True)\n"
+         "assert murmur.claim_instance(r'%s', r'%s') is True\n"
+         "murmur.watch_open_requests(lambda: got.append(1), r'%s'); print('READY', flush=True)\n"
          "[time.sleep(0.05) for _ in range(100) if not got]\n"
-         "print('OPENED' if got else 'NEVER', flush=True)") % HERE
+         "print('OPENED' if got else 'NEVER', flush=True)") % (HERE, NM, EV, EV)
 SECOND = ("import sys; sys.path.insert(0, r'%s'); import murmur\n"
-          "print('CLAIMED' if murmur.claim_instance() else 'REFUSED', flush=True)") % HERE
+          "print('CLAIMED' if murmur.claim_instance(r'%s', r'%s') else 'REFUSED', flush=True)") % (HERE, NM, EV)
 first = subprocess.Popen([sys.executable, "-c", FIRST], stdout=subprocess.PIPE, text=True)
 assert first.stdout.readline().strip() == "READY"
 second = subprocess.run([sys.executable, "-c", SECOND], capture_output=True, text=True, timeout=60)
