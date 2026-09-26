@@ -474,9 +474,6 @@ class Typist:
             return False
 
     def type(self, text: str) -> None:
-        if self.foreground_is_ours():
-            log("  (murmur's own window is focused; kept in history, not pasted)")
-            return
         # the clipboard can be briefly locked by another app: retry rather than lose the text
         for attempt in range(8):
             try:
@@ -487,6 +484,9 @@ class Typist:
                     log(f"  clipboard: {e}")
                     return
                 time.sleep(0.05)
+        if self.foreground_is_ours():
+            log("  (murmur's own window is focused; copied to clipboard, not pasted)")
+            return
         # if Ctrl/Win are still physically held (short tail after a fast release, or persistent
         # mode's stop chord), Ctrl+V would become Ctrl+Win+V - wait for them to come up first
         t0 = time.monotonic()

@@ -394,6 +394,11 @@ try:
 finally:
     pyperclip.copy = _copy
 assert pyperclip.paste() == "hello clip" and held["n"] == 0 and ("press", "v") in pressed
+# Dictating with Murmur focused must still leave a manual-paste fallback.
+pressed.clear()
+ty.foreground_is_ours = lambda: True
+ty.type("dictated with murmur focused")
+assert pyperclip.paste() == "dictated with murmur focused" and not pressed
 print("typist ok")
 
 # load_model: cached copy first (no network), download only when local_files_only fails
