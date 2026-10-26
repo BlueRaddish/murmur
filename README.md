@@ -30,6 +30,13 @@ models by default (multilingual ones are a Settings switch away).
 
 ## Everything stays on this machine
 
+Windows memory diagnostics and the v1.2.1 memory fix are described in
+[docs/memory.md](docs/memory.md). The model stays ready while oversized NumPy and
+MKL caches are avoided. For an offline, content-free breakdown, run
+`murmur.exe --diagnose-memory C:\temp\murmur-memory.json`; this opens no microphone
+or UI and does not claim the running app's instance. Figures are committed memory,
+which is different from the current physical working set.
+
 Cloud dictation tools stream your microphone to a server and hand the transcript to an LLM
 before it reaches you. murmur has no server side at all:
 

@@ -1,5 +1,38 @@
 # Working notes
 
+## Windows memory fix (2026-10-26, v1.2.1 local)
+
+- Investigated the running app's ~1631 MiB private commitment separately from its
+  ~84 MiB current resident working set. Matched fresh frozen-app controls with the
+  same base.en int8 model: original 12-thread OpenBLAS + MKL packing 1427.8 MiB;
+  one BLAS thread 1074.4 MiB; packing off alone 520.4 MiB; both fixed 166.5 MiB.
+  This attributes approximately 353 MiB to the extra BLAS pool and 908 MiB to
+  packed weights. The small cuDNN dispatcher was not the main cause.
+- Per-process before-import defaults: OPENBLAS_NUM_THREADS=1 and CT2_PACKED_GEMM=0.
+  Explicit environment choices win; Whisper keeps its own CPU thread pool and
+  unchanged model/compute/beam/streaming/text behavior. No lazy eviction was needed
+  for the measured waste. A new idle-release policy would be a separate tradeoff.
+- Added opt-in --diagnose-memory JSON reports: real Windows commit/RSS counters,
+  production constructor checkpoints, cached-only model, synthetic silence and
+  content-free loaded-library inventory. No capture, hotkeys, clipboard, UI or
+  config writes. Normal dictation has no continuous tracer/sampler.
+- Relevant seven suites passed, including real tiny.en transcription, memory
+  defaults/routing/counters, input-state machine, Hub HTTP integration, Promptify,
+  connect and vault. No legacy focus-taking UI suites or human speech soak claimed.
+  Packed/unpacked interleaved base.en technical TTS: identical text in 12 decodes;
+  warm medians 1.169/1.196 s, which is not a significant speed claim.
+- PyInstaller build and source/bytecode checks passed; new app staged alongside
+  the original. Running full tray/window-prebuilt app ~182-186 MiB committed;
+  both existing shortcuts changed with backups, args/style preserved, config hash
+  unchanged. The old process had exited before launch; no stop was issued here,
+  and its exit cause is unestablished. Build no longer force-kills installed apps.
+- Source changes are isolated in ../murmur-memory on perf/memory-lifecycle. The
+  main checkout's pre-existing unpublished changes were copied into a separate
+  baseline commit and left untouched. No push, release or main-branch landing.
+  Full method, matched controls and limitations: docs/memory.md. Local execution
+  receipts: C:/Users/there/codex/artifacts/murmur-memory-2026-10-26/.
+
+
 Decisions
 - Single file, no package. Clipboard-paste over keystroke typing: instant for long text,
   unicode-safe; the text stays on the clipboard (restoring the old clipboard raced the paste).

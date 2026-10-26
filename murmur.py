@@ -54,6 +54,14 @@ from pathlib import Path
 # region. On a CPU that other apps keep busy that spinning is pure loss: measured 15.6 s -> 9.9 s
 # for the same 6 s of audio with the spin off. Must be set before the DLL loads.
 os.environ.setdefault("KMP_BLOCKTIME", "0")
+# NumPy's OpenBLAS pool committed ~350 MiB just on import on this Windows machine.
+# Murmur uses small FFTs/array operations; Whisper has its own four-thread CPU pool.
+# MKL weight packing added ~900 MiB for base.en despite int8. Keep the same model,
+# quantization and decoder, but use ordinary GEMM instead of retaining packed copies.
+# Both are per-process defaults, set before NumPy/CTranslate2 load; explicit user
+# environment choices still win. See docs/memory.md for measured tradeoffs.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("CT2_PACKED_GEMM", "0")
 
 import numpy as np
 import pyperclip
@@ -513,12 +521,16 @@ class Murmur:
     """States: idle, recording (hold), persistent, busy (transcribing).
     Every transition goes through start()/stop() so UI and log stay in step."""
 
-    def __init__(self, cfg: dict, vocab: str, on_state=None, on_text=None):
+    def __init__(self, cfg: dict, vocab: str, on_state=None, on_text=None, on_memory=None):
+        self._on_memory = on_memory
+        self._memory_checkpoint("before_backend_import")
         log(f"importing faster_whisper  {since_launch()}")
         from faster_whisper import WhisperModel
+        self._memory_checkpoint("backend_imported")
         log(f"loading {cfg['model']} on {cfg['device']}...  {since_launch()}")
         compute = "int8" if cfg["device"] == "cpu" else "float16"
         self.model = self.load_model(WhisperModel, cfg["model"], cfg["device"], compute)
+        self._memory_checkpoint("model_loaded")
         self.cfg = cfg
         self.vocab = vocab
         self.language = cfg["language"] or ("en" if cfg["model"].endswith(".en") else None)
@@ -548,6 +560,12 @@ class Murmur:
         self.take = None                  # the Take being recorded (streaming state)
         self.capture = None               # callback(vk): the next key pressed is reported here, once
 
+    def _memory_checkpoint(self, stage: str) -> None:
+        """Opt-in profiler only: ordinary dictation does no allocation tracing or sampling."""
+        callback = getattr(self, "_on_memory", None)
+        if callback is not None:
+            callback(stage)
+
     def _set(self, state: str) -> None:
         self.state = state
         self.on_state(state)
@@ -569,9 +587,11 @@ class Murmur:
         itself gets no warm-up run: measured cold-vs-warm difference is ~0.6 s, not worth
         delaying "ready" by a full 30 s-window pass (1 s idle, 6-12 s on a busy CPU)."""
         audio()   # PortAudio's DLL (0.20 s) on this thread, not the UI thread and not the first take
+        self._memory_checkpoint("audio_backend_ready")
         try:
             from faster_whisper.vad import get_vad_model
             get_vad_model()
+            self._memory_checkpoint("vad_ready")
         except Exception as e:
             log(f"  vad warm-up skipped: {e}")
 
@@ -1050,17 +1070,19 @@ def main(argv=None) -> int:
     p.add_argument("--config", type=Path, default=APPDIR / "config.json")
     p.add_argument("--console", action="store_true", help="no tray/overlay/window; log to the console")
     p.add_argument("--list-devices", action="store_true", help="print audio devices and exit")
+    p.add_argument("--diagnose-memory", type=Path, metavar="REPORT.json",
+                   help="write a headless memory breakdown using cached model and synthetic silence; no mic, hotkeys or clipboard")
     a = p.parse_args(argv)
     install_crash_log()
     if a.list_devices:
         print(audio().query_devices())
         return 0
-    if not claim_instance():
+    if not a.diagnose_memory and not claim_instance():
         log("murmur is already running; asked it to open its window")
         return 0
 
     cfg = load_config(a.config)
-    if not a.config.exists():
+    if not a.config.exists() and not a.diagnose_memory:
         save_config(a.config, cfg)  # persistent settings live here; flags below are per-run
     for k in ("model", "device", "language", "mic"):
         if getattr(a, k) is not None:
@@ -1070,6 +1092,9 @@ def main(argv=None) -> int:
     if isinstance(cfg["mic"], str) and cfg["mic"].isdigit():
         cfg["mic"] = int(cfg["mic"])
     vocab = load_vocab(a.vocab or find_vocab())
+    if a.diagnose_memory:
+        from memory_diagnostics import run_profile
+        return run_profile(cfg, vocab, a.diagnose_memory)
     factory = lambda: Murmur(cfg, vocab)
 
     if a.console:

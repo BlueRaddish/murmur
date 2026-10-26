@@ -9,7 +9,8 @@
 # that duplicates the bytecode already in the archive).
 $ErrorActionPreference = "Continue"  # native exes write progress to stderr; PS 5.1 would treat that as failure
 Set-Location $PSScriptRoot
-Stop-Process -Name murmur -Force -ErrorAction SilentlyContinue  # a running copy locks dist
+# Build into this checkout's dist directory without terminating an installed copy.
+# If this particular output is running, close that test build and retry the build.
 python brand.py --ico murmur.ico
 python -m PyInstaller --noconfirm --clean --noconsole --onedir --name murmur --icon murmur.ico `
   --add-data "vocab.txt;." --add-data "promptify.txt;." --add-data "murmur.ico;." `
