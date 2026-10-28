@@ -2,8 +2,16 @@
 import sys, os, json, subprocess, tempfile, wave
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import numpy as np
+isolated_appdata = tempfile.TemporaryDirectory(prefix="murmur-source-check-")
+os.environ["APPDATA"] = isolated_appdata.name  # leases/config/singleton checks never touch installed Murmur
 import murmur
+import numpy as np
+NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+import pyperclip
+# Exercise Typist's retry/paste contract without replacing the user's clipboard.
+clipboard = {"text": ""}
+pyperclip.copy = lambda text: clipboard.update(text=text)
+pyperclip.paste = lambda: clipboard["text"]
 
 # clean(): whitespace only, never rewrites words
 assert murmur.clean("  hello   world \n foo ") == "hello world foo"
@@ -325,7 +333,8 @@ assert vk_name(0xB3) == "Play/Pause" and vk_name(None) == "none" and vk_name(0x4
 wav = Path(tempfile.mktemp(suffix=".wav"))
 ps = ("Add-Type -AssemblyName System.Speech; $s=New-Object System.Speech.Synthesis.SpeechSynthesizer;"
       f"$s.SetOutputToWaveFile('{wav}'); $s.Speak('please rebase the branch onto main and run the tests'); $s.Dispose()")
-subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True)
+subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True, capture_output=True,
+               creationflags=NO_WINDOW)
 with wave.open(str(wav)) as w:
     assert w.getnchannels() == 1
     rate = w.getframerate()
@@ -337,6 +346,7 @@ text = m2.transcribe(audio)
 print("transcribed:", text)
 assert "rebase" in text.lower() and "main" in text.lower(), text
 assert m2.transcribe(np.zeros(100, dtype=np.float32)) == ""  # too short -> ignored
+del m2  # release the real Whisper model before the later multi-process checks
 os.remove(p); os.remove(wav)
 print("all checks passed")
 
@@ -631,13 +641,17 @@ FIRST = ("import sys, time; sys.path.insert(0, r'%s'); import murmur; got = []\n
          "print('OPENED' if got else 'NEVER', flush=True)") % (HERE, NM, EV, EV)
 SECOND = ("import sys; sys.path.insert(0, r'%s'); import murmur\n"
           "print('CLAIMED' if murmur.claim_instance(r'%s', r'%s') else 'REFUSED', flush=True)") % (HERE, NM, EV)
-first = subprocess.Popen([sys.executable, "-c", FIRST], stdout=subprocess.PIPE, text=True)
-assert first.stdout.readline().strip() == "READY"
-second = subprocess.run([sys.executable, "-c", SECOND], capture_output=True, text=True, timeout=60)
+first = subprocess.Popen([sys.executable, "-c", FIRST], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         text=True, creationflags=NO_WINDOW)
+first_line = first.stdout.readline().strip()
+assert first_line == "READY", first_line or first.stderr.read()
+second = subprocess.run([sys.executable, "-c", SECOND], capture_output=True, text=True, timeout=60,
+                        creationflags=NO_WINDOW, check=True)
 assert second.stdout.strip() == "REFUSED", second.stdout + second.stderr
 assert first.stdout.readline().strip() == "OPENED", "the running instance was never asked to open"
-first.wait(timeout=30)
-again = subprocess.run([sys.executable, "-c", SECOND], capture_output=True, text=True, timeout=60)
+assert first.wait(timeout=30) == 0
+again = subprocess.run([sys.executable, "-c", SECOND], capture_output=True, text=True, timeout=60,
+                       creationflags=NO_WINDOW, check=True)
 assert again.stdout.strip() == "CLAIMED", "the lock outlived the process that held it"
 print("single instance ok")
 

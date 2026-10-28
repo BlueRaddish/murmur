@@ -32,8 +32,10 @@ if CHROME.exists():
                               encoding="utf-8")
     subprocess.run([str(CHROME), "--headless=new", "--disable-gpu", "--hide-scrollbars",
                     "--force-device-scale-factor=1", "--window-size=256,256",
+                    f"--user-data-dir={d / 'chrome-profile'}",
                     f"--screenshot={d / 'm.png'}", str(d / "m.html")],
-                   capture_output=True, timeout=180)
+                   capture_output=True, timeout=180, check=True,
+                   creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
     shot = Image.open(d / "m.png").convert("RGB")
     flat = Image.new("RGB", (256, 256), (255, 255, 255))
     m = brand.mark(256, "#000000")
