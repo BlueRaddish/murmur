@@ -1,24 +1,40 @@
 # Working notes
 
-## Resource optimization (2026-10-28, v1.2.2 local)
+## Resource optimization (2026-10-28, public v1.0.1)
 
 - Reproduced unbounded Tk image retention across distinct background sizes. A
-  hidden production renderer/canvas stress run (600 sizes) retained 600 images,
+  historical hidden renderer/canvas stress run (600 sizes) retained 600 images,
   102.5 MiB estimated RGBA pixels and 220-222 MiB total process commitment.
 - A bounded LRU now discards only images Tk reports unused. Live Label/Canvas
   images remain pinned; otherwise deleting their Python PhotoImage blanks them.
-  The 8 MiB reuse budget leaves room above the measured 2.6 MiB hidden window
+  The 8 MiB reuse budget leaves room above the historical 2.6 MiB hidden window
   prebuild at 200% DPI. It is not a hard cap on active widgets or process memory.
+  Cache hits also trim unused images after widgets release previously pinned
+  images, so a new render is not required to return within the reuse budget.
 - Matched interleaved fresh processes retained 33 images/7.9 MiB pixels and
   46.7-46.9 MiB commitment after the same stress workload. CPU work did not
   increase in these runs. This is a resize stress result, not an idle-RAM or
   transcription-speed claim. Whisper, quality and streaming settings are unchanged.
-- Nine relevant suites passed, including real TTS transcription, pinned-image
-  lifetime/eviction/pixel checks and off-screen light/dark Hub UI checks. Two
-  focus-taking legacy UI suites and the unchanged brand suite were not run.
-  Resource probe and procedure: tools/profile_resources.py, docs/resources.md.
+- Those measurements used an unpublished local application build. They explain
+  the optimization; they are not measurements of the public v1.0.1 package.
+- Focused stress checks on the independent public candidate passed six cases,
+  covering 20,000 image creations/evictions, 1,000,000 cache hits, Canvas image
+  states, shared ownership, reuse after releasing over-budget live images, and
+  6,000 production resize renders. The release-and-reuse case first reproduced a
+  cache-hit retention bug, now covered by a regression. The resize run completed
+  in 30.8 s with 7.89-7.92 MiB of reusable pixels and 48.0-53.0 MiB process private
+  commitment at round boundaries. This is a short workload, not a long-running
+  app or packaged-build validation claim.
+- All nine source suites passed, including real tiny.en transcription and both
+  Tk UI suites on an inactive Windows desktop. An earlier transcription attempt
+  failed with mkl_malloc under less than 1 GiB of system commitment headroom;
+  the complete suite passed on retry with more headroom, using normal imports
+  and separately with the packaged import policy. Those are source checks,
+  not verification of a newly built executable.
+  Resource probe and verification routes: tools/profile_resources.py,
+  tests/test_image_cache.py, tests/stress_resources.py and docs/resources.md.
 
-## Windows memory fix (2026-10-26, v1.2.1 local)
+## Windows memory fix (investigated 2026-10-26, public v1.0.1)
 
 - Investigated the running app's ~1631 MiB private commitment separately from its
   ~84 MiB current resident working set. Matched fresh frozen-app controls with the
@@ -34,21 +50,13 @@
   production constructor checkpoints, cached-only model, synthetic silence and
   content-free loaded-library inventory. No capture, hotkeys, clipboard, UI or
   config writes. Normal dictation has no continuous tracer/sampler.
-- Relevant seven suites passed, including real tiny.en transcription, memory
-  defaults/routing/counters, input-state machine, Hub HTTP integration, Promptify,
-  connect and vault. No legacy focus-taking UI suites or human speech soak claimed.
-  Packed/unpacked interleaved base.en technical TTS: identical text in 12 decodes;
-  warm medians 1.169/1.196 s, which is not a significant speed claim.
-- PyInstaller build and source/bytecode checks passed; new app staged alongside
-  the original. Running full tray/window-prebuilt app ~182-186 MiB committed;
-  both existing shortcuts changed with backups, args/style preserved, config hash
-  unchanged. The old process had exited before launch; no stop was issued here,
-  and its exit cause is unestablished. Build no longer force-kills installed apps.
-- Source changes are isolated in ../murmur-memory on perf/memory-lifecycle. The
-  main checkout's pre-existing unpublished changes were copied into a separate
-  baseline commit and left untouched. No push, release or main-branch landing.
-  Full method, matched controls and limitations: docs/memory.md. Local execution
-  receipts: C:/Users/there/codex/artifacts/murmur-memory-2026-10-26/.
+- The measurements above used an unpublished local build. Packed/unpacked
+  interleaved base.en technical TTS produced identical text in 12 decodes; warm
+  medians were 1.169/1.196 s. This small fixture isolates packing, with one BLAS
+  thread in both groups; it does not establish the full two-setting latency cost.
+- The independent public patch carries the memory defaults and offline report,
+  without unrelated unpublished application features. Build no longer force-kills
+  an installed copy. Full method, verification routes and limits: docs/memory.md.
 
 
 Decisions

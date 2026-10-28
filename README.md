@@ -30,9 +30,11 @@ models by default (multilingual ones are a Settings switch away).
 
 ## Everything stays on this machine
 
-Windows memory diagnostics and the v1.2.1 memory fix are described in
-[docs/memory.md](docs/memory.md). The model stays ready while oversized NumPy and
-MKL caches are avoided. For an offline, content-free breakdown, run
+Version 1.0.1 reduces numeric-library allocations and bounds unused UI images.
+The model stays ready; model, accuracy and streaming settings are unchanged.
+See [memory diagnostics](docs/memory.md) and the
+[resource measurements and checks](docs/resources.md). For an offline,
+content-free memory breakdown, run
 `murmur.exe --diagnose-memory C:\temp\murmur-memory.json`; this opens no microphone
 or UI and does not claim the running app's instance. Figures are committed memory,
 which is different from the current physical working set.

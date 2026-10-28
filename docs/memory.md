@@ -1,8 +1,13 @@
 # Windows memory diagnosis and fix
 
 The October 26 investigation reproduced the high committed-memory footprint and
-identified two process-wide numeric-library defaults. The fix keeps the same
-Whisper model, int8 compute, beam size, streaming boundaries and transcript text.
+identified two process-wide numeric-library defaults. Public version 1.0.1
+includes the independent memory changes. The fix keeps the same
+Whisper model, int8 compute, beam size, streaming boundaries and text processing.
+
+The measurements below were collected from an unpublished local application
+build on October 26, 2026. They attribute the numeric-library allocations under
+matched conditions; they are not measurements of a public v1.0.1 package.
 
 ## Measured breakdown
 
@@ -62,7 +67,9 @@ model footprint if desired.
 
 In fresh-process interleaved order packed/unpacked/unpacked/packed, the same
 base.en int8 decoder transcribed the same file-only synthesized technical sentence
-three times per process. Every transcript was identical. Warm median times were
+three times per process. OpenBLAS used one thread in both groups, so this
+comparison isolates weight packing rather than both memory defaults together.
+Every transcript was identical. Warm median times were
 1.169 s packed versus 1.196 s unpacked; minimums were 1.044 s and 1.132 s. The
 roughly 27 ms median difference is small relative to round-to-round noise on this
 busy machine, so this is not a speedup claim. Retained private commitment after
@@ -86,7 +93,7 @@ uses a cached model only, samples real Windows private-commit/working-set counte
 at production constructor checkpoints, runs synthetic silence through the real
 decoder, inventories loaded DLL **names and image sizes**, and releases the model.
 It does not open the microphone, install keyboard listeners, touch the clipboard,
-launch UI/Hub, save config, collect transcripts or upload anything. Missing cached
+launch UI, save config, collect transcripts or upload anything. Missing cached
 models produce a failed report and a nonzero exit code. Unavailable native
 counters also fail loudly with a nonzero exit; they cannot appear as zero usage.
 
@@ -98,20 +105,39 @@ or continuous sampler; checkpoint callbacks run only in diagnostic mode.
 
 ## Verification and limits
 
-Executed relevant suites: test_murmur (including real tiny.en TTS transcription,
-streaming, recorder, fake clipboard typing and overlay rendering), test_memory,
-test_plugins, test_hub_integration, test_promptify, test_connect and test_vault.
-Memory tests cover before-import defaults, respected explicit overrides, real
-Windows counters and loaded-library inventory. Source and frozen diagnostic modes
-both passed; the frozen report created no config and left personal config bytes
-unchanged. Compiled module equality against source was checked for murmur,
-memory_diagnostics, plugins and window; a deliberately modified source was rejected.
+Run the memory checks on Windows with the normal source dependencies installed:
 
-The UI was not changed. Focus-taking legacy UI suites were not run; they are not
-evidence for this change. No physical microphone/hotkey trial, long-duration leak
-soak, GPU memory benchmark or human speech quality study is claimed. Existing
-config and decoder behavior remain the user's choices. The packaged app was
-staged alongside the old installation, with a reversible shortcut update.
+```powershell
+python tests/test_memory.py
+python tests/test_murmur.py
+```
+
+The memory tests check before-import defaults, respected explicit overrides,
+real Windows counters and loaded-library inventory. They also verify diagnostic
+routing bypasses the instance mutex and does not create a missing config. The
+transcription suite exercises the input state machine, streaming and a real
+tiny.en decode of file-only Windows TTS, with fake clipboard typing. That decode
+requires a cached model or a first-time download.
+
+On the public candidate, test_memory and the complete test_murmur suite passed,
+including the real tiny.en transcription. An initial decode attempt failed with
+mkl_malloc while system commitment headroom was below 1 GiB; the normal-import
+retry passed after headroom recovered, remaining above 1790 MiB during the run.
+A separate source run with the packaged import policy passed as well. Preserve
+the failed attempt when assessing memory-pressure limits; a successful retry
+does not prove the decoder can run under every system load. All nine source
+suites and the six-case cache stress scope are recorded in
+[resources.md](resources.md).
+
+For a packaged build, run the same offline diagnostic against its executable and
+check the exit status and JSON success flag. A successful source test alone does
+not validate the packaged dependencies. Historical source and frozen diagnostics
+passed on the unpublished build; that result is not a public-package test receipt.
+
+No physical microphone/hotkey trial, long-duration leak soak, GPU memory
+benchmark or human speech quality study is claimed here. Existing config and
+decoder behavior remain the user's choices. The UI image cache is a separate
+change described in [resources.md](resources.md).
 
 Primary references: [CTranslate2 environment variables](https://github.com/OpenNMT/CTranslate2/blob/master/docs/environment_variables.md)
 and [CTranslate2 memory management](https://opennmt.net/CTranslate2/memory.html).
