@@ -37,6 +37,18 @@ try:
     assert len(cache) == 2 and cache.bytes <= cache.max_bytes
     assert not set(names) & set(root.tk.call('image', 'names'))
 
+    # An all-pinned cache can exceed the budget legitimately. Releasing those
+    # widgets and hitting an existing key must trim it without another render.
+    overflow = W._ImageCache(max_bytes=512)
+    labels = [tk.Label(root, image=overflow.image(i, photo)) for i in range(96)]
+    assert overflow.bytes == 96 * 256
+    for label in labels:
+        label.destroy()
+    keep = overflow.image(95, lambda: 1/0)
+    assert keep.get(0, 0) == (19, 87, 36)
+    assert overflow.bytes <= overflow.max_bytes
+    overflow.clear()
+
     # Reuse is LRU and a hit does not invoke the renderer again.
     cache = W._ImageCache(max_bytes=512)
     first = cache.image('first', photo)

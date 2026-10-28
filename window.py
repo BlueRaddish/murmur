@@ -1140,10 +1140,14 @@ class _ImageCache:
     def image(self, key, make):
         if key in self.images:
             self.images.move_to_end(key)
-            return self.images[key]
-        image = make()
-        self.images[key] = image
-        self.bytes += image.width() * image.height() * 4
+            image = self.images[key]
+        else:
+            image = make()
+            self.images[key] = image
+            self.bytes += image.width() * image.height() * 4
+        # Live widgets can temporarily exceed the reuse budget. Once they are
+        # destroyed, even a hit must reclaim their now-unused images: an idle
+        # window may never request a new key to trigger miss-only eviction.
         if self.bytes > self.max_bytes:
             for old_key, old in list(self.images.items()):
                 if self.bytes <= self.max_bytes:
