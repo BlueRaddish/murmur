@@ -4,6 +4,7 @@ set -e
 cd "$(dirname "$0")"
 python tests/test_murmur.py
 python tests/test_memory.py
+python tests/test_image_cache.py
 python tests/test_window.py
 python tests/test_ui_rules.py
 python tests/test_brand.py

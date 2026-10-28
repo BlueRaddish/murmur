@@ -1,5 +1,23 @@
 # Working notes
 
+## Resource optimization (2026-10-28, v1.2.2 local)
+
+- Reproduced unbounded Tk image retention across distinct background sizes. A
+  hidden production renderer/canvas stress run (600 sizes) retained 600 images,
+  102.5 MiB estimated RGBA pixels and 220-222 MiB total process commitment.
+- A bounded LRU now discards only images Tk reports unused. Live Label/Canvas
+  images remain pinned; otherwise deleting their Python PhotoImage blanks them.
+  The 8 MiB reuse budget leaves room above the measured 2.6 MiB hidden window
+  prebuild at 200% DPI. It is not a hard cap on active widgets or process memory.
+- Matched interleaved fresh processes retained 33 images/7.9 MiB pixels and
+  46.7-46.9 MiB commitment after the same stress workload. CPU work did not
+  increase in these runs. This is a resize stress result, not an idle-RAM or
+  transcription-speed claim. Whisper, quality and streaming settings are unchanged.
+- Nine relevant suites passed, including real TTS transcription, pinned-image
+  lifetime/eviction/pixel checks and off-screen light/dark Hub UI checks. Two
+  focus-taking legacy UI suites and the unchanged brand suite were not run.
+  Resource probe and procedure: tools/profile_resources.py, docs/resources.md.
+
 ## Windows memory fix (2026-10-26, v1.2.1 local)
 
 - Investigated the running app's ~1631 MiB private commitment separately from its

@@ -26,6 +26,7 @@ import os
 import threading
 import time
 import tkinter as tk
+from collections import OrderedDict
 from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import ttk
@@ -1113,6 +1114,47 @@ class RowList(tk.Canvas):
             self.yview_moveto((top + self.H - vis) / total)
 
 
+class _ImageCache:
+    """Bound reusable Tk pixels; images still owned by widgets must stay alive.
+
+    Tk widgets keep image names, not Python references. Deleting a PhotoImage
+    still used by a Label/Canvas blanks it, so only evict unused images. The
+    8 MiB RGBA estimate is a reuse budget, not a hard process-memory limit;
+    live widgets and the image being returned can exceed it safely.
+    """
+    def __init__(self, max_bytes=8 * 1024 * 1024):
+        self.max_bytes = max_bytes
+        self.images = OrderedDict()
+        self.bytes = 0
+
+    def __len__(self):
+        return len(self.images)
+
+    def values(self):
+        return self.images.values()
+
+    def clear(self):
+        self.images.clear()
+        self.bytes = 0
+
+    def image(self, key, make):
+        if key in self.images:
+            self.images.move_to_end(key)
+            return self.images[key]
+        image = make()
+        self.images[key] = image
+        self.bytes += image.width() * image.height() * 4
+        if self.bytes > self.max_bytes:
+            for old_key, old in list(self.images.items()):
+                if self.bytes <= self.max_bytes:
+                    break
+                if old is image or old.tk.getboolean(old.tk.call("image", "inuse", str(old))):
+                    continue
+                self.bytes -= old.width() * old.height() * 4
+                del self.images[old_key]
+        return image
+
+
 class AppWindow:
     """root: the (withdrawn) Tk root. cfg: the live config dict shared with the app.
     on_save(cfg): persist settings. links: {"vocab": fn, "folder": fn} for the sidebar footer.
@@ -1134,7 +1176,7 @@ class AppWindow:
         self.win = None
         self.view = "history"     # remembered between show() and hide()
         self.sel = None           # the selected item itself: survives a delete + undo
-        self.imgs = {}            # Tk drops an image nobody references
+        self.imgs = _ImageCache() # keep live images; bound unused sizes/colours
         self.jobs = {}            # named after() ids, so a second flash cancels the first
         self.ctl = {}             # the settings controls, by cfg key (the tests drive these)
         self.foot_links = []      # sidebar footer links (canvas text items), one per entry in `links`
@@ -1363,9 +1405,8 @@ class AppWindow:
         return tk.Frame(parent, bg=color or self.pal["divider"](self.pal["layer"]), **n)
 
     def img(self, key, make) -> tk.PhotoImage:
-        if key not in self.imgs:
-            self.imgs[key] = tk.PhotoImage(data=base64.b64encode(make()).decode())
-        return self.imgs[key]
+        return self.imgs.image(key, lambda: tk.PhotoImage(
+            master=self.root, data=base64.b64encode(make()).decode()))
 
     def mark(self, size, color) -> tk.PhotoImage:
         """The brand m drawn in a `size` px box, in `color`, then CROPPED to its ink - brand.mark
